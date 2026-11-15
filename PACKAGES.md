@@ -19,7 +19,7 @@ One line per root-module package, generated from package doc comments by `make d
 - `internal/agents` — provides named configuration bundles for term-llm.
 - `internal/agents/gist` — provides GitHub Gist operations through the gh CLI.
 - `internal/agyproxy` — is the loopback HTTPS proxy between agy and Cloud Code.
-- `internal/app/agent` — holds the agent model-selection logic extracted from cmd.
+- `internal/app/agent` — holds agent preference commands and model-selection logic extracted from cmd.
 - `internal/app/ask` — implements the `term-llm ask` command: prompt input, model execution and persistence.
 - `internal/app/auth` — implements `term-llm auth` login, status and logout for OAuth providers.
 - `internal/app/chat` — runs the interactive `term-llm chat` TUI: orchestration, sessions, handover and reload.

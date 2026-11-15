@@ -378,8 +378,9 @@ type AgentPreference struct {
 	Model    string `mapstructure:"model,omitempty" yaml:"model,omitempty"`
 
 	// Tool configuration
-	ToolsEnabled  []string `mapstructure:"tools_enabled,omitempty" yaml:"tools_enabled,omitempty"`
-	ToolsDisabled []string `mapstructure:"tools_disabled,omitempty" yaml:"tools_disabled,omitempty"`
+	ToolsEnabled  []string  `mapstructure:"tools_enabled,omitempty" yaml:"tools_enabled,omitempty"`
+	ToolsDisabled []string  `mapstructure:"tools_disabled,omitempty" yaml:"tools_disabled,omitempty"`
+	MCP           *[]string `mapstructure:"mcp,omitempty" yaml:"mcp,omitempty"` // nil inherits; empty clears MCP defaults.
 
 	// Shell settings
 	ShellAllow   []string `mapstructure:"shell_allow,omitempty" yaml:"shell_allow,omitempty"`
@@ -2312,6 +2313,7 @@ var KnownAgentPreferenceKeys = map[string]bool{
 	"model":                true,
 	"tools_enabled":        true,
 	"tools_disabled":       true,
+	"mcp":                  true,
 	"shell_allow":          true,
 	"shell_auto_run":       true,
 	"spawn_max_parallel":   true,
@@ -2460,7 +2462,7 @@ func agentPreferenceValues(key, value string) ([]configValue, error) {
 		// Boolean values (case-insensitive)
 		lowerVal := strings.ToLower(value)
 		return []configValue{{key, lowerVal == "true" || value == "1" || lowerVal == "yes"}}, nil
-	case "tools_enabled", "tools_disabled", "shell_allow", "spawn_allowed_agents", "allowed_models":
+	case "tools_enabled", "tools_disabled", "shell_allow", "spawn_allowed_agents", "allowed_models", "mcp":
 		// Array values (comma-separated)
 		parts := []string{}
 		if value != "" {
@@ -2487,32 +2489,6 @@ func GetAgentPreference(agentName string) (AgentPreference, bool) {
 
 	pref, ok := cfg.Agents.Preferences[agentName]
 	return pref, ok
-}
-
-// ClearAgentPreferences removes all preferences for a specific agent from
-// config.yaml, dropping agents.preferences when it becomes empty.
-func ClearAgentPreferences(agentName string) error {
-	configPath, err := GetConfigPath()
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
-		return nil // Nothing to clear
-	}
-	return editConfigFile(func(root *yaml.Node) (bool, error) {
-		agents := lookupMapping(root, "agents")
-		if agents == nil {
-			return false, nil
-		}
-		prefs := lookupMapping(agents, "preferences")
-		if prefs == nil || !deleteMappingKey(prefs, agentName) {
-			return false, nil
-		}
-		if len(prefs.Content) == 0 {
-			deleteMappingKey(agents, "preferences")
-		}
-		return true, nil
-	})
 }
 
 // SetServeTelegramConfig saves Telegram bot configuration into config.yaml,

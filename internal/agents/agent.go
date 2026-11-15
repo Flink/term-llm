@@ -602,6 +602,14 @@ func (a *Agent) Merge(pref config.AgentPreference) {
 		a.Tools.Enabled = nil // Clear enabled if disabled is set
 	}
 
+	// MCP defaults: replace with names from mcp.json, never commands or access policy.
+	if pref.MCP != nil {
+		a.MCP = make([]MCPConfig, len(*pref.MCP))
+		for i, name := range *pref.MCP {
+			a.MCP[i] = MCPConfig{Name: name}
+		}
+	}
+
 	// Shell settings - append allow patterns, replace auto_run
 	if len(pref.ShellAllow) > 0 {
 		a.Shell.Allow = append(a.Shell.Allow, pref.ShellAllow...)

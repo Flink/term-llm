@@ -156,8 +156,9 @@ func (r *Registry) Get(name string) (*Agent, error) {
 	return agent, nil
 }
 
-// List returns all available agents.
+// List returns all available agent definitions without applying preferences.
 // Each agent appears only once, with first-found taking precedence.
+// Use Get to resolve an agent with its preference overrides.
 func (r *Registry) List() ([]*Agent, error) {
 	r.mu.RLock()
 	searchPaths := append([]searchPath(nil), r.searchPaths...)

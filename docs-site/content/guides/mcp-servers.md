@@ -30,6 +30,8 @@ term-llm chat --mcp playwright,filesystem
 
 `ask` uses the MCP manager’s 30-second startup timeout, or an earlier command deadline. If startup times out, the error names the affected servers.
 
+Adding a server does not enable it for every conversation. Select servers per run with `--mcp`, or set per-agent defaults with `term-llm agents set developer mcp=github,playwright`; see [default MCP servers per agent](/guides/agents/#default-mcp-servers-per-agent).
+
 ### MCP Commands
 
 | Command | Description |

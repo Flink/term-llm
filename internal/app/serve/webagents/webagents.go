@@ -140,16 +140,21 @@ func DraftApprovalActions(cfg *config.Config, toolsFlag string, toolsSet bool, m
 	if err != nil {
 		return nil
 	}
-	list, err := registry.List()
+	registry.SetPreferences(cfg.Agents.Preferences)
+	names, err := registry.ListNames()
 	if err != nil {
 		return nil
 	}
 	mcpConfig, mcpKnown := loadMCPConfig()
 	vision := visionRoutingConfigured(cfg)
-	for _, agent := range list {
+	for _, name := range names {
+		agent, err := registry.Get(name)
+		if err != nil {
+			continue
+		}
 		governed, known := draftAgentApprovalActions(cfg, agent, toolsFlag, toolsSet, mcpFlag, mcpConfig, mcpKnown)
 		if known {
-			actions[agent.Name] = governed || vision
+			actions[name] = governed || vision
 		}
 	}
 	governed, known := draftAgentApprovalActions(cfg, nil, toolsFlag, toolsSet, mcpFlag, mcpConfig, mcpKnown)

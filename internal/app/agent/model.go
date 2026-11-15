@@ -1,4 +1,4 @@
-// Package agent holds the agent model-selection logic extracted from cmd.
+// Package agent holds agent preference commands and model-selection logic extracted from cmd.
 package agent
 
 import (
