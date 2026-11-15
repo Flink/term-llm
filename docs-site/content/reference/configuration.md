@@ -219,6 +219,7 @@ The index below follows the canonical config schema. A dash means no default or 
 | `search.google.api_key` | string | — | — |
 | `search.google.cx` | string | — | — |
 | `search.youcom.api_key` | string | — | — |
+| `search.keenable.api_key` | string | — | — |
 | `classify.default_provider` | string | `typesafe` | — |
 | `classify.providers.typesafe.type` | string | — | — |
 | `classify.providers.typesafe.api_key` | string | — | — |
@@ -1040,6 +1041,9 @@ search:
 
   parallel:
     api_key: ${PARALLEL_API_KEY}
+
+  keenable:
+    api_key: ${KEENABLE_API_KEY} # optional; keyless public endpoint without it
 
   youcom:
     api_key: ${YDC_API_KEY} # optional; keyless free tier without it

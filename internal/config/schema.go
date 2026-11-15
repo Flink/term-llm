@@ -393,6 +393,7 @@ var keySpecs = []KeySpec{
 	optional("search.google.api_key", sensitive()),
 	optional("search.google.cx"),
 	optional("search.youcom.api_key", sensitive()),
+	optional("search.keenable.api_key", sensitive()),
 
 	def("classify.default_provider", "typesafe"),
 	optional("classify.providers.typesafe.type"),

@@ -1215,7 +1215,7 @@ type ClassifyProviderConfig struct {
 
 // SearchConfig configures web search providers
 type SearchConfig struct {
-	Provider      string                 `mapstructure:"provider"`       // exa_mcp (default), exa, perplexity, parallel, tavily, brave, google, youcom, duckduckgo
+	Provider      string                 `mapstructure:"provider"`       // exa_mcp (default), exa, perplexity, parallel, tavily, brave, google, youcom, keenable, duckduckgo
 	FetchProvider string                 `mapstructure:"fetch_provider"` // jina (default), exa_mcp, none
 	ForceExternal bool                   `mapstructure:"force_external"` // force external search for all providers
 	Exa           SearchExaConfig        `mapstructure:"exa"`
@@ -1226,6 +1226,7 @@ type SearchConfig struct {
 	Brave         SearchBraveConfig      `mapstructure:"brave"`
 	Google        SearchGoogleConfig     `mapstructure:"google"`
 	YouCom        SearchYouComConfig     `mapstructure:"youcom"`
+	Keenable      SearchKeenableConfig   `mapstructure:"keenable"`
 }
 
 // SearchExaConfig configures Exa search
@@ -1262,6 +1263,12 @@ type SearchBraveConfig struct {
 // SearchYouComConfig configures You.com search. The API key is optional:
 // without one, the keyless free tier is used.
 type SearchYouComConfig struct {
+	APIKey string `mapstructure:"api_key"`
+}
+
+// SearchKeenableConfig configures Keenable search. The API key is optional:
+// without one, the keyless public endpoint is used.
+type SearchKeenableConfig struct {
 	APIKey string `mapstructure:"api_key"`
 }
 

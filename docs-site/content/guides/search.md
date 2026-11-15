@@ -118,6 +118,9 @@ Available external providers:
 | Brave | `BRAVE_API_KEY` | independent index |
 | Google | `GOOGLE_SEARCH_API_KEY` + `GOOGLE_SEARCH_CX` | Custom Search |
 | You.com | optional `YDC_API_KEY` | works with no key on the free keyless tier (about 100 searches a day); a [key](https://you.com/platform?utm_source=samsaffron-term-llm&utm_medium=oss_integration&utm_campaign=2026-11-oss-integrations&utm_content=docs) switches to the Web Search API for higher limits (`provider: youcom`) |
+| Keenable | optional `KEENABLE_API_KEY` | works with no key (1,000 requests per hour per IP, see [rate limits](https://docs.keenable.ai/rate-limits)); a key removes the hourly cap (`provider: keenable`) |
+
+To use Keenable without an API key, set `search.provider: keenable`.
 
 Available fetch providers:
 

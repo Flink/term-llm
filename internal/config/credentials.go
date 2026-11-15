@@ -303,6 +303,11 @@ func (c SearchConfig) ParallelKey() CredentialRef {
 	return Cred(c.Parallel.APIKey, "PARALLEL_API_KEY")
 }
 
+// KeenableKey returns the optional Keenable search credential.
+func (c SearchConfig) KeenableKey() CredentialRef {
+	return Cred(c.Keenable.APIKey, "KEENABLE_API_KEY")
+}
+
 // YouComKey returns the optional You.com search credential.
 func (c SearchConfig) YouComKey() CredentialRef {
 	return Cred(c.YouCom.APIKey, "YDC_API_KEY")

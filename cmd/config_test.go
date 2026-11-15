@@ -300,6 +300,17 @@ func TestSearchProviderConfigValueCompletionsIncludeParallel(t *testing.T) {
 	}
 }
 
+func TestSearchProviderConfigValueCompletionsIncludeKeylessProviders(t *testing.T) {
+	for _, provider := range []string{"keenable", "youcom"} {
+		t.Run(provider, func(t *testing.T) {
+			got := configValueCompletions("search.provider", provider[:3])
+			if !slices.Equal(got, []string{provider}) {
+				t.Fatalf("search provider completions = %v, want [%s]", got, provider)
+			}
+		})
+	}
+}
+
 func TestDefaultConfigContentContainsEveryDefault(t *testing.T) {
 	content := defaultConfigContent()
 	var root yaml.Node
