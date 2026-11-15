@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/ui"
 )
 
@@ -91,8 +92,13 @@ func (s *StreamingBlock) StartTool(callID, name, info string, toolArgs json.RawM
 
 // EndTool updates the status of a pending tool.
 func (s *StreamingBlock) EndTool(callID string, success bool) {
+	s.EndToolWithResult(callID, success, "", "", nil)
+}
+
+// EndToolWithResult retains the bounded script receipt as well as the tool outcome.
+func (s *StreamingBlock) EndToolWithResult(callID string, success bool, info, output string, parts []core.ToolContentPart) {
 	if s.tracker != nil {
-		s.tracker.HandleToolEnd(callID, success)
+		s.tracker.HandleToolEndWithResult(callID, success, info, output, parts)
 	}
 }
 

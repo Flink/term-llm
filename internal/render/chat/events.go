@@ -3,6 +3,7 @@ package chat
 import (
 	"encoding/json"
 
+	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/ui"
 )
 
@@ -51,11 +52,13 @@ type RenderEvent struct {
 	Text string
 
 	// For streaming tool events
-	ToolCallID  string
-	ToolName    string
-	ToolInfo    string
-	ToolArgs    json.RawMessage
-	ToolSuccess bool
+	ToolCallID       string
+	ToolName         string
+	ToolInfo         string
+	ToolArgs         json.RawMessage
+	ToolSuccess      bool
+	ToolOutput       string
+	ToolContentParts []core.ToolContentPart
 
 	// For streaming image/diff events
 	ImagePath     string
@@ -218,7 +221,9 @@ func FromStreamEvent(ev ui.StreamEvent) RenderEvent {
 	case ui.StreamEventToolStart:
 		return NewStreamToolStartEvent(ev.ToolCallID, ev.ToolName, ev.ToolInfo, ev.ToolArgs)
 	case ui.StreamEventToolEnd:
-		return NewStreamToolEndEvent(ev.ToolCallID, ev.ToolName, ev.ToolInfo, ev.ToolSuccess)
+		event := NewStreamToolEndEvent(ev.ToolCallID, ev.ToolName, ev.ToolInfo, ev.ToolSuccess)
+		event.ToolOutput, event.ToolContentParts = ev.ToolOutput, ev.ToolContentParts
+		return event
 	case ui.StreamEventImage:
 		return NewStreamImageEvent(ev.ImagePath)
 	case ui.StreamEventAttemptDiscard:

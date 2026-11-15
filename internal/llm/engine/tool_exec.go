@@ -141,7 +141,7 @@ func (e *Engine) executeSingleToolCallOutcomeSafe(ctx context.Context, call core
 	defer func() {
 		if r := recover(); r != nil {
 			err := fmt.Errorf("tool panicked: %v", r)
-			sendToolExecEndFor(ctx, send, core.Event{Type: core.EventToolExecEnd, ParentToolCallID: nestedParent(ctx), ToolCallID: call.ID, ToolName: call.Name, ToolSuccess: false})
+			sendToolExecEndFor(ctx, send, core.Event{Type: core.EventToolExecEnd, ParentToolCallID: nestedParent(ctx), ToolCallID: call.ID, ToolName: call.Name, ToolSuccess: false, ToolOutput: scriptToolErrorOutput(ctx, call.Name, fmt.Sprintf("Error: %v", err))})
 			outcome = toolCallOutcome{call: call, err: err}
 		}
 	}()
@@ -286,6 +286,18 @@ func (e *Engine) executeSingleToolCall(ctx context.Context, call core.ToolCall, 
 	return []core.Message{outcome.message()}, nil
 }
 
+// scriptToolErrorOutput exposes the durable error text only for top-level
+// asynchronous script controls. Nested results and unrelated tools stay redacted.
+func scriptToolErrorOutput(ctx context.Context, name, text string) string {
+	if !nestedExecution(ctx) {
+		switch name {
+		case codemode.ExecToolName, codemode.WaitToolName, codemode.CancelToolName:
+			return text
+		}
+	}
+	return ""
+}
+
 // executeSingleToolCallOutcome executes a single tool call and retains its
 // structured output for both transcript and bridge result adapters.
 func (e *Engine) executeSingleToolCallOutcome(ctx context.Context, call core.ToolCall, send corestream.Sender, debug bool, debugRaw bool) toolCallOutcome {
@@ -311,7 +323,7 @@ func (e *Engine) executeSingleToolCallOutcome(ctx context.Context, call core.Too
 		if tool = core.ClientTool(ctx, call.Name); tool == nil {
 			errMsg := fmt.Sprintf("Error: tool not registered: %s", call.Name)
 			env.debugToolResult(debug, call.ID, call.Name, errMsg)
-			sendToolExecEndFor(ctx, send, core.Event{Type: core.EventToolExecEnd, ParentToolCallID: nestedParent(ctx), ToolCallID: call.ID, ToolName: call.Name, ToolInfo: e.getToolPreview(call), ToolSuccess: false})
+			sendToolExecEndFor(ctx, send, core.Event{Type: core.EventToolExecEnd, ParentToolCallID: nestedParent(ctx), ToolCallID: call.ID, ToolName: call.Name, ToolInfo: e.getToolPreview(call), ToolSuccess: false, ToolOutput: scriptToolErrorOutput(ctx, call.Name, errMsg)})
 			return toolCallOutcome{call: call, err: fmt.Errorf("tool not registered: %s", call.Name)}
 		}
 	}
@@ -319,7 +331,7 @@ func (e *Engine) executeSingleToolCallOutcome(ctx context.Context, call core.Too
 	if ok && !isCodeModeClientTool(tool) && ((!nestedExecution(ctx) && !e.toolCallAllowed(ctx, call.Name)) || (nestedExecution(ctx) && !e.IsToolAllowed(call.Name))) {
 		errMsg := fmt.Sprintf("Error: tool '%s' is not in the active skill's allowed-tools list", call.Name)
 		env.debugToolResult(debug, call.ID, call.Name, errMsg)
-		sendToolExecEndFor(ctx, send, core.Event{Type: core.EventToolExecEnd, ParentToolCallID: nestedParent(ctx), ToolCallID: call.ID, ToolName: call.Name, ToolInfo: e.getToolPreview(call), ToolSuccess: false})
+		sendToolExecEndFor(ctx, send, core.Event{Type: core.EventToolExecEnd, ParentToolCallID: nestedParent(ctx), ToolCallID: call.ID, ToolName: call.Name, ToolInfo: e.getToolPreview(call), ToolSuccess: false, ToolOutput: scriptToolErrorOutput(ctx, call.Name, errMsg)})
 		return toolCallOutcome{call: call, err: fmt.Errorf("tool '%s' is not in the active skill's allowed-tools list", call.Name)}
 	}
 
@@ -366,7 +378,7 @@ func (e *Engine) executeSingleToolCallOutcome(ctx context.Context, call core.Too
 	if err != nil {
 		errMsg := fmt.Sprintf("Error: %v", err)
 		env.debugToolResult(debug, call.ID, call.Name, errMsg)
-		sendToolExecEndFor(ctx, send, core.Event{Type: core.EventToolExecEnd, ParentToolCallID: nestedParent(ctx), ToolCallID: call.ID, ToolName: call.Name, ToolInfo: info, ToolSuccess: false})
+		sendToolExecEndFor(ctx, send, core.Event{Type: core.EventToolExecEnd, ParentToolCallID: nestedParent(ctx), ToolCallID: call.ID, ToolName: call.Name, ToolInfo: info, ToolSuccess: false, ToolOutput: scriptToolErrorOutput(ctx, call.Name, errMsg)})
 		return toolCallOutcome{call: call, output: output, err: err}
 	}
 

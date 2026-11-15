@@ -557,7 +557,11 @@ func (r *MessageBlockRenderer) renderAssistantMessage(msg *session.Message) stri
 				if result != nil && result.IsError {
 					status = ui.ToolError
 				}
-				b.WriteString(ui.RenderToolCallFromPartWithStatus(part.ToolCall, r.width, r.toolsExpanded, status))
+				if rendered, ok := ui.RenderCodeModeToolCall(part.ToolCall, result, r.width, r.toolsExpanded, status); ok {
+					b.WriteString(rendered)
+				} else {
+					b.WriteString(ui.RenderToolCallFromPartWithStatus(part.ToolCall, r.width, r.toolsExpanded, status))
+				}
 				b.WriteString("\n")
 				r.noteRenderedSegment(ui.SegmentTool)
 				hasContent = true

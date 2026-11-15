@@ -265,7 +265,7 @@ func (r *Renderer) HandleEvent(event RenderEvent) tea.Cmd {
 
 	case RenderEventStreamToolEnd:
 		if r.streaming != nil {
-			r.streaming.EndTool(event.ToolCallID, event.ToolSuccess)
+			r.streaming.EndToolWithResult(event.ToolCallID, event.ToolSuccess, event.ToolInfo, event.ToolOutput, event.ToolContentParts)
 		}
 		return nil
 

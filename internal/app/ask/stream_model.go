@@ -131,8 +131,11 @@ type askToolStartMsg struct {
 	ToolArgs json.RawMessage // Raw args JSON
 }
 type askToolEndMsg struct {
-	CallID  string // Unique ID for this tool invocation
-	Success bool   // Whether the tool succeeded
+	CallID           string // Unique ID for this tool invocation
+	Success          bool   // Whether the tool succeeded
+	ToolInfo         string
+	ToolOutput       string
+	ToolContentParts []core.ToolContentPart
 }
 type askRetryMsg struct {
 	Attempt     int
@@ -692,7 +695,7 @@ func (m askStreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingWaveStart = false
 
 	case askToolEndMsg:
-		m.tracker.HandleToolEnd(msg.CallID, msg.Success)
+		m.tracker.HandleToolEndWithResult(msg.CallID, msg.Success, msg.ToolInfo, msg.ToolOutput, msg.ToolContentParts)
 
 		// Remove from subagent tracker when spawn_agent completes
 		m.subagentTracker.Remove(msg.CallID)

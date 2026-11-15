@@ -21,7 +21,10 @@ func (m askStreamModel) handleStreamEventMessage(msg askStreamEventMsg) (tea.Mod
 	case ui.StreamEventPhase:
 		innerMsg = askPhaseMsg(ev.Phase)
 	case ui.StreamEventToolEnd:
-		innerMsg = askToolEndMsg{CallID: ev.ToolCallID, Success: ev.ToolSuccess}
+		innerMsg = askToolEndMsg{
+			CallID: ev.ToolCallID, Success: ev.ToolSuccess, ToolInfo: ev.ToolInfo,
+			ToolOutput: ev.ToolOutput, ToolContentParts: ev.ToolContentParts,
+		}
 	case ui.StreamEventToolStart:
 		innerMsg = askToolStartMsg{CallID: ev.ToolCallID, Name: ev.ToolName, Info: ev.ToolInfo, ToolArgs: ev.ToolArgs}
 	case ui.StreamEventGuardian:

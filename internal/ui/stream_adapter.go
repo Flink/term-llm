@@ -417,6 +417,10 @@ func (a *StreamAdapter) processToolExecEnd(ctx context.Context, event core.Event
 		a.seenToolEnds[event.ToolCallID] = struct{}{}
 	}
 	uiEvent := ToolEndEvent(event.ToolCallID, event.ToolName, childToolInfo(event.ToolName, event.ToolInfo, event.ParentToolCallID), event.ToolSuccess)
+	if event.ToolName == tools.CodeExecToolName || event.ToolName == tools.CodeWaitToolName || event.ToolName == tools.CodeCancelToolName {
+		uiEvent.ToolOutput = event.ToolOutput
+		uiEvent.ToolContentParts = codeModePresentationParts(event.ToolContentParts)
+	}
 	if !a.emit(ctx, uiEvent) {
 		return false
 	}

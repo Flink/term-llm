@@ -3,7 +3,6 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -62,6 +61,7 @@ type Segment struct {
 	ToolName       string               // For tool segments
 	ToolInfo       string               // For tool segments: additional context
 	ToolArgs       json.RawMessage      // Raw args JSON, stored for expanded rendering
+	CodeMode       *CodeModeReceipt     // Bounded script observation, not a live cell roster
 	Guardian       *tools.GuardianEvent // Guardian review for this exact tool invocation
 	ToolStatus     ToolStatus           // For tool segments
 	ToolExpandHint bool                 // Show one-time "CTRL+e to expand" discovery hint
@@ -248,41 +248,6 @@ func truncateToolInfo(toolName, info string, width int) string {
 	return string(runes[:maxInfoLen-3]) + "..."
 }
 
-func truncateShellDescription(desc string) string {
-	runes := []rune(desc)
-	if len(runes) > 100 {
-		return string(runes[:97]) + "..."
-	}
-	return desc
-}
-
-func buildExpandedShellInfo(args tools.ShellArgs) string {
-	if args.Command == "" {
-		return ""
-	}
-	var b strings.Builder
-	if args.Description != "" {
-		desc := truncateShellDescription(terminaltext.SanitizeSingleLine(args.Description))
-		b.WriteString(desc)
-		b.WriteString("\n")
-	}
-	b.WriteString(terminaltext.EscapeControls(args.Command))
-	if len(args.Env) > 0 {
-		keys := make([]string, 0, len(args.Env))
-		for key := range args.Env {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			b.WriteString("\n  ")
-			b.WriteString(terminaltext.EscapeControls(key))
-			b.WriteString("=")
-			b.WriteString(terminaltext.EscapeControls(args.Env[key]))
-		}
-	}
-	return b.String()
-}
-
 // RenderToolSegment renders a tool segment with its status indicator.
 // For pending tools, wavePos controls the wave animation (-1 = paused/all dim).
 // Tool name is rendered normally, params are rendered in slightly muted gray.
@@ -313,6 +278,9 @@ func RenderToolSegment(seg *Segment, wavePos int, width int, expanded bool) stri
 }
 
 func renderToolSegmentBase(seg *Segment, wavePos int, width int, expanded bool) string {
+	if seg != nil && isCodeModeTool(seg.ToolName) {
+		return renderCodeModeSegmentWithWave(seg, width, expanded, wavePos)
+	}
 	if seg != nil && seg.ToolName == planpkg.ToolName && seg.ToolStatus != ToolError {
 		if rendered, ok := renderUpdatePlanChecklist(seg.ToolArgs, seg.ToolStatus == ToolPending, width); ok {
 			return rendered
@@ -450,6 +418,9 @@ func RenderToolCallFromPart(tc *core.ToolCall, width int, expanded bool) string 
 func RenderToolCallFromPartWithStatus(tc *core.ToolCall, width int, expanded bool, status ToolStatus) string {
 	if tc == nil {
 		return ""
+	}
+	if rendered, ok := RenderCodeModeToolCall(tc, nil, width, expanded, status); ok {
+		return rendered
 	}
 	if tc.Name == planpkg.ToolName && status != ToolError {
 		if rendered, ok := renderUpdatePlanChecklist(tc.Arguments, false, width); ok {

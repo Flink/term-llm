@@ -1022,14 +1022,14 @@ func (r *ContentRenderer) renderToolCallWithLabel(tc *core.ToolCall, itemID stri
 	lineCount++
 
 	// Arguments as pretty-printed JSON
-	args := r.formatJSON(tc.Arguments)
+	args := r.formatToolCallArgs(tc)
 	innerWidth := max(r.width-6, 20)
 	borderStyle := lipgloss.NewStyle().Foreground(theme.Border)
 
 	// Count total lines after wrapping
 	var wrappedLineCount int
 	for line := range strings.SplitSeq(args, "\n") {
-		wrappedLineCount += len(wrapLine(line, innerWidth))
+		wrappedLineCount += len(wrapToolResultLine(tc.Name, line, innerWidth))
 	}
 
 	// Check if we need to truncate
@@ -1045,7 +1045,7 @@ func (r *ContentRenderer) renderToolCallWithLabel(tc *core.ToolCall, itemID stri
 	renderedContentLines := 0
 	for line := range strings.SplitSeq(args, "\n") {
 		// Wrap long lines
-		wrappedLines := wrapLine(line, innerWidth)
+		wrappedLines := wrapToolResultLine(tc.Name, line, innerWidth)
 		for _, wl := range wrappedLines {
 			if isTruncated && renderedContentLines >= maxContentLines {
 				break
@@ -1146,7 +1146,7 @@ func (r *ContentRenderer) renderToolResultsWithCalls(msg session.Message, msgID 
 			lineCount++
 
 			// Content
-			content := tr.Content
+			content := inspectorToolResultContent(tr)
 			lines := strings.Split(content, "\n")
 
 			innerWidth := max(r.width-6, 20)
@@ -1155,7 +1155,7 @@ func (r *ContentRenderer) renderToolResultsWithCalls(msg session.Message, msgID 
 			// Count total lines after wrapping
 			var wrappedLineCount int
 			for _, line := range lines {
-				wrappedLineCount += len(wrapLine(line, innerWidth))
+				wrappedLineCount += len(wrapToolResultLine(tr.Name, line, innerWidth))
 			}
 
 			// Check if we need to truncate
@@ -1171,7 +1171,7 @@ func (r *ContentRenderer) renderToolResultsWithCalls(msg session.Message, msgID 
 			renderedContentLines := 0
 			for _, line := range lines {
 				// Wrap long lines instead of truncating
-				wrappedLines := wrapLine(line, innerWidth)
+				wrappedLines := wrapToolResultLine(tr.Name, line, innerWidth)
 				for _, wl := range wrappedLines {
 					if isTruncated && renderedContentLines >= maxContentLines {
 						break

@@ -100,7 +100,7 @@ func (m *Model) handleStreamToolEnd(msg streamEventMsg, ev ui.StreamEvent, state
 	m.stats.ToolEnd()
 	// Update segment status
 	if m.tracker != nil {
-		m.tracker.HandleToolEndWithInfo(ev.ToolCallID, ev.ToolSuccess, ev.ToolInfo)
+		m.tracker.HandleToolEndWithResult(ev.ToolCallID, ev.ToolSuccess, ev.ToolInfo, ev.ToolOutput, ev.ToolContentParts)
 
 		// Remove from subagent tracker when spawn_agent completes
 		if m.subagentTracker != nil {
