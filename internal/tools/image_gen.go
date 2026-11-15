@@ -73,7 +73,7 @@ func (t *ImageGenerateTool) Spec() core.ToolSpec {
 		"input_images": map[string]interface{}{
 			"type":        "array",
 			"items":       map[string]interface{}{"type": "string"},
-			"description": "Paths to multiple input images for multi-image editing (optional, supported by Gemini and OpenRouter)",
+			"description": "Paths to multiple input images for multi-image editing (optional, supported by Gemini, OpenRouter and Venice)",
 		},
 		"size": map[string]interface{}{
 			"type":        "string",
@@ -142,6 +142,11 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args json.RawMessage) (
 
 	if toolErr := validateImageGenerateArgs(a); toolErr != nil {
 		return core.TextOutput(formatToolError(toolErr)), nil
+	}
+
+	// Refuse the short legacy wall cap before spending; direct/async calls are safe.
+	if core.CodeModeCellFromContext(ctx) != nil {
+		return core.TextOutput(formatToolError(NewToolError(ErrInvalidParams, "image_generate cannot run in synchronous code_mode: its short automatic deadline risks losing paid output; use a direct image_generate call or asynchronous spawn_script"))), nil
 	}
 
 	if a.OutputPath != "" {
@@ -413,7 +418,7 @@ func (t *ImageGenerateTool) editImage(ctx context.Context, provider image.ImageP
 		Background:  a.Background,
 	})
 	if err != nil {
-		out := core.TextOutput(formatToolError(NewToolErrorf(ErrImageGenFailed, "image edit failed: %v", err)))
+		out := core.TextOutput(formatToolError(NewToolErrorf(ErrImageGenFailed, "image edit failed: %v", image.RequestError(err))))
 		return nil, &out
 	}
 	return result, nil
@@ -429,7 +434,7 @@ func (t *ImageGenerateTool) generateImage(ctx context.Context, provider image.Im
 		Background:  a.Background,
 	})
 	if err != nil {
-		out := core.TextOutput(formatToolError(NewToolErrorf(ErrImageGenFailed, "image generation failed: %v", err)))
+		out := core.TextOutput(formatToolError(NewToolErrorf(ErrImageGenFailed, "image generation failed: %v", image.RequestError(err))))
 		return nil, &out
 	}
 	return result, nil
