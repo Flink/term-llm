@@ -247,7 +247,7 @@ describe('ServerEventCoordinator', () => {
     coordinator.dispose();
   });
 
-  it('refreshes the active parent projection for children.changed', async () => {
+  it('refreshes sidebar status and child activity for a nonselected parent on children.changed', async () => {
     vi.useFakeTimers();
     const { coordinator, calls } = harness();
     const internals = coordinator as unknown as {
@@ -270,6 +270,8 @@ describe('ServerEventCoordinator', () => {
     });
     await vi.advanceTimersByTimeAsync(100);
     expect(calls.children).toHaveBeenCalledWith('parent-1');
+    expect(calls.status).toHaveBeenCalledOnce();
+    expect(calls.active).not.toHaveBeenCalled();
     coordinator.dispose();
   });
 

@@ -103,6 +103,7 @@ describe('cacheableSession', () => {
     const original: Session = {
       ...session(),
       activeRun: true,
+      activeChildren: true,
       activeResponseId: 'response',
       interactionRequired: true,
       interactionResponseId: 'response',
@@ -123,6 +124,7 @@ describe('cacheableSession', () => {
     expect(cached.session.messages.map((entry) => entry.id)).toEqual(['1', '2']);
     for (const field of [
       'activeRun',
+      'activeChildren',
       'activeResponseId',
       'interactionRequired',
       'interactionResponseId',
@@ -136,6 +138,7 @@ describe('cacheableSession', () => {
       expect(cached.session).not.toHaveProperty(field);
     expect(restoredSession(cached)).toMatchObject({
       activeRun: false,
+      activeChildren: false,
       activeResponseId: null,
       interactionRequired: false,
       pendingInteractionCount: 0,

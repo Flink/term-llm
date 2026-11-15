@@ -169,6 +169,7 @@ export function cacheableSession(session: Session): CachedSession | null {
 /** Live, interaction and paging state that only the server may establish. */
 const TRANSIENT_SESSION_FIELDS: ReadonlyArray<keyof Session> = [
   'activeRun',
+  'activeChildren',
   'activeResponseId',
   'interactionRequired',
   'interactionResponseId',
@@ -186,6 +187,7 @@ export function restoredSession(record: CachedSession): Session {
     ...record.session,
     messages: Array.isArray(record.session.messages) ? record.session.messages : [],
     activeRun: false,
+    activeChildren: false,
     activeResponseId: null,
     interactionRequired: false,
     pendingInteractionCount: 0,

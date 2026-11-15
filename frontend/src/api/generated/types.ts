@@ -14,7 +14,7 @@ export type CreateWebSessionRequest = { "provider"?: string; "model"?: string; "
 
 export type HubNodeDiagnostic = { "severity": string; "code": string; "message": string; };
 
-export type HubNodeSessionView = { "id": string; "number"?: number; "short_title": string; "long_title"?: string; "pinned"?: boolean; "active_run"?: boolean; "interaction_required"?: boolean; "pending_interaction_count"?: number; "pending_interaction_kinds"?: (string)[]; "last_message_at"?: number; "message_count"?: number; "resume_path": string; };
+export type HubNodeSessionView = { "id": string; "number"?: number; "short_title": string; "long_title"?: string; "pinned"?: boolean; "active_run"?: boolean; "active_children"?: boolean; "interaction_required"?: boolean; "pending_interaction_count"?: number; "pending_interaction_kinds"?: (string)[]; "last_message_at"?: number; "message_count"?: number; "resume_path": string; };
 
 export type HubNodeSessionsView = { "count_label": string; "has_more"?: boolean; "active_count"?: number; "input_required_count"?: number; "unseen_count"?: number; "attention_capability"?: string; "attention_last_success_at"?: number; "active"?: (HubNodeSessionView)[]; "recent"?: (HubNodeSessionView)[]; "resume_path"?: string; };
 

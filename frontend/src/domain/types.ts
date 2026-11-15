@@ -335,6 +335,8 @@ export interface Session {
   activeResponseId?: string | null;
   /** Server-observed activity, available before this tab attaches to the response stream. */
   activeRun?: boolean;
+  /** Server-observed descendant activity, independent of the main response lifecycle. */
+  activeChildren?: boolean;
   activeModel?: string;
   activeEffort?: string;
   /**

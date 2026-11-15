@@ -78,11 +78,6 @@
   color: #4b5260;
 }
 
-.activity-task.empty {
-  color: #6b7280;
-  font-style: italic;
-}
-
 .activity-row {
   box-sizing: border-box;
   width: 100%;

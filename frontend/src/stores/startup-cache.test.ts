@@ -396,13 +396,16 @@ describe('cross-reload workspace startup', () => {
     first.services.workspaceCache.saveSession({
       ...first.sessions.value[0],
       activeRun: true,
+      activeChildren: true,
       activeResponseId: 'r1',
     });
     first.services.workspaceCache.saveSidebar({
       projectsEnabled: false,
       worktreesEnabled: false,
       showArchived: false,
-      payload: { sessions: [{ ...row(), active_run: true, active_response_id: 'r1' }] },
+      payload: {
+        sessions: [{ ...row(), active_run: true, active_children: true, active_response_id: 'r1' }],
+      },
     });
     first.services.workspaceCache.flush();
     await vi.waitFor(() =>
@@ -422,6 +425,8 @@ describe('cross-reload workspace startup', () => {
     const bootstrap = store.bootstrap();
     await vi.waitFor(() => expect(store.workspaceShown.value).toBe(true));
     expect(resume).not.toHaveBeenCalled();
+    expect(store.activeSession.value?.activeChildren).toBe(false);
+    expect(store.sidebarSessions.value[0]?.activeChildren).toBe(false);
     expect(store.endpoints.response).not.toHaveBeenCalled();
     pending.state.resolve({ active_run: true, active_response_id: 'r1' });
     resolveNetwork(pending);

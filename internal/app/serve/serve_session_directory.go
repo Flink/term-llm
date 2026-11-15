@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/term-llm/term-llm/internal/app/serve/sessionactivity"
 	"github.com/term-llm/term-llm/internal/session"
 	"github.com/term-llm/term-llm/internal/tools"
 )
@@ -204,7 +205,7 @@ func (s *serveServer) sessionsNeedingInput(ctx context.Context) map[string]bool 
 	}
 	if attentionStore, ok := session.AsAttentionStore(s.store); ok {
 		if _, supported := session.AsResponseRunInteractionStore(s.store); supported {
-			for id := range listStatusAttention(ctx, attentionStore, session.AttentionKindInputRequired) {
+			for id := range sessionactivity.ListStatusAttention(ctx, attentionStore, session.AttentionKindInputRequired) {
 				needsInput[id] = true
 			}
 		}

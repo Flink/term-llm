@@ -6,7 +6,7 @@ function SessionRows({ sessions }: { sessions: HubNodeSession[] }) {
   return (
     <div class="node-session-group">
       {sessions.map((session) => {
-        const active = Boolean(session.active_run);
+        const active = Boolean(session.active_run || session.active_children);
         const className = `node-session-row${session.interaction_required ? ' is-input-required' : active ? ' is-active' : ''}`;
         const content = (
           <>

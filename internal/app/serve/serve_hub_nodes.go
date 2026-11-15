@@ -28,6 +28,7 @@ type hubNodeSessionView struct {
 	LongTitle               string   `json:"long_title,omitempty"`
 	Pinned                  bool     `json:"pinned,omitempty"`
 	ActiveRun               bool     `json:"active_run,omitempty"`
+	ActiveChildren          bool     `json:"active_children,omitempty"`
 	InteractionRequired     bool     `json:"interaction_required,omitempty"`
 	PendingInteractionCount int      `json:"pending_interaction_count,omitempty"`
 	PendingInteractionKinds []string `json:"pending_interaction_kinds,omitempty"`
@@ -184,6 +185,7 @@ type hubNodeSessionStatus struct {
 	LongTitle               string   `json:"long_title"`
 	Pinned                  bool     `json:"pinned"`
 	ActiveRun               bool     `json:"active_run"`
+	ActiveChildren          bool     `json:"active_children"`
 	InteractionRequired     bool     `json:"interaction_required"`
 	PendingInteractionCount int      `json:"pending_interaction_count"`
 	PendingInteractionKinds []string `json:"pending_interaction_kinds"`
@@ -323,6 +325,7 @@ func (s *hubServer) buildHubNodeSessionsView(n hub.Node, entries []hubNodeSessio
 			LongTitle:               strings.TrimSpace(entry.LongTitle),
 			Pinned:                  entry.Pinned,
 			ActiveRun:               entry.ActiveRun,
+			ActiveChildren:          entry.ActiveChildren,
 			InteractionRequired:     entry.InteractionRequired,
 			PendingInteractionCount: entry.PendingInteractionCount,
 			PendingInteractionKinds: append([]string(nil), entry.PendingInteractionKinds...),
@@ -334,7 +337,7 @@ func (s *hubServer) buildHubNodeSessionsView(n hub.Node, entries []hubNodeSessio
 		if sess.InteractionRequired {
 			out.InputRequiredCount++
 		}
-		if sess.ActiveRun {
+		if sess.ActiveRun || sess.ActiveChildren {
 			out.ActiveCount++
 			if len(out.Active) < hubNodeSessionActiveLimit {
 				out.Active = append(out.Active, sess)

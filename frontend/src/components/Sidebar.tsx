@@ -301,7 +301,10 @@ function SessionRow({
             ['connecting', 'checking', 'streaming', 'cancelling'].includes(projection.run.status) &&
             (session.activeRun ||
               store.runEngine.hasActiveResponseTransport(session.id, projection.run.responseId)),
-          ) || Boolean(store.services.eventFeedHealthy.value && session.activeRun)
+          ) ||
+          Boolean(
+            store.services.eventFeedHealthy.value && (session.activeRun || session.activeChildren),
+          )
         );
       }),
     [store, session],

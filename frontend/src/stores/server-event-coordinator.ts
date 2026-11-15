@@ -444,6 +444,7 @@ export class ServerEventCoordinator {
         if (event.sessionId) this.fileSessions.add(event.sessionId);
         break;
       case 'children.changed':
+        this.statusPending = true;
         if (event.parentSessionId) this.childrenParents.add(event.parentSessionId);
         break;
       case 'snapshot.required':

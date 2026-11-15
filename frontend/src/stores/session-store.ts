@@ -423,6 +423,7 @@ export class SessionStore {
     preserveLiveState = false,
   ): Session {
     if (!existing) return incoming;
+    const previousLive = preserveLiveState ? existing : incoming;
     // Persisted settings may still name the outgoing provider during a handover.
     // While a local response owns the session, events/snapshots own its header.
     const preserveRuntime =
@@ -499,12 +500,9 @@ export class SessionStore {
           ? incoming.messages
           : existing.messages,
       lastResponseId: incoming.lastResponseId || existing.lastResponseId,
-      activeResponseId: preserveLiveState
-        ? incoming.activeResponseId || existing.activeResponseId
-        : incoming.activeResponseId,
-      activeRun: preserveLiveState
-        ? (incoming.activeRun ?? existing.activeRun)
-        : incoming.activeRun,
+      activeResponseId: incoming.activeResponseId || previousLive.activeResponseId,
+      activeRun: incoming.activeRun ?? previousLive.activeRun,
+      activeChildren: incoming.activeChildren ?? existing.activeChildren,
       usage: incoming.usage || existing.usage,
       // The server never clears a session's agent, so a row that omits it is
       // missing data, not a change.
@@ -550,6 +548,7 @@ export class SessionStore {
       this.updateEveryCatalogSession((session) => ({
         ...session,
         activeRun: false,
+        activeChildren: false,
         activeResponseId: null,
         interactionRequired: false,
         interactionResponseId: undefined,

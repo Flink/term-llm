@@ -35,6 +35,15 @@ describe('Hub formatting', () => {
     ).toBe('2 decisions waiting · 1 message');
   });
 
+  it.each(['active_run', 'active_children'] as const)(
+    'formats %s as active without adding a new status',
+    (field) => {
+      const session = { id: 's', short_title: 'Session', resume_path: '/resume', [field]: true };
+      expect(sessionMetaText(session)).toBe('active now');
+      expect(sessionMetaText({ ...session, interaction_required: true })).toBe('waiting for input');
+    },
+  );
+
   it.each([undefined, 0, -1, 'invalid date'])('ignores invalid session time %s', (value) => {
     expect(relativeSessionTime(value)).toBe('');
   });

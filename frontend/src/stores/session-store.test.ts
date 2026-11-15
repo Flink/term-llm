@@ -690,6 +690,7 @@ describe('SessionStore', () => {
       store.sessionStore.prepend(
         testSession({
           activeRun: true,
+          activeChildren: true,
           activeResponseId: 'r1',
           messages: [{ id: 'm1', role: 'user', content: 'live', created: 1 }],
         }),
@@ -715,6 +716,7 @@ describe('SessionStore', () => {
         id: 's1',
         title: 'From server',
         activeRun: true,
+        activeChildren: true,
         activeResponseId: 'r1',
       });
       expect(store.sessions.value[0].messages).toHaveLength(1);

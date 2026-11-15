@@ -110,7 +110,9 @@ export class StatusReconciler {
         ) ||
         this.host.sessionStore.sessions
           .peek()
-          .some((session) => session.activeRun || session.interactionRequired) ||
+          .some(
+            (session) => session.activeRun || session.activeChildren || session.interactionRequired,
+          ) ||
         Object.values(this.host.runs.peek()).some((projection) =>
           ['connecting', 'checking', 'streaming', 'cancelling'].includes(projection.run.status),
         );
@@ -224,7 +226,11 @@ export class StatusReconciler {
     const unknownActive = new Set(
       statuses.flatMap((status) => {
         const id = String(status.id || status.session_id || '');
-        return id && (status.active_run || status.active_response_id) && !known.has(id) ? [id] : [];
+        return id &&
+          (status.active_run || status.active_children || status.active_response_id) &&
+          !known.has(id)
+          ? [id]
+          : [];
       }),
     );
     const discoveredUnknown = [...unknownActive].some(
@@ -247,7 +253,10 @@ export class StatusReconciler {
       .concat(transient ? [transient] : [])
       .map((session) => {
         const status = byID.get(session.id);
-        if (!status) return session.activeRun ? { ...session, activeRun: false } : session;
+        if (!status)
+          return session.activeRun || session.activeChildren
+            ? { ...session, activeRun: false, activeChildren: false }
+            : session;
         const serverActiveResponseId = String(status.active_response_id || '') || null;
         const serverReportsActive = Boolean(serverActiveResponseId || status.active_run);
         const projectedRun = this.host.runs.peek()[session.id]?.run;
@@ -435,6 +444,7 @@ export class StatusReconciler {
             ? { activeResponseId }
             : {}),
           ...(nextActiveRun || session.activeRun !== undefined ? { activeRun: nextActiveRun } : {}),
+          activeChildren: Boolean(status.active_children),
           messages,
           ...(nextLastResponseId ? { lastResponseId: nextLastResponseId } : {}),
           ...(transcriptRev || session.transcriptRev !== undefined ? { transcriptRev } : {}),
@@ -492,30 +502,12 @@ export class StatusReconciler {
               )
             : session.lastMessageAt,
         };
-        return candidate.title === session.title &&
-          candidate.longTitle === session.longTitle &&
-          candidate.activeResponseId === session.activeResponseId &&
-          candidate.activeRun === session.activeRun &&
-          candidate.messages === session.messages &&
-          candidate.lastResponseId === session.lastResponseId &&
-          candidate.transcriptRev === session.transcriptRev &&
-          candidate.messageCount === session.messageCount &&
-          candidate.attentionStoreInstanceId === session.attentionStoreInstanceId &&
-          candidate.attentionSeq === session.attentionSeq &&
-          candidate.seenThroughSeq === session.seenThroughSeq &&
-          candidate.seenRev === session.seenRev &&
-          candidate.attentionUnseen === session.attentionUnseen &&
-          candidate.attentionResponseId === session.attentionResponseId &&
-          candidate.attentionFinalRev === session.attentionFinalRev &&
-          candidate.attentionOutcome === session.attentionOutcome &&
-          candidate.attentionTerminalAt === session.attentionTerminalAt &&
-          candidate.interactionRequired === session.interactionRequired &&
-          candidate.interactionResponseId === session.interactionResponseId &&
-          candidate.interactionStateRev === session.interactionStateRev &&
-          candidate.pendingInteractionCount === session.pendingInteractionCount &&
-          candidate.pendingInteractionKinds === session.pendingInteractionKinds &&
-          candidate.interactionRequiredSince === session.interactionRequiredSince &&
-          candidate.lastMessageAt === session.lastMessageAt
+        // Absent and false child activity are equivalent; keep unchanged row identities.
+        return Object.entries(candidate).every(([key, value]) =>
+          key === 'activeChildren'
+            ? value === Boolean(session.activeChildren)
+            : value === session[key as keyof Session],
+        )
           ? session
           : candidate;
       })

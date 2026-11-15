@@ -24,7 +24,7 @@ export function sessionMetaText(
   if (session.interaction_required) {
     const count = Number(session.pending_interaction_count) || 1;
     parts.push(count === 1 ? 'waiting for input' : `${count} decisions waiting`);
-  } else if (options.active || session.active_run) {
+  } else if (options.active || session.active_run || session.active_children) {
     parts.push('active now');
   }
   const relative = relativeSessionTime(session.last_message_at, options.now);

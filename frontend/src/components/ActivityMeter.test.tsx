@@ -202,8 +202,9 @@ describe('native ActivitySheet', () => {
       [...container.querySelectorAll('.activity-row .activity-label')].map(
         (node) => node.textContent,
       ),
-    ).toEqual(['codebase Find the agent', 'developer no summary']);
-    expect(container).not.toHaveTextContent(/All finished|children|Developer task/);
+    ).toEqual(['codebase Find the agent', 'developer']);
+    expect(container).not.toHaveTextContent(/All finished|children|Developer task|no summary/);
+    expect(container.querySelectorAll('.activity-task')).toHaveLength(1);
     store.draftActive.value = true;
     return waitFor(() => expect(container.querySelector('.activity-root')).toBeNull());
   });

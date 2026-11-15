@@ -362,7 +362,7 @@ describe('Hub components', () => {
         recent: [
           session('pin-1', { pinned: true }),
           session('recent-1', { active_run: true }),
-          session('recent-2'),
+          session('recent-2', { active_children: true }),
           session('recent-3'),
         ],
       },
@@ -374,6 +374,9 @@ describe('Hub components', () => {
     expect(screen.queryByText('Pinned')).not.toBeInTheDocument();
     expect(screen.queryByText('Recent activity')).not.toBeInTheDocument();
     expect(screen.getByText('recent-1').closest('.node-session-row')).toHaveClass('is-active');
+    expect(screen.getByText('recent-2').closest('.node-session-row')).toHaveClass('is-active');
+    expect(screen.getByText('recent-3').closest('.node-session-row')).not.toHaveClass('is-active');
+    expect(screen.getAllByText('active now')).toHaveLength(2);
   });
 
   it('renders stale, lost, and unavailable node-attention capability messages', () => {

@@ -153,10 +153,13 @@ export function ActivitySheet({ onClose }: { onClose: () => void }) {
                           <span class="activity-label">
                             {row.agent ? (
                               <>
-                                <span class="activity-agent">{row.agent}</span>{' '}
-                                <span class={`activity-task${row.title ? '' : ' empty'}`}>
-                                  {row.title || 'no summary'}
-                                </span>
+                                <span class="activity-agent">{row.agent}</span>
+                                {row.title && (
+                                  <>
+                                    {' '}
+                                    <span class="activity-task">{row.title}</span>
+                                  </>
+                                )}
                               </>
                             ) : (
                               row.title

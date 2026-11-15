@@ -5,49 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 
+	"github.com/term-llm/term-llm/internal/app/serve/sessionactivity"
 	"github.com/term-llm/term-llm/internal/session"
 )
-
-func listStatusAttention(ctx context.Context, store session.AttentionStore, kind session.AttentionKind) map[string]session.AttentionItem {
-	for attempt := 0; attempt < 2; attempt++ {
-		candidate := make(map[string]session.AttentionItem)
-		cursor := ""
-		var snapshotVersion int64
-		complete := true
-		for {
-			page, err := store.ListAttention(ctx, session.AttentionListOptions{
-				Kind: kind, Limit: 500, Cursor: cursor, SnapshotVersion: snapshotVersion,
-			})
-			if err != nil {
-				complete = false
-				if !errors.Is(err, session.ErrAttentionConflict) || attempt == 1 {
-					log.Printf("[serve] durable %s status projection unavailable: %v", kind, err)
-				}
-				break
-			}
-			if snapshotVersion == 0 {
-				snapshotVersion = page.SnapshotVersion
-			}
-			for _, item := range page.Items {
-				candidate[item.SessionID] = item
-			}
-			if !page.HasMore || page.NextCursor == "" {
-				break
-			}
-			cursor = page.NextCursor
-		}
-		if complete {
-			return candidate
-		}
-	}
-	return map[string]session.AttentionItem{}
-}
 
 // statusSessionIDsMax bounds an explicit `ids=` status lookup.
 const statusSessionIDsMax = 100
@@ -126,11 +91,16 @@ func (s *serveServer) handleSessionsStatus(w http.ResponseWriter, r *http.Reques
 	// Running truth is shared with the voice session directory; see
 	// runningSessionDetail.
 	activeIDs, durableRunning := s.runningSessionDetail(r.Context())
+	topLevelSessions := sessions
+	if requestedIDs != nil {
+		topLevelSessions = nil
+	}
+	activeChildParents := s.activeChildParents(r.Context(), activeIDs, topLevelSessions)
 	attentionStore, attentionSupported := session.AsAttentionStore(s.store)
 	_, interactionProjectionSupported := session.AsResponseRunInteractionStore(s.store)
 	durableInputRequired := make(map[string]session.AttentionItem)
 	if attentionSupported && interactionProjectionSupported {
-		durableInputRequired = listStatusAttention(r.Context(), attentionStore, session.AttentionKindInputRequired)
+		durableInputRequired = sessionactivity.ListStatusAttention(r.Context(), attentionStore, session.AttentionKindInputRequired)
 	}
 
 	runtimeInteractions := make(map[string]serveInteractionSummary)
@@ -140,6 +110,9 @@ func (s *serveServer) handleSessionsStatus(w http.ResponseWriter, r *http.Reques
 	selected := strings.TrimSpace(r.URL.Query().Get("selected_session"))
 	criticalIDs := make(map[string]bool, len(activeIDs))
 	for id := range activeIDs {
+		criticalIDs[id] = true
+	}
+	for id := range activeChildParents {
 		criticalIDs[id] = true
 	}
 	var compactionIDs []string
@@ -238,6 +211,7 @@ func (s *serveServer) handleSessionsStatus(w http.ResponseWriter, r *http.Reques
 		LongTitle                string                `json:"long_title"`
 		Pinned                   bool                  `json:"pinned,omitempty"`
 		ActiveRun                bool                  `json:"active_run,omitempty"`
+		ActiveChildren           bool                  `json:"active_children,omitempty"`
 		ActiveResponseID         string                `json:"active_response_id,omitempty"`
 		RunEpoch                 int64                 `json:"run_epoch,omitempty"`
 		StartedRev               int64                 `json:"started_rev,omitempty"`
@@ -366,6 +340,7 @@ func (s *serveServer) handleSessionsStatus(w http.ResponseWriter, r *http.Reques
 			LongTitle:                sess.PreferredLongTitle(),
 			Pinned:                   sess.Pinned,
 			ActiveRun:                activeIDs[sess.ID],
+			ActiveChildren:           activeChildParents[sess.ID],
 			ActiveResponseID:         activeResponseID,
 			RunEpoch:                 runEpoch,
 			StartedRev:               startedRev,
@@ -428,20 +403,7 @@ func (s *serveServer) runningSessionDetail(ctx context.Context) (map[string]bool
 	if s == nil {
 		return map[string]bool{}, nil
 	}
-	// Collect active session IDs from in-memory state without touching runtimes.
-	activeIDs := s.activeSessionIDs()
-	if s.store == nil {
-		return activeIDs, nil
-	}
-	attentionStore, ok := session.AsAttentionStore(s.store)
-	if !ok {
-		return activeIDs, nil
-	}
-	durableRunning := listStatusAttention(ctx, attentionStore, session.AttentionKindRunning)
-	for id := range durableRunning {
-		activeIDs[id] = true
-	}
-	return activeIDs, durableRunning
+	return sessionactivity.RunningSessionDetail(ctx, s.store, s.activeSessionIDs())
 }
 
 // activeSessionIDs returns the set of session IDs that have an active run,
