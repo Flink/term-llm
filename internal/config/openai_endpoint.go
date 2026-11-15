@@ -27,9 +27,9 @@ func (c *Config) OpenAIEndpoint() (openaiapi.Endpoint, error) {
 	var configured openaiapi.Endpoint
 	name := string(ProviderTypeOpenAI)
 	if pc := c.GetProviderConfig(name); pc != nil && InferProviderType(name, pc.Type) == ProviderTypeOpenAI {
-		baseURL, err := Cred(pc.BaseURL).Resolve()
+		baseURL, err := ResolveBaseURL("providers.openai.base_url", pc.BaseURL, "")
 		if err != nil {
-			return openaiapi.Endpoint{}, fmt.Errorf("providers.openai.base_url: %w", err)
+			return openaiapi.Endpoint{}, err
 		}
 		headers, err := ResolveHeaderValues(pc.Headers)
 		if err != nil {

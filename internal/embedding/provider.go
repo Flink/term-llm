@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/config"
+	"github.com/term-llm/term-llm/internal/openaiapi"
 )
 
 // EmbeddingResult contains the embeddings and metadata from an API call
@@ -75,10 +76,11 @@ func NewEmbeddingProvider(cfg *config.Config, providerOverride string) (Embeddin
 		if apiKey == "" {
 			return nil, fmt.Errorf("OPENAI_API_KEY not configured. Set environment variable or add to embed.openai.api_key in config")
 		}
-		endpoint, err := cfg.OpenAIEndpoint()
+		endpoint, err := cfg.OpenAIEndpointWithBaseURL("embed.openai.base_url", cfg.Embed.OpenAI.BaseURL)
 		if err != nil {
 			return nil, fmt.Errorf("OpenAI embedding endpoint: %w", err)
 		}
+
 		p := NewOpenAIProviderWithEndpoint(apiKey, endpoint)
 		if model != "" {
 			p.model = model
@@ -86,7 +88,11 @@ func NewEmbeddingProvider(cfg *config.Config, providerOverride string) (Embeddin
 		return p, nil
 
 	case "chatgpt":
-		p := NewChatGPTProvider()
+		baseURL, err := config.ResolveBaseURL("embed.chatgpt.base_url", cfg.Embed.ChatGPT.BaseURL, openaiapi.DefaultBaseURL)
+		if err != nil {
+			return nil, err
+		}
+		p := NewChatGPTProviderWithBaseURL(baseURL)
 		if model != "" {
 			p.model = model
 		}
@@ -94,8 +100,8 @@ func NewEmbeddingProvider(cfg *config.Config, providerOverride string) (Embeddin
 
 	case "venice":
 		providerCfg := cfg.GetProviderConfig("venice")
-		if providerCfg == nil {
-			return nil, fmt.Errorf("Venice embedding requires a configured providers.venice entry")
+		if providerCfg == nil || config.InferProviderType("venice", providerCfg.Type) != config.ProviderTypeVenice {
+			return nil, fmt.Errorf("Venice embedding requires a native providers.venice entry")
 		}
 		if err := providerCfg.ResolveForInference(); err != nil {
 			return nil, fmt.Errorf("resolve Venice embedding credentials: %w", err)
@@ -111,7 +117,11 @@ func NewEmbeddingProvider(cfg *config.Config, providerOverride string) (Embeddin
 		if apiKey == "" {
 			return nil, fmt.Errorf("VENICE_API_KEY not configured. Set providers.venice.api_key or VENICE_API_KEY")
 		}
-		p := NewVeniceProvider(apiKey, providerCfg.BaseURL)
+		baseURL, err := cfg.ProviderBaseURL("venice", "", veniceEmbedBaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("Venice embedding base_url: %w", err)
+		}
+		p := NewVeniceProvider(apiKey, baseURL)
 		if model != "" {
 			p.model = model
 		}
@@ -126,6 +136,11 @@ func NewEmbeddingProvider(cfg *config.Config, providerOverride string) (Embeddin
 			return nil, fmt.Errorf("GEMINI_API_KEY not configured. Set environment variable or add to embed.gemini.api_key in config")
 		}
 		p := NewGeminiProvider(apiKey)
+		baseURL, err := cfg.ProviderBaseURL("gemini", cfg.Embed.Gemini.BaseURL, strings.TrimSuffix(geminiEmbedBaseURL, "/models"))
+		if err != nil {
+			return nil, fmt.Errorf("embed.gemini.base_url: %w", err)
+		}
+		p.baseURL = baseURL + "/models"
 		if model != "" {
 			p.model = model
 		}
@@ -140,6 +155,11 @@ func NewEmbeddingProvider(cfg *config.Config, providerOverride string) (Embeddin
 			return nil, fmt.Errorf("JINA_API_KEY not configured. Get a free key at https://jina.ai/embeddings/ and set JINA_API_KEY or add to embed.jina.api_key in config")
 		}
 		p := NewJinaProvider(apiKey)
+		baseURL, err := cfg.ProviderBaseURL("jina", cfg.Embed.Jina.BaseURL, strings.TrimSuffix(jinaEndpoint, "/embeddings"))
+		if err != nil {
+			return nil, fmt.Errorf("embed.jina.base_url: %w", err)
+		}
+		p.baseURL = baseURL
 		if model != "" {
 			p.model = model
 		}
@@ -154,18 +174,20 @@ func NewEmbeddingProvider(cfg *config.Config, providerOverride string) (Embeddin
 			return nil, fmt.Errorf("VOYAGE_API_KEY not configured. Set environment variable or add to embed.voyage.api_key in config")
 		}
 		p := NewVoyageProvider(apiKey)
+		baseURL, err := cfg.ProviderBaseURL("voyage", cfg.Embed.Voyage.BaseURL, strings.TrimSuffix(voyageEndpoint, "/embeddings"))
+		if err != nil {
+			return nil, fmt.Errorf("embed.voyage.base_url: %w", err)
+		}
+		p.baseURL = baseURL
 		if model != "" {
 			p.model = model
 		}
 		return p, nil
 
 	case "ollama":
-		baseURL, err := cfg.Embed.OllamaBaseURLRef().Resolve()
+		baseURL, err := config.ResolveBaseURL("embed.ollama.base_url", cfg.Embed.Ollama.BaseURL, config.DefaultEmbedOllamaBaseURL)
 		if err != nil {
 			return nil, fmt.Errorf("embed.ollama.base_url: %w", err)
-		}
-		if baseURL == "" {
-			baseURL = config.DefaultEmbedOllamaBaseURL
 		}
 		p := NewOllamaProvider(baseURL)
 		if model != "" {

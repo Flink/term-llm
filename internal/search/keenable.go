@@ -25,8 +25,9 @@ const (
 // KeenableSearcher implements Searcher using the Keenable Search API.
 // The API key is optional.
 type KeenableSearcher struct {
-	client *http.Client
-	apiKey string
+	client  *http.Client
+	apiKey  string
+	baseURL string
 }
 
 func NewKeenableSearcher(apiKey string, client *http.Client) *KeenableSearcher {
@@ -73,6 +74,12 @@ func (k *KeenableSearcher) Search(ctx context.Context, query string, maxResults 
 	endpoint := keenablePublicURL
 	if k.apiKey != "" {
 		endpoint = keenableKeyedURL
+	}
+	if k.baseURL != "" {
+		endpoint = k.baseURL + "/search"
+		if k.apiKey == "" {
+			endpoint += "/public"
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(jsonBody))
 	if err != nil {
