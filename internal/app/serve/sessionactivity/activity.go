@@ -24,14 +24,16 @@ const (
 // SessionActivityResponse is a bounded conversation snapshot. Availability is
 // independent for each source: an optional jobs outage cannot hide agents.
 type SessionActivityResponse struct {
-	Cells              []core.CodeModeCellSummary `json:"cells,omitempty"`
-	SessionID          string                     `json:"session_id"`
-	Agents             []ChildRunProjection       `json:"agents"`
-	Jobs               []ActivityJobRun           `json:"jobs"`
-	AgentsAvailability string                     `json:"agents_availability"`
-	JobsAvailability   string                     `json:"jobs_availability"`
-	AgentsPartial      bool                       `json:"agents_partial"`
-	JobsPartial        bool                       `json:"jobs_partial"`
+	Cells     []core.CodeModeCellSummary `json:"cells,omitempty"`
+	SessionID string                     `json:"session_id"`
+	// Metrics are the scoped session's own durable counters; descendants report theirs per row.
+	Metrics            *WebSessionMetrics   `json:"metrics,omitempty"`
+	Agents             []ChildRunProjection `json:"agents"`
+	Jobs               []ActivityJobRun     `json:"jobs"`
+	AgentsAvailability string               `json:"agents_availability"`
+	JobsAvailability   string               `json:"jobs_availability"`
+	AgentsPartial      bool                 `json:"agents_partial"`
+	JobsPartial        bool                 `json:"jobs_partial"`
 }
 
 // ActivityJobRun intentionally excludes output, errors, runner configuration and
@@ -66,13 +68,15 @@ func (s Handler) ServeSession(w http.ResponseWriter, r *http.Request, sessionID 
 		writeError(w, http.StatusNotFound, "not_found_error", "session history is unavailable")
 		return
 	}
-	if parent, err := s.Store.Get(r.Context(), sessionID); err != nil || parent == nil {
+	parent, err := s.Store.Get(r.Context(), sessionID)
+	if err != nil || parent == nil {
 		writeError(w, http.StatusNotFound, "not_found_error", "session not found")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	snapshot := SessionActivityResponse{SessionID: sessionID, Agents: []ChildRunProjection{}, Jobs: []ActivityJobRun{}, AgentsAvailability: "available", JobsAvailability: "unavailable"}
+	snapshot.Metrics = &WebSessionMetrics{InputTokens: parent.InputTokens, OutputTokens: parent.OutputTokens, CachedInputTokens: parent.CachedInputTokens, CacheWriteTokens: parent.CacheWriteTokens, ToolCalls: parent.ToolCalls, LLMTurns: parent.LLMTurns}
 	if s.Cells != nil {
 		snapshot.Cells = s.Cells(sessionID)
 	}

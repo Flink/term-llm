@@ -1,6 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { useStore } from '../app/context';
-import { activeExecutionCount, activityRows, activityUncertain } from '../domain/session-activity';
+import {
+  activeExecutionCount,
+  activityRows,
+  activityUncertain,
+  tokenTotal,
+} from '../domain/session-activity';
 import { Icon } from './Icon';
 import { Overlay } from './Overlay';
 import { ActivityJobDetailView } from './ActivityJobDetailView';
@@ -49,8 +54,14 @@ function LifecycleIcon({ name }: { name: string }) {
 function ActivityRoot({ scope }: { scope: string }) {
   const store = useStore();
   const session = store.activeSession.value;
+  const snapshot = store.childSessionStore.activity.value;
   if (!session || store.draftActive.value || session.id !== scope) return null;
-  const model = [session.activeProvider, session.activeModel].filter(Boolean).join(':');
+  const meta = [
+    [session.activeProvider, session.activeModel].filter(Boolean).join(':'),
+    snapshot?.session_id === scope ? tokenTotal(snapshot.metrics) : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
   return (
     <div class="activity-root">
       <span class="activity-root-icon" aria-hidden="true">
@@ -61,7 +72,7 @@ function ActivityRoot({ scope }: { scope: string }) {
           <span class="activity-agent">{session.agent || 'chat'}</span>{' '}
           <span class="activity-root-here">this chat</span>
         </span>
-        {model && <span class="activity-meta">{model}</span>}
+        {meta && <span class="activity-meta">{meta}</span>}
       </span>
     </div>
   );

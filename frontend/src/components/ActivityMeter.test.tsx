@@ -181,6 +181,14 @@ describe('native ActivitySheet', () => {
     store.activeSessionId.value = 'parent';
     store.draftActive.value = false;
     store.childSessionStore.activity.value = activitySnapshot({
+      metrics: {
+        input_tokens: 1000,
+        output_tokens: 200,
+        cached_input_tokens: 10000,
+        cache_write_tokens: 300,
+        tool_calls: 4,
+        llm_turns: 2,
+      },
       agents: [
         activityChild({ session_id: 'a', agent: 'codebase', title: 'Find the agent' }),
         activityChild({
@@ -194,7 +202,7 @@ describe('native ActivitySheet', () => {
     const { container } = mount(<ActivitySheet onClose={vi.fn()} />);
     const root = container.querySelector('.activity-root');
     expect(root).toHaveTextContent('developer this chat');
-    expect(root).toHaveTextContent('claude-bin:opus-max');
+    expect(root).toHaveTextContent('claude-bin:opus-max · 11.5k tokens');
     expect(screen.getByRole('heading', { name: /Subagents/ })).toHaveTextContent(
       'Subagents, 1 active · 1 done',
     );

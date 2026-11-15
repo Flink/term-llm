@@ -95,25 +95,35 @@ export function elapsed(started?: number, ended?: number, approximate = false): 
   return `${approximate ? '~' : ''}${duration}`;
 }
 
-export function agentMetrics(child: StatsChild, now = Date.now()): string {
+type TokenCounters = Pick<
+  StatsChild,
+  'input_tokens' | 'output_tokens' | 'cached_input_tokens' | 'cache_write_tokens'
+>;
+
+/** Compact token total, e.g. "8.5k tokens"; empty when any counter is unusable. */
+export function tokenTotal(metrics: TokenCounters | undefined): string {
+  if (!metrics) return '';
   // Core counters are disjoint. Reasoning and provider totals are not added again.
   const counters = [
-    child.input_tokens,
-    child.output_tokens,
-    child.cached_input_tokens,
-    child.cache_write_tokens,
+    metrics.input_tokens,
+    metrics.output_tokens,
+    metrics.cached_input_tokens,
+    metrics.cache_write_tokens,
   ];
-  const total = counters.every((value) => Number.isSafeInteger(value) && value >= 0)
-    ? counters.reduce((a, b) => a + b, 0)
-    : null;
-  const compact = (value: number) =>
-    value >= 1e6
-      ? `${Number((value / 1e6).toFixed(1))}M`
-      : value >= 1e3
-        ? `${Number((value / 1e3).toFixed(1))}k`
-        : String(value);
+  if (!counters.every((value) => Number.isSafeInteger(value) && value >= 0)) return '';
+  const total = counters.reduce((a, b) => a + b, 0);
+  const compact =
+    total >= 1e6
+      ? `${Number((total / 1e6).toFixed(1))}M`
+      : total >= 1e3
+        ? `${Number((total / 1e3).toFixed(1))}k`
+        : String(total);
+  return `${compact} tokens`;
+}
+
+export function agentMetrics(child: StatsChild, now = Date.now()): string {
   return [
-    total === null ? '' : `${compact(total)} tokens`,
+    tokenTotal(child),
     elapsed(child.started_at, child.live ? now / 1000 : child.ended_at, child.approximate_times),
   ]
     .filter(Boolean)

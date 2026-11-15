@@ -58,7 +58,7 @@ export type ServeSkillRunEvent = { "sequence": number; "type": string; "data"?: 
 
 export type SessionActivityMetrics = { "input_tokens": number; "output_tokens": number; "cached_input_tokens": number; "cache_write_tokens": number; "tool_calls": number; "llm_turns": number; };
 
-export type SessionActivityResponse = { "cells"?: (CoreCodeModeCellSummary)[]; "session_id": string; "agents": (ChildRunProjection)[] | null; "jobs": (ActivityJobRun)[] | null; "agents_availability": string; "jobs_availability": string; "agents_partial": boolean; "jobs_partial": boolean; };
+export type SessionActivityResponse = { "cells"?: (CoreCodeModeCellSummary)[]; "session_id": string; "metrics"?: SessionActivityMetrics; "agents": (ChildRunProjection)[] | null; "jobs": (ActivityJobRun)[] | null; "agents_availability": string; "jobs_availability": string; "agents_partial": boolean; "jobs_partial": boolean; };
 
 export type SessionInterruptRequest = { "message": string; "content": unknown; "steering_id": string; "client_message_id"?: string; "delivery"?: string; "expected_response_id"?: string; "expected_run_epoch"?: number; };
 

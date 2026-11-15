@@ -347,3 +347,15 @@ func TestActivityExternalRetentionPruningIsNotAnOutage(t *testing.T) {
 		t.Fatal("backend error disclosed")
 	}
 }
+
+func TestActivityReportsScopedSessionMetrics(t *testing.T) {
+	store := activityStore(t)
+	if err := store.UpdateMetrics(context.Background(), "parent", 2, 3, 100, 20, 300, 40); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := requestActivity(t, Handler{Store: store, Children: testChildren}, httptest.NewRequest(http.MethodGet, "/v1/sessions/parent/activity", nil))
+	want := WebSessionMetrics{InputTokens: 100, OutputTokens: 20, CachedInputTokens: 300, CacheWriteTokens: 40, ToolCalls: 3, LLMTurns: 2}
+	if snapshot.Metrics == nil || *snapshot.Metrics != want {
+		t.Fatalf("metrics = %+v, want %+v", snapshot.Metrics, want)
+	}
+}
