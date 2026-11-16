@@ -446,3 +446,20 @@ func TestResponsesEventHandlerPreservesNativeNamespaceFunctionCallIdentity(t *te
 		t.Fatalf("native call identity = %#v", event.Tool)
 	}
 }
+
+func TestResponsesCompletedTerminationReason(t *testing.T) {
+	handler := newResponsesStreamEventHandler(&ResponsesClient{}, 0, false, "test", false, "", false)
+	events := make(chan Event, 2)
+	send := stream.NewSender(context.Background(), events)
+	done, err := handler.HandleJSONEvent([]byte(`{"type":"response.completed","response":{"id":"resp_1","status":"completed"}}`), "response.completed", send)
+	if err != nil || !done {
+		t.Fatalf("terminal = %v, %v", done, err)
+	}
+	if err := handler.Finish(send); err != nil {
+		t.Fatal(err)
+	}
+	event := <-events
+	if event.Type != EventDone || event.TerminationReason != "completed" {
+		t.Fatalf("completion = %+v", event)
+	}
+}

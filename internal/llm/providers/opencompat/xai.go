@@ -115,7 +115,7 @@ func (p *XAIProvider) streamStandard(ctx context.Context, req Request) (Stream, 
 		return nil, newOpenAICompatStatusErrorFromResponse("xAI", resp)
 	}
 
-	return newEventStreamWithCancelHook(ctx, func() { _ = resp.Body.Close() }, func(ctx context.Context, send eventSender) error {
+	return newEventStreamWithCancelHook(ctx, func() { _ = resp.Body.Close() }, func(ctx context.Context, send eventSender) (retErr error) {
 		defer resp.Body.Close()
 
 		decoder := newSSEDecoder(resp.Body, sseDecoderOptions{RequireDone: false, Transport: "xAI SSE"})
@@ -125,6 +125,12 @@ func (p *XAIProvider) streamStandard(ctx context.Context, req Request) (Stream, 
 		var lastUsage *Usage
 		sawVisibleText := false
 		sawLengthFinish := false
+		var terminationReason string
+		defer func() {
+			if retErr != nil && terminationReason != "" {
+				retErr = &terminationError{err: retErr, reason: terminationReason}
+			}
+		}()
 		skippedJSONChunks := 0
 
 		for {
@@ -177,6 +183,9 @@ func (p *XAIProvider) streamStandard(ctx context.Context, req Request) (Stream, 
 			}
 
 			for _, choice := range chatResp.Choices {
+				if choice.FinishReason != "" {
+					terminationReason = choice.FinishReason
+				}
 				if choice.FinishReason == "length" {
 					sawLengthFinish = true
 				}
@@ -254,7 +263,7 @@ func (p *XAIProvider) streamStandard(ctx context.Context, req Request) (Stream, 
 				return err
 			}
 		}
-		return send.Send(Event{Type: EventDone})
+		return send.Send(Event{Type: EventDone, TerminationReason: terminationReason})
 	}), nil
 }
 

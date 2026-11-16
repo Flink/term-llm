@@ -91,9 +91,10 @@ func (e *Engine) runLoop(ctx context.Context, req core.Request, send corestream.
 			runtimeoutput.Debug("reset provider conversation for tool-surface change", "reason", resetReason, "session_id", req.SessionID)
 		}
 	}
+	var terminationReason string
 	sendDone := func() error {
 		e.markSteeringRunNonConsuming()
-		return send.Send(core.Event{Type: core.EventDone})
+		return send.Send(core.Event{Type: core.EventDone, TerminationReason: terminationReason})
 	}
 	maxTurns := getMaxTurns(req)
 	originalToolChoice := req.ToolChoice
@@ -189,7 +190,7 @@ func (e *Engine) runLoop(ctx context.Context, req core.Request, send corestream.
 			recoveredAtMessageCount: &recoveredAtMessageCount, recoveryPriorErr: &recoveryPriorErr,
 			uncommittedStreamRetries: &uncommittedStreamRetries, uncommittedPriorErr: &uncommittedPriorErr,
 			activeSyncTools: &activeSyncTools, nextTurn: &nextTurn, providerInFlight: &providerInFlight,
-			sendDone: sendDone,
+			sendDone: sendDone, terminationReason: &terminationReason,
 		}, attempt)
 		if errors.Is(turnErr, errEngineTurnRetry) {
 			attempt--

@@ -132,23 +132,29 @@ func (p *VeniceProvider) Stream(ctx context.Context, req Request) (Stream, error
 // across SSE deltas. Unlike the generic compat parser, Venice may put reasoning
 // in both a dedicated field and split <think> tags in content.
 type veniceStreamState struct {
-	name            string
-	send            eventSender
-	toolState       *compatToolState
-	lastUsage       *Usage
-	lastEventType   string
-	inlineThink     inlineThinkParser
-	sawVisibleText  bool
-	sawLengthFinish bool
-	sentLimit       int // max_tokens sent in the request, 0 if unset
+	name              string
+	send              eventSender
+	toolState         *compatToolState
+	lastUsage         *Usage
+	lastEventType     string
+	inlineThink       inlineThinkParser
+	sawVisibleText    bool
+	sawLengthFinish   bool
+	terminationReason string
+	sentLimit         int // max_tokens sent in the request, 0 if unset
 }
 
-func readVeniceStream(name string, body io.ReadCloser, send eventSender, sentLimit int) error {
+func readVeniceStream(name string, body io.ReadCloser, send eventSender, sentLimit int) (retErr error) {
 	defer body.Close()
 
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	state := veniceStreamState{name: name, send: send, toolState: newCompatToolState(), sentLimit: sentLimit}
+	defer func() {
+		if retErr != nil && state.terminationReason != "" {
+			retErr = &terminationError{err: retErr, reason: state.terminationReason}
+		}
+	}()
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "event: ") {
@@ -204,6 +210,9 @@ func (s *veniceStreamState) processData(data string) error {
 		}
 	}
 	for _, choice := range chatResp.Choices {
+		if choice.FinishReason != "" {
+			s.terminationReason = choice.FinishReason
+		}
 		if choice.FinishReason == "length" {
 			s.sawLengthFinish = true
 		}
@@ -296,7 +305,7 @@ func (s *veniceStreamState) finish() error {
 			return err
 		}
 	}
-	return s.send.Send(Event{Type: EventDone})
+	return s.send.Send(Event{Type: EventDone, TerminationReason: s.terminationReason})
 }
 
 func shouldParseVeniceInlineThink(parser *inlineThinkParser, content string, sawVisibleText bool) bool {

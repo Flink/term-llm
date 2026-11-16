@@ -16,6 +16,7 @@ type responsesStreamEventHandler struct {
 	toolState                      *responsesToolState
 	reasoningState                 *responsesReasoningState
 	lastUsage                      *Usage
+	terminationReason              string
 	outputItems                    []ResponsesInputItem
 	replayItems                    []ProviderReplayItem
 	visibleMessageByOutputIndex    map[int]bool
@@ -644,6 +645,7 @@ func (h *responsesStreamEventHandler) handleResponseTerminal(ctx responsesEventC
 		h.client.setLastResponseIDIfGeneration(h.responseStateGeneration, event.Response.ID, h.stateSessionID)
 	}
 	h.recordUsage(event.Response.Usage)
+	h.terminationReason = strings.TrimPrefix(eventType, "response.")
 	if eventType != "response.incomplete" {
 		return true, nil
 	}
@@ -852,5 +854,5 @@ func (h *responsesStreamEventHandler) Finish(send eventSender) error {
 	if err := h.emitFinalItems(send); err != nil {
 		return err
 	}
-	return send.Send(Event{Type: EventDone})
+	return send.Send(Event{Type: EventDone, TerminationReason: h.terminationReason})
 }

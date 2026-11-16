@@ -448,6 +448,7 @@ type anthropicStreamState struct {
 	currentServerToolIndex int64
 	lastUsage              *core.Usage
 	sawMessageStop         bool
+	terminationReason      string
 }
 
 // errAnthropicStream marks a protocol-level stream failure (as opposed to a
@@ -456,8 +457,13 @@ type errAnthropicStream struct{ err error }
 
 func (e errAnthropicStream) Error() string { return e.err.Error() }
 
-func (p *AnthropicProvider) runMessagesStream(ctx context.Context, send stream.Sender, params *anthropicMessagesRequest, call anthropicCall, serverTools bool) error {
+func (p *AnthropicProvider) runMessagesStream(ctx context.Context, send stream.Sender, params *anthropicMessagesRequest, call anthropicCall, serverTools bool) (retErr error) {
 	state := &anthropicStreamState{send: send, accumulator: newToolCallAccumulator(), serverTools: serverTools, currentServerToolIndex: -1}
+	defer func() {
+		if retErr != nil && state.terminationReason != "" {
+			retErr = &terminationError{err: retErr, reason: state.terminationReason}
+		}
+	}()
 	streamErr := p.consumeMessagesStream(ctx, state, params, call)
 	var protocolErr errAnthropicStream
 	if streamErr != nil && !errors.As(streamErr, &protocolErr) {
@@ -477,7 +483,7 @@ func (p *AnthropicProvider) runMessagesStream(ctx context.Context, send stream.S
 			return err
 		}
 	}
-	return send.Send(core.Event{Type: core.EventDone})
+	return send.Send(core.Event{Type: core.EventDone, TerminationReason: state.terminationReason})
 }
 
 // consumeMessagesStream returns errAnthropicStream for transport/protocol
@@ -549,6 +555,9 @@ func (s *anthropicStreamState) handle(ev anthropicStreamEvent) error {
 			return s.send.Send(core.Event{Type: core.EventToolCall, Tool: &toolCall})
 		}
 	case "message_start":
+		if ev.Message.StopReason != "" {
+			s.terminationReason = ev.Message.StopReason
+		}
 		usage := ev.Message.Usage
 		s.lastUsage = &core.Usage{
 			InputTokens:       int(usage.InputTokens),
@@ -556,6 +565,9 @@ func (s *anthropicStreamState) handle(ev anthropicStreamEvent) error {
 			CacheWriteTokens:  int(usage.CacheCreationInputTokens),
 		}
 	case "message_delta":
+		if ev.Delta.StopReason != "" {
+			s.terminationReason = ev.Delta.StopReason
+		}
 		s.mergeDeltaUsage(ev.Usage)
 	case "message_stop":
 		s.sawMessageStop = true
@@ -650,4 +662,16 @@ func finishAnthropicServerToolFailure(send stream.Sender, toolName string, strea
 		return errors.Join(streamErr, sendErr)
 	}
 	return streamErr
+}
+
+// terminationError preserves the raw provider reason on the existing error path.
+type terminationError struct {
+	err    error
+	reason string
+}
+
+func (e *terminationError) Error() string { return e.err.Error() }
+func (e *terminationError) Unwrap() error { return e.err }
+func (e *terminationError) DebugFields() map[string]any {
+	return map[string]any{"termination_reason": e.reason}
 }

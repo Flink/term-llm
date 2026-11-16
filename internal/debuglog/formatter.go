@@ -389,12 +389,12 @@ func formatEventEntry(w io.Writer, evt EventEntry, opts FormatOptions, styles *u
 		)
 
 	case "done":
-		fmt.Fprintf(w, "%s%s\n", ts, styles.Success.Render("DONE"))
+		fmt.Fprintf(w, "%s%s%s\n", ts, styles.Success.Render("DONE"), terminationDebugSuffix(evt.Data))
 		fmt.Fprintln(w)
 
 	case "error":
 		errMsg, _ := evt.Data["error"].(string)
-		fmt.Fprintf(w, "%s%s %s\n", ts, styles.Error.Render("ERROR"), errMsg)
+		fmt.Fprintf(w, "%s%s %s\n", ts, styles.Error.Render("ERROR"), errMsg+terminationDebugSuffix(evt.Data))
 		formatProviderErrorDetails(w, evt.Data, styles)
 
 	case "retry":
@@ -625,11 +625,11 @@ func FormatTailEntry(w io.Writer, line []byte) {
 			)
 
 		case "done":
-			fmt.Fprintf(w, "[%s] %s\n", timeStr, styles.Success.Render("DONE"))
+			fmt.Fprintf(w, "[%s] %s%s\n", timeStr, styles.Success.Render("DONE"), terminationDebugSuffix(data))
 
 		case "error":
 			errMsg, _ := data["error"].(string)
-			fmt.Fprintf(w, "[%s] %s %s\n", timeStr, styles.Error.Render("ERROR"), errMsg)
+			fmt.Fprintf(w, "[%s] %s %s\n", timeStr, styles.Error.Render("ERROR"), errMsg+terminationDebugSuffix(data))
 		}
 	}
 }
@@ -656,4 +656,11 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+func terminationDebugSuffix(data map[string]any) string {
+	if reason, _ := data["termination_reason"].(string); reason != "" {
+		return fmt.Sprintf(" termination_reason=%q", reason)
+	}
+	return ""
 }

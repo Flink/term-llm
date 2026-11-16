@@ -638,7 +638,13 @@ func (p *Provider) Stream(ctx context.Context, req core.Request) (core.Stream, e
 		return nil, newOllamaStatusErrorFromResponse(resp)
 	}
 
-	return stream.NewWithCancelHook(ctx, func() { _ = resp.Body.Close() }, func(ctx context.Context, send stream.Sender) error {
+	return stream.NewWithCancelHook(ctx, func() { _ = resp.Body.Close() }, func(ctx context.Context, send stream.Sender) (retErr error) {
+		var terminationReason string
+		defer func() {
+			if retErr != nil && terminationReason != "" {
+				retErr = &terminationError{err: retErr, reason: terminationReason}
+			}
+		}()
 		defer resp.Body.Close()
 
 		scanner := bufio.NewScanner(resp.Body)
@@ -659,6 +665,9 @@ func (p *Provider) Stream(ctx context.Context, req core.Request) (core.Stream, e
 				continue
 			}
 
+			if chunk.DoneReason != "" {
+				terminationReason = chunk.DoneReason
+			}
 			if chunk.Error != "" {
 				return fmt.Errorf("Ollama API error: %s", chunk.Error)
 			}
@@ -717,7 +726,7 @@ func (p *Provider) Stream(ctx context.Context, req core.Request) (core.Stream, e
 			}
 		}
 
-		return send.Send(core.Event{Type: core.EventDone})
+		return send.Send(core.Event{Type: core.EventDone, TerminationReason: terminationReason})
 	}), nil
 }
 
@@ -826,4 +835,16 @@ func ollamaOptsEmpty(o *ollamaChatOpts) bool {
 	return o.Temperature == nil && o.TopP == nil && o.TopK == nil &&
 		o.MinP == nil && o.PresencePenalty == nil &&
 		o.NumCtx == nil && o.NumPredict == nil
+}
+
+// terminationError preserves the raw provider reason on the existing error path.
+type terminationError struct {
+	err    error
+	reason string
+}
+
+func (e *terminationError) Error() string { return e.err.Error() }
+func (e *terminationError) Unwrap() error { return e.err }
+func (e *terminationError) DebugFields() map[string]any {
+	return map[string]any{"termination_reason": e.reason}
 }

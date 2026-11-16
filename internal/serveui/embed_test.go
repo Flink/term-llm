@@ -16,7 +16,7 @@ import (
 
 func TestGeneratedBundleAssets(t *testing.T) {
 	for _, name := range []string{
-		"dist/app.js", "dist/app.css", "dist/hub.js", "dist/hub.css", "dist/chunks/vendor.js",
+		"dist/app.js", "dist/app.css", "dist/hub.js", "dist/hub.css", "dist/proxy.js", "dist/proxy.css", "dist/chunks/vendor.js",
 		"dist/chunks/rich-highlight.js", "dist/chunks/rich-katex.js",
 		"dist/chunks/highlight.js", "dist/chunks/katex.js", "dist/chunks/katex.css", "dist/chunks/mcp.js",
 		"dist/chunks/MarkdownFilePreview.js", "dist/chunks/markdown-preview-store.js",
@@ -61,7 +61,7 @@ func TestGeneratedImportsPreloadsAndCSSURLsResolveToEmbeddedAssets(t *testing.T)
 
 func TestTextBundleAssetsArePrecompressed(t *testing.T) {
 	manifest := ChatAssetManifest()
-	for _, name := range []string{manifest.EntryJS, manifest.EntryCSS[0], "dist/hub.js", "dist/hub.css", "dist/asset-manifest.json"} {
+	for _, name := range []string{manifest.EntryJS, manifest.EntryCSS[0], "dist/hub.js", "dist/hub.css", "dist/proxy.js", "dist/proxy.css", "dist/asset-manifest.json"} {
 		stored, gzipped, err := EncodedAsset(name)
 		if err != nil {
 			t.Fatalf("EncodedAsset(%q): %v", name, err)
@@ -275,6 +275,15 @@ func TestProductionBundleSizeBudgets(t *testing.T) {
 		// retain modest gzip headroom for the updated runtime and bundler.
 		"dist/hub.js":  {raw: 107_500, gzip: 35_500},
 		"dist/hub.css": {raw: 20_500, gzip: 5_500},
+		// Presets and the in-place key dialog reuse the existing route/secret
+		// forms. URL-backed tabs and numbered request pagination bring the
+		// standalone bundle to ~46.6/17.1 kB raw/gzip. Catalog data stays
+		// server-side; retain bounded headroom and the two-asset build.
+		"dist/proxy.js": {raw: 48_000, gzip: 17_500},
+		// Compact shared controls, contiguous request rows and responsive
+		// numbered pagination measure ~15.0/3.9 kB raw/gzip. Keep a bounded
+		// proxy-only ceiling; chat and Hub budgets remain unchanged.
+		"dist/proxy.css": {raw: 15_500, gzip: 4_100},
 	}
 	for name, budget := range budgets {
 		body, err := testBuildAsset(name)
@@ -489,10 +498,14 @@ func TestChatAndHubAssetVersionScopes(t *testing.T) {
 		return hex.EncodeToString(hash.Sum(nil))[:12]
 	}
 	chat := versionFor(func(path string) bool {
-		return path != "static/dist/hub.js" && path != "static/dist/hub.css"
+		return path != "static/dist/hub.js" && path != "static/dist/hub.css" &&
+			path != "static/dist/proxy.js" && path != "static/dist/proxy.css"
 	})
 	hub := versionFor(func(path string) bool {
 		return path == "static/dist/hub.js" || path == "static/dist/hub.css"
+	})
+	proxy := versionFor(func(path string) bool {
+		return path == "static/dist/proxy.js" || path == "static/dist/proxy.css"
 	})
 	if AssetVersion() != chat {
 		t.Fatalf("AssetVersion=%q, want chat-only scope %q", AssetVersion(), chat)
@@ -500,8 +513,11 @@ func TestChatAndHubAssetVersionScopes(t *testing.T) {
 	if HubAssetVersion() != hub {
 		t.Fatalf("HubAssetVersion=%q, want exact Hub scope %q", HubAssetVersion(), hub)
 	}
-	if AssetVersion() == HubAssetVersion() {
-		t.Fatal("chat and Hub asset scopes unexpectedly share an identity")
+	if ProxyAssetVersion() != proxy {
+		t.Fatalf("ProxyAssetVersion=%q, want exact proxy scope %q", ProxyAssetVersion(), proxy)
+	}
+	if AssetVersion() == HubAssetVersion() || AssetVersion() == ProxyAssetVersion() || HubAssetVersion() == ProxyAssetVersion() {
+		t.Fatal("chat, Hub, and proxy asset scopes unexpectedly share an identity")
 	}
 }
 
@@ -650,7 +666,7 @@ func TestChatManifestCompleteAndContentAddressed(t *testing.T) {
 	}
 	for _, name := range logicalPaths("static/dist") {
 		file := strings.TrimPrefix(name, "static/")
-		if file == "dist/hub.js" || file == "dist/hub.css" || file == "dist/asset-manifest.json" {
+		if file == "dist/hub.js" || file == "dist/hub.css" || file == "dist/proxy.js" || file == "dist/proxy.css" || file == "dist/asset-manifest.json" {
 			continue
 		}
 		if !IsHashedAsset(file) {
@@ -691,6 +707,41 @@ func TestSourceAssetPathsAndManifestCopies(t *testing.T) {
 			if index == len(sourcePaths) || sourcePaths[index] != file {
 				t.Errorf("hashed source omitted: %s", file)
 			}
+		}
+	}
+}
+
+func TestProxyAssetsStayStandalone(t *testing.T) {
+	for _, name := range []string{"dist/proxy.js", "dist/proxy.css"} {
+		if IsHashedAsset(name) {
+			t.Errorf("proxy asset classified as chat: %s", name)
+		}
+		if slices.Contains(SourceAssetPaths(), name) {
+			t.Errorf("proxy asset included in chat sources: %s", name)
+		}
+		if bytes.Contains(RenderServiceWorker(), []byte(name)) {
+			t.Errorf("proxy asset included in chat SW: %s", name)
+		}
+	}
+	js, err := StaticAsset("dist/proxy.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{"preact", "DOMPurify", "KaTeX", "@xterm", "chunks/", "sourceMappingURL"} {
+		if bytes.Contains(js, []byte(marker)) {
+			t.Errorf("proxy contains dependency marker %q", marker)
+		}
+	}
+	if _, err := StaticAsset("dist/proxy.js.map"); err == nil {
+		t.Fatal("proxy source map embedded")
+	}
+}
+
+func TestServiceWorkerBypassesCredentialProxy(t *testing.T) {
+	worker := string(RenderServiceWorker())
+	for _, guard := range []string{"url.pathname === '/_proxy'", "url.pathname.startsWith('/_proxy/')", `^dist\/(hub|proxy)\.(js|css)$`} {
+		if !strings.Contains(worker, guard) {
+			t.Errorf("service worker missing proxy bypass %q", guard)
 		}
 	}
 }

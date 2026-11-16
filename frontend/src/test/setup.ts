@@ -70,6 +70,16 @@ Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
   },
 });
 
+Object.defineProperty(HTMLDialogElement.prototype, 'close', {
+  configurable: true,
+  value(returnValue?: string) {
+    if (!this.open) return;
+    if (returnValue !== undefined) this.returnValue = returnValue;
+    this.removeAttribute('open');
+    this.dispatchEvent(new Event('close'));
+  },
+});
+
 // jsdom omits CSS animation event properties. Preact uses them to distinguish
 // native lowercase event names from case-sensitive custom events.
 Object.defineProperty(HTMLElement.prototype, 'onanimationend', {

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	. "github.com/term-llm/term-llm/internal/llm/core"
 	"mime"
@@ -485,18 +486,26 @@ func (l *Logger) LogEvent(event Event) {
 				"next_context_baseline":  event.Use.InputTokens + event.Use.CachedInputTokens + event.Use.CacheWriteTokens + event.Use.OutputTokens,
 			}
 		}
+	case EventDone:
+		if event.TerminationReason != "" {
+			entry.Data = map[string]string{"termination_reason": event.TerminationReason}
+		}
 	case EventPhase:
 		entry.Data = map[string]string{"phase": event.Text}
 	case EventError:
 		if event.Err != nil {
 			data := map[string]any{"error": event.Err.Error()}
-			if fieldsErr, ok := event.Err.(interface{ DebugFields() map[string]any }); ok {
+			var fieldsErr interface{ DebugFields() map[string]any }
+			if errors.As(event.Err, &fieldsErr) {
 				for k, v := range fieldsErr.DebugFields() {
 					if k == "" || k == "error" {
 						continue
 					}
 					data[k] = v
 				}
+			}
+			if event.TerminationReason != "" {
+				data["termination_reason"] = event.TerminationReason
 			}
 			entry.Data = data
 		}

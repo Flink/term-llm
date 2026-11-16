@@ -89,6 +89,23 @@ func (e *OutputLimitError) Error() string {
 	return fmt.Sprintf("%s: output token limit reached — %s", e.Provider, detail)
 }
 
+// DebugFields preserves the provider reason on output-limit error events.
+func (e *OutputLimitError) DebugFields() map[string]any {
+	return map[string]any{"termination_reason": "length"}
+}
+
+// terminationError preserves the raw provider reason on the existing error path.
+type terminationError struct {
+	err    error
+	reason string
+}
+
+func (e *terminationError) Error() string { return e.err.Error() }
+func (e *terminationError) Unwrap() error { return e.err }
+func (e *terminationError) DebugFields() map[string]any {
+	return map[string]any{"termination_reason": e.reason}
+}
+
 // Hooks supplies behaviour owned by the parent llm package's model registry
 // and limit tables, which this package cannot import without a cycle. Nil
 // fields fall back to neutral defaults (no limits, no pricing).

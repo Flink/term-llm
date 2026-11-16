@@ -46,3 +46,12 @@ func (e *ResponsesIncompleteError) Error() string {
 	}
 	return fmt.Sprintf("Responses API returned an incomplete response: %s", e.Reason)
 }
+
+// DebugFields preserves explicit incomplete reasons in structured diagnostics.
+func (e *ResponsesIncompleteError) DebugFields() map[string]any {
+	reason := e.Reason
+	if reason == "" {
+		reason = "incomplete"
+	}
+	return map[string]any{"termination_reason": reason}
+}

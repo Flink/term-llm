@@ -1,0 +1,46 @@
+/* Shared neutral palette for standalone Hub and proxy administration. */
+:root {
+  color-scheme: dark light;
+
+  --bg: #212121;
+  --bg-accent: rgb(255 255 255 / 3%);
+  --surface: #2f2f2f;
+  --surface-2: #373737;
+  --surface-3: #424242;
+  --border: rgb(255 255 255 / 8%);
+  --border-strong: rgb(255 255 255 / 15%);
+  --text: #ececec;
+  --muted: #9a9a9a;
+  --muted-2: #777;
+  --accent: #ececec;
+  --accent-contrast: #212121;
+  --ok: #34d399;
+  --down: #f87171;
+  --warn: #e5a210;
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 10%);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 12%);
+  --overlay: rgb(0 0 0 / 60%);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #fff;
+    --bg-accent: rgb(0 0 0 / 2%);
+    --surface: #fff;
+    --surface-2: #f7f7f8;
+    --surface-3: #ececec;
+    --border: rgb(0 0 0 / 8%);
+    --border-strong: rgb(0 0 0 / 15%);
+    --text: #0d0d0d;
+    --muted: #6e6e6e;
+    --muted-2: #9a9a9a;
+    --accent: #0d0d0d;
+    --accent-contrast: #fff;
+    --ok: #059669;
+    --down: #dc2626;
+    --warn: #b45309;
+    --shadow-soft: 0 1px 2px rgb(0 0 0 / 5%);
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 4%);
+    --overlay: rgb(0 0 0 / 32%);
+  }
+}

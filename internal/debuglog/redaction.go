@@ -51,7 +51,7 @@ var exportSchemas = sync.OnceValue(func() map[string]exportSchema {
 	add("tool", "label", "name")
 	add("tool", "omit", "description")
 	add("choice", "label", "mode name")
-	add("data", "label", "name tool_name reasoning_kind provider_error_type")
+	add("data", "label", "name tool_name reasoning_kind provider_error_type termination_reason")
 	add("data", "bool", "success reasoning_final prefer_oauth")
 	add("data", "number", "input_tokens output_tokens cached_input_tokens cache_write_tokens provider_input_tokens provider_total_tokens reasoning_tokens request_context_tokens next_context_baseline reasoning_index text_len reasoning_encrypted_content_len attempt max_attempts wait_secs stdin_len exit_code duration_ms")
 	add("data", "omit", "text arguments content output tool_info error env removed_env stdin stdout_tail stderr_tail cwd command_line phase id tool_call_id reasoning_item_id reasoning_encrypted_content_hash stdin_sha256")

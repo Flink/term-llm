@@ -273,10 +273,13 @@ type engineRunTurnContext struct {
 	activeSyncTools          **syncToolSupervisor
 	nextTurn                 *int
 	providerInFlight         *bool
+	terminationReason        *string
 	sendDone                 func() error
 }
 
 func (e *Engine) runProviderTurn(state *engineRunTurnContext, attempt int) error {
+	// A retry or a later tool turn must not inherit an earlier finish reason.
+	*state.terminationReason = ""
 	ctx, send := state.ctx, state.send
 	run := &providerTurnRunFrame{
 		req: *state.req, forcedChoice: *state.forcedChoice,
@@ -594,6 +597,7 @@ func (e *Engine) runProviderTurn(state *engineRunTurnContext, attempt int) error
 			continue
 		}
 		if event.Type == core.EventDone {
+			*state.terminationReason = event.TerminationReason
 			continue
 		}
 		e.observeReportedContext(event)

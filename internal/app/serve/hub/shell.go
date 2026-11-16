@@ -18,8 +18,8 @@ type ShellView struct {
 	FormAction   string
 }
 
-// hubDashboardIcon is the inline SVG favicon shown on the dashboard page.
-const hubDashboardIcon = `<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d1117'/%3E%3Cg fill='none' stroke='%23e6edf3' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='32' cy='32' r='8'/%3E%3Ccircle cx='14' cy='16' r='5'/%3E%3Ccircle cx='50' cy='16' r='5'/%3E%3Ccircle cx='14' cy='48' r='5'/%3E%3Ccircle cx='50' cy='48' r='5'/%3E%3Cpath d='M18 20 27 29M46 20 37 29M18 44 27 35M46 44 37 35'/%3E%3C/g%3E%3C/svg%3E">`
+// hubDashboardIcon pairs the terminal prompt with a four-square workspace grid.
+const hubDashboardIcon = `<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http%3A//www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2316634e'/%3E%3Cpath d='m16 20 12 12-12 12' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Crect x='37' y='29' width='6' height='6' rx='1.3' fill='%23ffffff'/%3E%3Crect x='37' y='39' width='6' height='6' rx='1.3' fill='%23ffffff'/%3E%3Crect x='47' y='29' width='6' height='6' rx='1.3' fill='%23ffffff'/%3E%3Crect x='47' y='39' width='6' height='6' rx='1.3' fill='%23ffffff'/%3E%3C/svg%3E">`
 
 // RenderShell renders the Hub and passkey browser shell. It is written by
 // hand rather than with html/template, whose reflection-based execution

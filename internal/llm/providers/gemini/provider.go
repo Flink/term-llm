@@ -115,7 +115,13 @@ func (p *Provider) Capabilities() core.Capabilities {
 
 func (p *Provider) Stream(ctx context.Context, req core.Request) (core.Stream, error) {
 	effectiveModel := core.ChooseModel(req.Model, p.model)
-	return stream.New(ctx, func(ctx context.Context, send stream.Sender) error {
+	return stream.New(ctx, func(ctx context.Context, send stream.Sender) (retErr error) {
+		var terminationReason string
+		defer func() {
+			if retErr != nil && terminationReason != "" {
+				retErr = &terminationError{err: retErr, reason: terminationReason}
+			}
+		}()
 		system, contents := buildGeminiContents(req.Messages)
 		if len(contents) == 0 {
 			return fmt.Errorf("no user content provided")
@@ -171,6 +177,9 @@ func (p *Provider) Stream(ctx context.Context, req core.Request) (core.Stream, e
 			extraHeaders = p.extraHeaders(ctx)
 		}
 		err := streamGeminiResponses(ctx, p.client, p.baseURL, p.apiKey, effectiveModel, extraHeaders, apiReq, func(resp *geminiGenerateContentResponse) error {
+			if len(resp.Candidates) > 0 && resp.Candidates[0] != nil && resp.Candidates[0].FinishReason != "" {
+				terminationReason = resp.Candidates[0].FinishReason
+			}
 			if resp.UsageMetadata != nil {
 				usageResp = resp
 			}
@@ -222,7 +231,7 @@ func (p *Provider) Stream(ctx context.Context, req core.Request) (core.Stream, e
 		if err := emitGeminiUsage(send, usageResp); err != nil {
 			return err
 		}
-		if err := send.Send(core.Event{Type: core.EventDone}); err != nil {
+		if err := send.Send(core.Event{Type: core.EventDone, TerminationReason: terminationReason}); err != nil {
 			return err
 		}
 		return nil
@@ -555,4 +564,16 @@ func collectGeminiUserPreview(contents []*geminiContent) string {
 		}
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// terminationError preserves the raw provider reason on the existing error path.
+type terminationError struct {
+	err    error
+	reason string
+}
+
+func (e *terminationError) Error() string { return e.err.Error() }
+func (e *terminationError) Unwrap() error { return e.err }
+func (e *terminationError) DebugFields() map[string]any {
+	return map[string]any{"termination_reason": e.reason}
 }

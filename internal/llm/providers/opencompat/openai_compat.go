@@ -713,10 +713,8 @@ func (p *OpenAICompatProvider) Stream(ctx context.Context, req Request) (Stream,
 		return nil, newOpenAICompatStatusErrorFromResponse(p.name, resp)
 	}
 
-	// Only create async stream for successful HTTP responses
-	return newEventStreamWithCancelHook(ctx, func() { _ = resp.Body.Close() }, func(ctx context.Context, send eventSender) error {
+	return newEventStreamWithCancelHook(ctx, func() { _ = resp.Body.Close() }, func(ctx context.Context, send eventSender) (retErr error) {
 		defer resp.Body.Close()
-
 		decoder := newSSEDecoder(resp.Body, sseDecoderOptions{RequireDone: false, Transport: p.name + " SSE"})
 
 		toolState := newCompatToolState()
@@ -725,7 +723,12 @@ func (p *OpenAICompatProvider) Stream(ctx context.Context, req Request) (Stream,
 		sawVisibleText := false
 		sawToolCallsFinish := false
 		sawLengthFinish := false
-
+		var terminationReason string
+		defer func() {
+			if retErr != nil && terminationReason != "" {
+				retErr = &terminationError{err: retErr, reason: terminationReason}
+			}
+		}()
 		for {
 			eventType, data, err := decoder.Next()
 			if err == io.EOF {
@@ -765,6 +768,9 @@ func (p *OpenAICompatProvider) Stream(ctx context.Context, req Request) (Stream,
 			}
 
 			for _, choice := range chatResp.Choices {
+				if choice.FinishReason != "" {
+					terminationReason = choice.FinishReason
+				}
 				if choice.FinishReason == "tool_calls" {
 					sawToolCallsFinish = true
 				}
@@ -772,9 +778,6 @@ func (p *OpenAICompatProvider) Stream(ctx context.Context, req Request) (Stream,
 					sawLengthFinish = true
 				}
 				if choice.Delta != nil {
-					// Capture reasoning from thinking models. Different OpenAI-compatible
-					// backends use either "reasoning" (OpenRouter) or
-					// "reasoning_content" (DeepSeek) in streaming deltas.
 					reasoningDelta := choice.Delta.Reasoning
 					if reasoningDelta == "" {
 						reasoningDelta = choice.Delta.ReasoningContent
@@ -810,10 +813,7 @@ func (p *OpenAICompatProvider) Stream(ctx context.Context, req Request) (Stream,
 		}
 
 		sawDone := decoder.DoneSeen()
-
-		// finish_reason "length" is authoritative: the model hit its output-token
-		// limit. Check this before [DONE] so the caller sees a clear cause rather
-		// than a generic StreamIncompleteError.
+		// Check the authoritative output limit before [DONE].
 		if sawLengthFinish {
 			if len(toolState.order) > 0 {
 				return &OutputLimitError{Provider: p.name, Limit: req.MaxOutputTokens, TruncTool: true}
@@ -845,7 +845,7 @@ func (p *OpenAICompatProvider) Stream(ctx context.Context, req Request) (Stream,
 		if !sawDone && !sawLengthFinish {
 			return &StreamIncompleteError{Transport: p.name + " SSE", Terminal: "[DONE]"}
 		}
-		if err := send.Send(Event{Type: EventDone}); err != nil {
+		if err := send.Send(Event{Type: EventDone, TerminationReason: terminationReason}); err != nil {
 			return err
 		}
 		return nil

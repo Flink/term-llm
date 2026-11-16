@@ -35,6 +35,7 @@ func (e *Engine) runSimpleScratchpad(ctx context.Context, req core.Request, send
 		var reasoningKind core.ReasoningKind
 		var providerReplayParts []core.Part
 		var metrics core.TurnMetrics
+		var terminationReason string
 		var failed error
 		fireSnapshot := func() {
 			if snapshotCallback == nil {
@@ -136,6 +137,7 @@ func (e *Engine) runSimpleScratchpad(ctx context.Context, req core.Request, send
 				}
 			case core.EventDone:
 				// The engine emits one done event after committing the scratchpad.
+				terminationReason = event.TerminationReason
 			default:
 				e.observeReportedContext(event)
 				if err := send.Send(event); err != nil {
@@ -197,7 +199,7 @@ func (e *Engine) runSimpleScratchpad(ctx context.Context, req core.Request, send
 			_ = turnCallback(cbCtx, 0, []core.Message{finalMsg}, metrics)
 			cancel()
 		}
-		return send.Send(core.Event{Type: core.EventDone})
+		return send.Send(core.Event{Type: core.EventDone, TerminationReason: terminationReason})
 	}
 }
 

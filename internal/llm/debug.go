@@ -274,7 +274,7 @@ func DebugRawEvent(enabled bool, event core.Event) {
 		}
 		DebugRawSection(enabled, "Event Tool Exec End", info)
 	case core.EventDone:
-		DebugRawSection(enabled, "Event Done", "")
+		DebugRawSection(enabled, "Event Done", event.TerminationReason)
 	case core.EventError:
 		if event.Err != nil {
 			DebugRawSection(enabled, "Event Error", event.Err.Error())

@@ -160,6 +160,7 @@ type anthropicDelta struct {
 	Type        string `json:"type"`
 	Text        string `json:"text"`
 	PartialJSON string `json:"partial_json"`
+	StopReason  string `json:"stop_reason"`
 	Thinking    string `json:"thinking"`
 	Signature   string `json:"signature"`
 }
@@ -173,7 +174,8 @@ type anthropicStreamEvent struct {
 	Type    string `json:"type"`
 	Index   int64  `json:"index"`
 	Message struct {
-		Usage anthropicUsage `json:"usage"`
+		Usage      anthropicUsage `json:"usage"`
+		StopReason string         `json:"stop_reason"`
 	} `json:"message"`
 	ContentBlock anthropicResponseBlock `json:"content_block"`
 	Delta        anthropicDelta         `json:"delta"`

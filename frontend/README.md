@@ -8,7 +8,7 @@ Vite emits deterministic, minified production files into `internal/serveui/stati
 
 Source builds use Node 24 or newer and npm. The Go build step also writes the deterministic private UI-authoring source archive, which is embedded in release binaries for on-demand extension builder inspection, not downloaded by ordinary browser sessions. The test setup supplies isolated Web Storage implementations for Node 25+, whose process-level `localStorage`/`sessionStorage` globals otherwise depend on runtime flags. CI installs dependencies from `package-lock.json` with `npm ci`.
 
-From the repository root, the normal build command installs locked frontend dependencies when needed, generates both applications, and builds `./term-llm`:
+From the repository root, the normal build command installs locked frontend dependencies when needed, generates all three applications, and builds `./term-llm`:
 
 ```sh
 make build
@@ -17,7 +17,7 @@ make build
 ## Commands
 
 ```sh
-make frontend             # chat build, then standalone Hub build
+make frontend             # chat, standalone Hub, standalone proxy, then precompression
 npm --prefix frontend run format:check
 npm --prefix frontend run lint
 npm --prefix frontend run typecheck
@@ -71,6 +71,83 @@ those overrides when the loop analysis is fixed.
 The payload baseline's historical `app-interject.js` entry describes a previous measured asset set; it is not an active chunk name. The current Vite build emits a hashed entry and named hashed chunks, including lazy steering actions and queue presentation. Do not rename baseline entries by guessing or relax its budget to mask growth.
 
 Do not edit generated `static/dist` files directly. Change TypeScript/CSS and run `make frontend`; only source and package manifests are committed.
+
+## Standalone proxy administration
+
+`frontend/proxy/` owns the plain TypeScript DOM UI; transport belongs in
+`src/api/proxy-client.ts`. It uses no Preact, chat modules, inline scripts or HTML
+insertion: API content is rendered as text. The backend shell at `/_proxy/`
+provides `#proxy-app` and loads `/_proxy/assets/proxy.js` and `proxy.css`.
+`vite.proxy.config.ts` emits exactly these two assets without clearing chat/Hub
+outputs. The normal build typechecks and builds proxy assets before precompression.
+
+Proxy assets stay outside the chat asset version, hashed manifest, service worker
+and authoring asset list. Stable proxy URLs require revalidation, not immutable
+caching. Do not register a proxy service worker.
+
+The UI calls token-bearing applications/devices **Clients**. Keep the `callers`
+API endpoints, JSON fields and `caller_auth` configuration compatible. Legacy
+`?tab=callers` links open Clients and normalize to `?tab=clients`.
+
+`/_proxy/api/state` is authoritative for CSRF, revision and mode. Mutations use
+`X-CSRF-Token` and same-origin session credentials. Configuration writes replace
+routes only and submit the loaded revision; conflicts require explicit refresh.
+File-managed routes and file-sourced secrets are read-only, with explicit file
+reload; stored secrets remain rotatable. The UI cannot edit file references.
+The collapsed **Configuration file** disclosure offers secret-free route download
+and confirmed YAML replacement (file up to 1 MiB or **Paste YAML instead**). The
+server parses YAML; this is configuration transfer, not a full backup.
+
+Provider presets come from `internal/app/proxy/presets.go` through authenticated
+state. They fill the existing route editor without persisting preset IDs or
+loading normal provider configuration. **Add API key** reuses the Secrets form
+and API without discarding the route draft. Secret storage and route save are
+separate commits; concurrent configuration changes must still produce conflicts.
+Saving never probes an upstream.
+
+Secrets are write-only and origin-bound. Duplicate names are rejected unless an
+explicit, confirmed Replace action sends `replace: true`. Header substitutions
+default to stored secrets matching the upstream origin; literal values are public
+configuration, not a credential store. Administrator tokens, secret values and
+client tokens are never persisted **in browser storage**; the server does store
+secrets, in plaintext at rest.
+
+Client grants start unchecked and create/edit submits the state revision. Grant
+edits do not reissue tokens. Tokens are shown once with a Copy action; curl examples
+use `$TOKEN`. Tabs, refresh and sign-out confirm dismissal while a token is shown;
+browser leave requests a native warning, but shutdown can still discard it.
+
+Upstream origin/base-path or canonical substitution changes invalidate grants;
+local-prefix, enabled and local-auth-format changes and same-name secret rotation
+preserve them. File configuration changes drop incompatible grants fail-closed.
+Warn before authority-bearing edits. Revoke, delete and disable block new requests,
+not requests already dispatched.
+
+Requests show recorded full local paths, human-readable outcomes/dates and inline
+grouped details. Filters start collapsed at every width. Numbered pages contain
+25 requests and show totals; older-sequence cursors remain a legacy API option,
+not the UI pagination model. Authenticated JSON export is bounded to 1,000 rows.
+Bodies and headers are not captured. Errors/incomplete results can still mean
+upstream work happened; do not suggest automatic retries.
+
+Only curated JSON `{error: string}` responses for 400/409 are shown as text,
+limited to 512 characters. Error reads are bounded; other responses use generic
+messages rather than displaying arbitrary bodies.
+
+Run the standalone coverage and checks from the repository root:
+
+```sh
+(cd frontend && npx vitest run --config vite.proxy.config.ts)
+npm --prefix frontend run typecheck
+(cd frontend && npx stylelint 'proxy/**/*.css')
+make test PKG=./internal/serveui
+```
+
+The separate Vite test configuration covers `proxy/`; the chat suite covers
+`src/`. `npm test` runs both, and standard typechecking/CSS lint include `proxy/`.
+Check keyboard-only sign-in, route editing, show-once token dismissal, request
+filters/details and narrow layouts. For external passkey browser coverage, see
+[`scripts/proxy_passkey_smoke.sh --help`](../scripts/proxy_passkey_smoke.sh).
 
 ## Static caching and deployments
 
