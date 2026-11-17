@@ -10,6 +10,7 @@ import type {
 } from '../domain/types';
 import { olderTranscriptAnchors, transcriptMutationHeadID } from '../domain/transcript';
 import { planSummary } from '../domain/plan';
+import { diffScopeForOwner } from '../domain/diff-scope';
 import { updateSessionRoute } from '../platform/routing';
 import type { AppStoreServices } from './app-store-services';
 import type { SessionStore } from './session-store';
@@ -122,17 +123,24 @@ export class SelectionStore {
       this.interactions.approval.value = null;
       this.branches.tree.value = null;
       this.branches.pathCount.value = 0;
-      if (this.review.diff.value.sessionId !== session.id)
+      if (this.review.diff.value.sessionId !== session.id) {
+        // The Changes view follows navigation, but All-turns history belongs
+        // to the chat being left. Reset it here, at the ownership change,
+        // because later loads can no longer tell the sessions apart.
+        const previousDiff = this.review.diff.value;
         this.review.diff.value = {
-          ...this.review.diff.value,
+          ...previousDiff,
           sessionId: session.id,
+          scope: diffScopeForOwner(previousDiff.scope, true),
+          hasOlderTurns: false,
           git: Boolean(session.fileChangeSummary?.git),
           files: [],
           error: '',
-          comments: this.review.diff.value.comments.filter(
+          comments: previousDiff.comments.filter(
             (comment) => !comment.sessionId || comment.sessionId === session.id,
           ),
         };
+      }
     });
     this.services.storage.setItem(this.services.keys.activeSession, session.id);
     this.services.storage.removeItem(this.services.keys.draftSessionActive);

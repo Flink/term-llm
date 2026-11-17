@@ -227,3 +227,121 @@ describe('ReviewStore deferred diff coordination', () => {
     }
   });
 });
+
+describe('ReviewStore coalesced event refreshes', () => {
+  it('keeps one load in flight and drains a single trailing refresh', async () => {
+    const { services, store } = makeReview();
+    try {
+      const first = deferred<Record<string, unknown>>();
+      const trailing = deferred<Record<string, unknown>>();
+      services.endpoints.fileChanges = vi
+        .fn()
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(trailing.promise);
+      store.diff.value = { ...store.diff.value, open: true, sessionId: 's1' };
+
+      const cycle = store.refreshDiff();
+      await vi.waitFor(() => expect(services.endpoints.fileChanges).toHaveBeenCalledTimes(1));
+      void store.refreshDiff();
+      void store.refreshDiff();
+      expect(services.endpoints.fileChanges).toHaveBeenCalledTimes(1);
+
+      first.resolve({ file_changes: [{ path: 'main.go', kind: 'modify' }] });
+      await vi.waitFor(() => expect(services.endpoints.fileChanges).toHaveBeenCalledTimes(2));
+      expect(services.endpoints.fileChanges).toHaveBeenLastCalledWith('s1', 'last_turn');
+
+      trailing.resolve({ file_changes: [] });
+      await cycle;
+
+      expect(services.endpoints.fileChanges).toHaveBeenCalledTimes(2);
+      expect(store.diff.value).toMatchObject({ loading: false, files: [] });
+    } finally {
+      services.dispose();
+    }
+  });
+
+  it('retargets a queued refresh to the chat selected before it starts', async () => {
+    const { services, view, store } = makeReview();
+    try {
+      const first = deferred<Record<string, unknown>>();
+      services.endpoints.fileChanges = vi
+        .fn()
+        .mockReturnValueOnce(first.promise)
+        .mockResolvedValue({ file_changes: [] });
+      store.diff.value = { ...store.diff.value, open: true, sessionId: 's1' };
+
+      const cycle = store.refreshDiff();
+      await vi.waitFor(() =>
+        expect(services.endpoints.fileChanges).toHaveBeenCalledWith('s1', 'last_turn'),
+      );
+      void store.refreshDiff();
+      // Navigation plus an explicit scope change happen while the event load
+      // is still in flight.
+      view.activeSessionId.value = 's2';
+      view.activeSession.value = testSession({ id: 's2' });
+      store.diff.value = { ...store.diff.value, sessionId: 's2', scope: 'uncommitted' };
+
+      first.resolve({ file_changes: [{ path: 'left-behind.go', kind: 'modify' }] });
+      await cycle;
+
+      expect(services.endpoints.fileChanges).toHaveBeenLastCalledWith('s2', 'uncommitted');
+      expect(services.endpoints.fileChanges).toHaveBeenCalledTimes(2);
+      expect(store.diff.value.files).toEqual([]);
+    } finally {
+      services.dispose();
+    }
+  });
+
+  it('drops a queued refresh once the changes panel closes or the store disposes', async () => {
+    const { services, store } = makeReview();
+    try {
+      const first = deferred<Record<string, unknown>>();
+      services.endpoints.fileChanges = vi.fn(() => first.promise);
+      store.diff.value = { ...store.diff.value, open: true, sessionId: 's1' };
+
+      const cycle = store.refreshDiff();
+      await vi.waitFor(() => expect(services.endpoints.fileChanges).toHaveBeenCalledTimes(1));
+      void store.refreshDiff();
+      store.diff.value = { ...store.diff.value, open: false };
+
+      first.resolve({ file_changes: [] });
+      await cycle;
+      expect(services.endpoints.fileChanges).toHaveBeenCalledTimes(1);
+
+      store.diff.value = { ...store.diff.value, open: true };
+      services.dispose();
+      await store.refreshDiff();
+      expect(services.endpoints.fileChanges).toHaveBeenCalledTimes(1);
+    } finally {
+      services.dispose();
+    }
+  });
+
+  it('starts an explicit load immediately and drops the superseded refresh', async () => {
+    const { services, store } = makeReview();
+    try {
+      const refreshing = deferred<Record<string, unknown>>();
+      const explicit = deferred<Record<string, unknown>>();
+      services.endpoints.fileChanges = vi
+        .fn()
+        .mockReturnValueOnce(refreshing.promise)
+        .mockReturnValueOnce(explicit.promise);
+      store.diff.value = { ...store.diff.value, open: true, sessionId: 's1' };
+
+      const cycle = store.refreshDiff();
+      await vi.waitFor(() => expect(services.endpoints.fileChanges).toHaveBeenCalledTimes(1));
+      const direct = store.loadDiff();
+      await vi.waitFor(() => expect(services.endpoints.fileChanges).toHaveBeenCalledTimes(2));
+
+      explicit.resolve({ file_changes: [{ path: 'explicit.go', kind: 'modify' }] });
+      await direct;
+      refreshing.resolve({ file_changes: [{ path: 'stale.go', kind: 'modify' }] });
+      await cycle;
+
+      expect(store.diff.value.files.map((file) => file.path)).toEqual(['explicit.go']);
+      expect(store.diff.value.loading).toBe(false);
+    } finally {
+      services.dispose();
+    }
+  });
+});

@@ -6296,6 +6296,94 @@ describe('AppStore compatibility behavior', () => {
     }
   });
 
+  it('resets All turns and older turns when navigation selects another chat', async () => {
+    const store = new AppStore(config);
+    const first = session();
+    const second = { ...session(), id: 's2', title: 'Second' };
+    try {
+      store.sessions.value = [first, second];
+      store.activeSessionId.value = first.id;
+      store.draftActive.value = false;
+      store.diff.value = {
+        ...store.diff.value,
+        open: true,
+        sessionId: first.id,
+        scope: 'all_turns',
+        hasOlderTurns: true,
+      };
+      store.endpoints.sessionState = vi.fn(async () => ({}));
+      store.endpoints.selectedSession = vi.fn(async (id: string) => ({
+        selected_session: { id },
+        selected_transcript: { bodies: { messages: [] } },
+      }));
+      store.endpoints.skills = vi.fn(async () => ({ skills: [] }));
+      store.endpoints.tree = vi.fn(async () => ({}));
+      store.endpoints.diffComments = vi.fn(async () => ({ comments: [] }));
+      store.endpoints.fileChanges = vi.fn(async () => ({
+        file_changes: [],
+        has_older_turns: false,
+      }));
+
+      await store.selectSession(second);
+
+      expect(store.diff.value).toMatchObject({
+        open: true,
+        sessionId: second.id,
+        scope: 'last_turn',
+        hasOlderTurns: false,
+      });
+
+      // Selection already rewrote sessionId, so a load alone can no longer
+      // tell that the chat changed; the scope must have reset above.
+      await store.loadDiff();
+      expect(store.endpoints.fileChanges).toHaveBeenCalledWith(second.id, 'last_turn');
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it('keeps other scopes and same-chat All turns across navigation', async () => {
+    const store = new AppStore(config);
+    const first = session();
+    const second = { ...session(), id: 's2', title: 'Second' };
+    try {
+      store.sessions.value = [first, second];
+      store.activeSessionId.value = first.id;
+      store.draftActive.value = false;
+      store.diff.value = {
+        ...store.diff.value,
+        open: true,
+        sessionId: first.id,
+        scope: 'uncommitted',
+        hasOlderTurns: true,
+      };
+      store.endpoints.sessionState = vi.fn(async () => ({}));
+      store.endpoints.selectedSession = vi.fn(async (id: string) => ({
+        selected_session: { id },
+        selected_transcript: { bodies: { messages: [] } },
+      }));
+      store.endpoints.skills = vi.fn(async () => ({ skills: [] }));
+      store.endpoints.tree = vi.fn(async () => ({}));
+
+      await store.selectSession(second);
+      expect(store.diff.value).toMatchObject({
+        sessionId: second.id,
+        scope: 'uncommitted',
+        hasOlderTurns: false,
+      });
+
+      store.diff.value = { ...store.diff.value, scope: 'all_turns', hasOlderTurns: true };
+      await store.selectSession(second);
+      expect(store.diff.value).toMatchObject({
+        sessionId: second.id,
+        scope: 'all_turns',
+        hasOlderTurns: true,
+      });
+    } finally {
+      store.dispose();
+    }
+  });
+
   it('loads file summaries and structured hunks from the real diff contracts', async () => {
     const store = new AppStore(config);
     store.sessions.value = [session()];

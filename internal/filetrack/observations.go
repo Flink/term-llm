@@ -353,15 +353,37 @@ func ensureRunForChangeTx(ctx context.Context, tx *sql.Tx, sessionID, runID stri
 	return err
 }
 
+// ListRecentRunObservations returns observations across the selected run window.
+// Negative runs means all runs; rows without run identities remain excluded.
+func (s *Store) ListRecentRunObservations(ctx context.Context, sessionID string, runs int) ([]FilesystemObservation, error) {
+	if runs < 0 {
+		// allocateEventSeq registers every nonempty run ID before the sidecar
+		// insert. The separate observation DB can therefore select all runs
+		// directly, without loading their IDs or attaching the history DB.
+		return s.listFilteredObservations(ctx, sessionID, ` AND run_id<>''`, nil)
+	}
+	runIDs, err := s.RecentRunIDs(ctx, sessionID, runs)
+	if err != nil {
+		return nil, err
+	}
+	return s.ListRunObservations(ctx, sessionID, runIDs)
+}
+
 func (s *Store) ListRunObservations(ctx context.Context, sessionID string, runIDs []string) ([]FilesystemObservation, error) {
 	if len(runIDs) == 0 {
 		return []FilesystemObservation{}, nil
 	}
-	args := []any{sessionID}
-	for _, id := range runIDs {
-		args = append(args, id)
+	args := make([]any, len(runIDs))
+	for i, id := range runIDs {
+		args[i] = id
 	}
-	query := `SELECT id,run_id,event_seq,COALESCE(tool_name,''),COALESCE(tool_call_id,''),classification,COALESCE(root,''),created_count,modified_count,deleted_count,COALESCE(sampled_paths_json,'[]'),samples_truncated,coverage_status,COALESCE(details_json,'{}') FROM filesystem_observations WHERE session_id=? AND run_id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(runIDs)), ",") + `) ORDER BY event_seq`
+	filter := ` AND run_id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(runIDs)), ",") + `)`
+	return s.listFilteredObservations(ctx, sessionID, filter, args)
+}
+
+func (s *Store) listFilteredObservations(ctx context.Context, sessionID, filter string, filterArgs []any) ([]FilesystemObservation, error) {
+	args := append([]any{sessionID}, filterArgs...)
+	query := `SELECT id,run_id,event_seq,COALESCE(tool_name,''),COALESCE(tool_call_id,''),classification,COALESCE(root,''),created_count,modified_count,deleted_count,COALESCE(sampled_paths_json,'[]'),samples_truncated,coverage_status,COALESCE(details_json,'{}') FROM filesystem_observations WHERE session_id=?` + filter + ` ORDER BY event_seq`
 	rows, err := s.observationDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

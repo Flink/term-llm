@@ -1,5 +1,5 @@
 import { signal } from '@preact/signals';
-import { normalizeDiffScope } from '../domain/diff-scope';
+import { diffScopeForOwner, normalizeDiffScope } from '../domain/diff-scope';
 import type { DiffComment, DiffFile } from '../domain/types';
 import { errorMessage } from '../domain/text';
 import {
@@ -58,6 +58,10 @@ export class ReviewStore {
     expandEpoch: new Map(),
   };
   private operationsPromise: Promise<ReviewOperationsApi> | null = null;
+  /** Owns the coalesced event-driven refresh cycle, if one is running. */
+  private refreshCycle: Promise<void> | null = null;
+  /** An event arrived during the running refresh; drain exactly one more load. */
+  private refreshQueued = false;
 
   constructor(
     private readonly services: AppStoreServices,
@@ -196,20 +200,52 @@ export class ReviewStore {
     }
   }
 
+  /**
+   * Event-driven diff refresh. File-change events arrive faster than a
+   * full-history diff recomputes, so this keeps a single load in flight and
+   * folds every event during it into one trailing load. Explicit loads
+   * (opening the panel, scope changes, retries) bypass the cycle so the UI
+   * stays responsive; the drain skips closed panels, loadDiff refuses disposed
+   * stores or missing sessions, and epoch/owner checks drop stale results.
+   */
+  refreshDiff(): Promise<void> {
+    this.refreshQueued = true;
+    // Start on a microtask so refreshCycle is set before the load runs; a
+    // same-tick burst of events then folds into this one cycle.
+    return (this.refreshCycle ||= Promise.resolve().then(() => this.drainRefresh()));
+  }
+
+  /**
+   * Each iteration re-reads the current session and scope, so a refresh queued
+   * before navigation never loads the session the user left.
+   */
+  private async drainRefresh(): Promise<void> {
+    try {
+      while (this.refreshQueued && this.diff.peek().open) {
+        this.refreshQueued = false;
+        await this.loadDiff();
+      }
+    } finally {
+      this.refreshQueued = false;
+      this.refreshCycle = null;
+    }
+  }
+
   async loadDiff(replaceWorktree = false): Promise<void> {
+    if (this.services.isDisposed) return;
     if (this.diff.peek().worktreeDir && !replaceWorktree) return;
     const session = this.host.activeSession.value;
     if (!session) return;
     const owner = session.id;
     const previous = this.diff.peek();
-    const scope = normalizeDiffScope(
-      previous.scope === 'all_turns' && previous.sessionId !== owner ? 'last_turn' : previous.scope,
-    );
+    const ownerChanged = previous.sessionId !== owner;
+    const scope = diffScopeForOwner(previous.scope, ownerChanged);
     const epoch = ++this.operationState.loadEpoch;
     this.diff.value = {
       ...this.diff.value,
       sessionId: owner,
       scope,
+      hasOlderTurns: ownerChanged ? false : previous.hasOlderTurns,
       loading: true,
       error: '',
       worktreeDir: undefined,

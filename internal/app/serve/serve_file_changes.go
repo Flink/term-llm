@@ -323,12 +323,7 @@ func (s *serveServer) handleSessionFileChanges(w http.ResponseWriter, r *http.Re
 	observationTruncated := false
 	totalCreated, totalModified, totalDeleted := 0, 0, 0
 	if turnScope {
-		runIDs, runErr := store.RecentRunIDs(r.Context(), sessionID, runs)
-		if runErr != nil {
-			writeOpenAIError(w, http.StatusInternalServerError, "server_error", "failed to load file tracking runs")
-			return
-		}
-		batches, obsErr := store.ListRunObservations(r.Context(), sessionID, runIDs)
+		batches, obsErr := store.ListRecentRunObservations(r.Context(), sessionID, runs)
 		if obsErr != nil {
 			writeOpenAIError(w, http.StatusInternalServerError, "server_error", "failed to load filesystem observations")
 			return

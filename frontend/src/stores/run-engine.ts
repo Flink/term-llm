@@ -1533,7 +1533,7 @@ export class RunEngine {
       this.currentActivityFile.value = String(event.path || event.file || event.file_path || '');
       this.fileChangeRevision.value += 1;
       if (this.review.diff.value.open && this.review.diff.value.sessionId === sessionId)
-        void this.review.loadDiff();
+        void this.review.refreshDiff();
     }
     if (
       ['completed', 'cancelled', 'failed'].includes(next.run.status) &&
@@ -1561,7 +1561,7 @@ export class RunEngine {
       this.interactionsStore.cancelOutstandingForResponse(sessionId, next.run.responseId);
       if (owner) this.supervisors.retire(owner);
       if (this.review.diff.peek().open && this.review.diff.peek().sessionId === sessionId)
-        void this.review.loadDiff();
+        void this.review.refreshDiff();
       this.services.schedule(
         () =>
           void this.host.refreshSessionMessages(

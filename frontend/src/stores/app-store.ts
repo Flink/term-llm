@@ -703,7 +703,7 @@ export class AppStore {
       reconcileActiveSession: (revision) => this.reconcileServerEventActive(revision),
       reconcileFiles: async (sessionId) => {
         if (this.diff.peek().open && this.diff.peek().sessionId === sessionId)
-          await this.reviewStore.loadDiff();
+          await this.reviewStore.refreshDiff();
       },
       reconcileChildren: async (parentSessionId) => {
         this.childSessionStore.childrenChanged(parentSessionId);

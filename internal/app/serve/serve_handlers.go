@@ -1392,13 +1392,14 @@ func (s *serveServer) selectedWebSession(ctx context.Context, selector string, s
 	if fileStore := s.fileTrackStore(); fileStore != nil {
 		_, result.FileChangeSummary.Git = s.sessionGitRepo(ctx, selected.ID)
 		changes, err := fileStore.ListRecentRunChanges(ctx, selected.ID, 1)
+		result.FileChangeSummary.FileCount = len(changes)
 		if err == nil && len(changes) == 0 && !result.FileChangeSummary.Git {
-			changes, err = fileStore.ListRecentRunChanges(ctx, selected.ID, -1)
+			// Startup needs historical availability, not blob loads or line diffs.
+			result.FileChangeSummary.FileCount, err = fileStore.CountAllRunChanges(ctx, selected.ID)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("summarize selected session file changes: %w", err)
 		}
-		result.FileChangeSummary.FileCount = len(changes)
 		for _, change := range changes {
 			result.FileChangeSummary.Adds += change.Adds
 			result.FileChangeSummary.Dels += change.Dels

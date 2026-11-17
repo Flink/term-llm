@@ -64,7 +64,7 @@ const navigate = (view: ReturnType<typeof makeHost>, sessionId: string) => {
 beforeEach(() => localStorage.clear());
 
 describe('ReviewStore navigation while operations load', () => {
-  it('resets All turns when opening another chat', async () => {
+  it('resets All turns when a load notices a different owning chat', async () => {
     const { services, view, store } = makeReview();
     try {
       store.diff.value = {

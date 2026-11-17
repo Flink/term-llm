@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -204,6 +203,7 @@ type recordSessionLock struct {
 // Store persists file-change history in a dedicated SQLite database.
 type Store struct {
 	backgroundGC               backgroundGC
+	changeCounts               changeCountCache
 	db                         *sql.DB
 	observationDB              *sql.DB
 	observationPath            string
@@ -1333,13 +1333,17 @@ func (s *Store) sessionSpans(ctx context.Context, sessionID string) ([]*pathSpan
 }
 
 func (s *Store) sessionRunSpans(ctx context.Context, sessionID string, runIDs []string, snapshotSeq int64) ([]*pathSpan, error) {
+	filter, args := runWindowFilter(runIDs, snapshotSeq)
+	return s.sessionFilteredSpans(ctx, sessionID, filter, args)
+}
+
+func (s *Store) sessionFilteredSpans(ctx context.Context, sessionID, filter string, filterArgs []any) ([]*pathSpan, error) {
 	query := `
 		SELECT seq, path, kind, COALESCE(before_hash, ''), COALESCE(after_hash, ''), is_binary,
 		       provenance, baseline_state, content_status, claim_coverage
 		FROM file_changes WHERE session_id = ?
 		AND provenance IN ('direct','declared_transform','declared_generate')`
 	args := []any{sessionID}
-	filter, filterArgs := runWindowFilter(runIDs, snapshotSeq)
 	query += filter
 	args = append(args, filterArgs...)
 	query += " ORDER BY seq"
@@ -1389,63 +1393,6 @@ func (s *Store) sessionRunSpans(ctx context.Context, sessionID string, runIDs []
 		result = append(result, spans[p])
 	}
 	return result, nil
-}
-
-func (s *Store) sessionPathSpan(ctx context.Context, sessionID, path string) (*pathSpan, error) {
-	return s.sessionRunPathSpan(ctx, sessionID, nil, 0, path)
-}
-
-func (s *Store) sessionRunPathSpan(ctx context.Context, sessionID string, runIDs []string, snapshotSeq int64, path string) (*pathSpan, error) {
-	path = normalizePath(path)
-	if path == "" {
-		return nil, nil
-	}
-	sp := &pathSpan{path: path}
-	where := "session_id = ? AND path = ? AND provenance IN ('direct','declared_transform','declared_generate')"
-	args := []any{sessionID, path}
-	filter, filterArgs := runWindowFilter(runIDs, snapshotSeq)
-	where += filter
-	args = append(args, filterArgs...)
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT kind, COALESCE(before_hash, ''), is_binary, baseline_state, content_status,
-		       provenance, claim_coverage
-		FROM file_changes
-		WHERE `+where+`
-		ORDER BY seq ASC LIMIT 1`, args...).
-		Scan(&sp.firstKind, &sp.firstBeforeHash, &sp.firstBinary, &sp.firstBaselineState,
-			&sp.firstContentStatus, &sp.provenance, &sp.claimCoverage); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("query first path change: %w", err)
-	}
-	sp.provenances = []string{sp.provenance}
-	rows, err := s.db.QueryContext(ctx, `SELECT provenance, claim_coverage FROM file_changes WHERE `+where+` ORDER BY seq`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query path provenance: %w", err)
-	}
-	for rows.Next() {
-		var provenance, coverage string
-		if err := rows.Scan(&provenance, &coverage); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		if !containsString(sp.provenances, provenance) {
-			sp.provenances = append(sp.provenances, provenance)
-			sp.provenance = "mixed"
-		}
-		sp.claimCoverage = worstCoverage(sp.claimCoverage, coverage)
-	}
-	rows.Close()
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT seq, kind, COALESCE(after_hash, ''), is_binary, content_status
-		FROM file_changes
-		WHERE `+where+`
-		ORDER BY seq DESC LIMIT 1`, args...).
-		Scan(&sp.lastSeq, &sp.lastKind, &sp.lastAfterHash, &sp.lastBinary, &sp.lastContentStatus); err != nil {
-		return nil, fmt.Errorf("query last path change: %w", err)
-	}
-	return sp, nil
 }
 
 // resolve computes the cumulative kind for a span. ok=false means the file is
@@ -1507,118 +1454,10 @@ func (s *Store) ListSessionChanges(ctx context.Context, sessionID string) ([]Cum
 	return s.listChangesFromSpans(ctx, spans, err)
 }
 
-// ListRecentRunChanges returns the cumulative changes across the latest file
-// tracking runs (negative means all), including an in-progress run. Legacy rows without run IDs are excluded.
-func (s *Store) ListRecentRunChanges(ctx context.Context, sessionID string, runs int) ([]CumulativeChange, error) {
-	window, err := s.latestRunWindow(ctx, sessionID, runs, 0)
-	if err != nil || len(window.runIDs) == 0 {
-		return nil, err
-	}
-	spans, err := s.sessionRunSpans(ctx, sessionID, window.runIDs, window.snapshotSeq)
-	changes, err := s.listChangesFromSpans(ctx, spans, err)
-	if err != nil {
-		return nil, err
-	}
-	if runs != 1 {
-		for i := range changes {
-			changes[i].SnapshotSeq = window.snapshotSeq
-		}
-	}
-	return changes, nil
-}
-
-func (s *Store) listChangesFromSpans(ctx context.Context, spans []*pathSpan, err error) ([]CumulativeChange, error) {
-	if err != nil {
-		return nil, err
-	}
-
-	changes := make([]CumulativeChange, 0, len(spans))
-	for _, sp := range spans {
-		kind, ok := sp.resolve()
-		if !ok {
-			continue
-		}
-
-		change := CumulativeChange{
-			Path: sp.path, Kind: kind, Seq: sp.lastSeq, Provenance: sp.provenance,
-			Provenances: append([]string(nil), sp.provenances...), BaselineState: sp.firstBaselineState,
-			ClaimCoverage: sp.claimCoverage, ContentStatus: cumulativeContentStatus(sp, kind),
-		}
-
-		needBefore, needAfter := blobsNeeded(kind)
-
-		// Retained binaries are browser-renderable images. Their line counts are
-		// always zero, so verify blob presence without reading and decompressing
-		// potentially multi-megabyte image bodies on every list refresh.
-		if sp.retainedImage(kind) {
-			change.ContentAvailable = true
-			if needBefore && !s.blobExists(ctx, sp.firstBeforeHash) {
-				change.Truncated = true
-				change.ContentAvailable = false
-			}
-			if needAfter && !s.blobExists(ctx, sp.lastAfterHash) {
-				change.Truncated = true
-				change.ContentAvailable = false
-			}
-			changes = append(changes, change)
-			continue
-		}
-		// A binary side paired with a non-binary side is not a renderable image
-		// comparison and must never be passed through line-based diffing.
-		if sp.hasBinarySide(kind) {
-			change.Truncated = true
-			changes = append(changes, change)
-			continue
-		}
-
-		var before, after []byte
-		truncated := false
-		if needBefore {
-			if sp.firstBeforeHash == "" {
-				truncated = true
-			} else if before, err = s.getBlob(ctx, sp.firstBeforeHash); err != nil {
-				truncated = true
-			}
-		}
-		if needAfter {
-			if sp.lastAfterHash == "" {
-				truncated = true
-			} else if after, err = s.getBlob(ctx, sp.lastAfterHash); err != nil {
-				truncated = true
-			}
-		}
-
-		if truncated {
-			change.Truncated = true
-			change.ContentAvailable = false
-		} else {
-			change.ContentAvailable = true
-			if _, isImage := imageChangeMediaType(kind, before, after); !isImage {
-				change.Adds, change.Dels = CountAddsDels(before, after)
-			}
-		}
-		changes = append(changes, change)
-	}
-
-	sort.Slice(changes, func(i, j int) bool { return changes[i].Path < changes[j].Path })
-	return changes, nil
-}
-
 // GetFileDiffContent returns the baseline and current contents for one path
 // in a session, or nil when the path has no net change recorded.
 func (s *Store) GetFileDiffContent(ctx context.Context, sessionID, path string) (*FileDiffContent, error) {
 	sp, err := s.sessionPathSpan(ctx, sessionID, path)
-	return s.fileDiffContentFromSpan(ctx, sp, err)
-}
-
-// GetRecentRunFileDiffContent returns one file diff across the latest runs that
-// recorded file changes. A positive snapshotSeq pins the rolling window.
-func (s *Store) GetRecentRunFileDiffContent(ctx context.Context, sessionID, path string, runs int, snapshotSeq int64) (*FileDiffContent, error) {
-	window, err := s.latestRunWindow(ctx, sessionID, runs, snapshotSeq)
-	if err != nil || len(window.runIDs) == 0 {
-		return nil, err
-	}
-	sp, err := s.sessionRunPathSpan(ctx, sessionID, window.runIDs, window.snapshotSeq, path)
 	return s.fileDiffContentFromSpan(ctx, sp, err)
 }
 
@@ -1683,20 +1522,6 @@ func (s *Store) GetFileDiffSide(ctx context.Context, sessionID, path, side strin
 	return s.fileDiffSideFromSpan(ctx, sp, side, err)
 }
 
-// GetRecentRunFileDiffSide returns one retained image side across the latest
-// runs that recorded file changes. A positive snapshotSeq pins the window.
-func (s *Store) GetRecentRunFileDiffSide(ctx context.Context, sessionID, path, side string, runs int, snapshotSeq int64) (*FileDiffSide, error) {
-	if side != "before" && side != "after" {
-		return nil, ErrInvalidDiffSide
-	}
-	window, err := s.latestRunWindow(ctx, sessionID, runs, snapshotSeq)
-	if err != nil || len(window.runIDs) == 0 {
-		return nil, err
-	}
-	sp, err := s.sessionRunPathSpan(ctx, sessionID, window.runIDs, window.snapshotSeq, path)
-	return s.fileDiffSideFromSpan(ctx, sp, side, err)
-}
-
 // GetFileDiffTextSide returns one retained UTF-8 text side without loading the
 // other side. It returns nil for unknown, truncated, binary, and image content.
 func (s *Store) GetFileDiffTextSide(ctx context.Context, sessionID, path, side string) (*FileDiffTextSide, error) {
@@ -1704,20 +1529,6 @@ func (s *Store) GetFileDiffTextSide(ctx context.Context, sessionID, path, side s
 		return nil, ErrInvalidDiffSide
 	}
 	sp, err := s.sessionPathSpan(ctx, sessionID, path)
-	return s.fileDiffTextSideFromSpan(ctx, sp, side, err)
-}
-
-// GetRecentRunFileDiffTextSide returns one retained UTF-8 text side across the
-// latest runs that recorded file changes. A positive snapshotSeq pins the window.
-func (s *Store) GetRecentRunFileDiffTextSide(ctx context.Context, sessionID, path, side string, runs int, snapshotSeq int64) (*FileDiffTextSide, error) {
-	if side != "before" && side != "after" {
-		return nil, ErrInvalidDiffSide
-	}
-	window, err := s.latestRunWindow(ctx, sessionID, runs, snapshotSeq)
-	if err != nil || len(window.runIDs) == 0 {
-		return nil, err
-	}
-	sp, err := s.sessionRunPathSpan(ctx, sessionID, window.runIDs, window.snapshotSeq, path)
 	return s.fileDiffTextSideFromSpan(ctx, sp, side, err)
 }
 

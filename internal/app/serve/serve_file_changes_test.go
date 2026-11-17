@@ -183,11 +183,27 @@ func TestHandleSessionsSelectedSessionSideloadsStartupMetadata(t *testing.T) {
 	if changedSelected.ID != changed.ID || changedSelected.Number != changed.Number {
 		t.Fatalf("numeric selected session = %#v", changedSelected)
 	}
-	if got := changedSelected.FileChangeSummary; got.FileCount != 1 || got.Adds != 2 || got.Dels != 1 {
-		t.Fatalf("file change summary = %#v, want count=1 adds=2 dels=1", got)
+	// An empty latest turn outside Git exposes historical availability without
+	// loading historical content or computing its line totals at startup.
+	if got := changedSelected.FileChangeSummary; got.FileCount != 1 || got.Adds != 0 || got.Dels != 0 {
+		t.Fatalf("historical availability summary = %#v, want count=1 adds=0 dels=0", got)
 	}
 	if got := changedSelected.PlanSummary; got == nil || got.Version <= 0 || got.StepCount != 3 || got.CompletedSteps != 1 || got.Position != 2 || got.State != "in_progress" {
 		t.Fatalf("plan summary = %#v", got)
+	}
+
+	if _, err := fileStore.RecordAttributedChange(ctx, filetrack.ChangeRecord{
+		SessionID: changed.ID, RunID: "run-4", ToolName: "write_file", Path: "/work/latest.go",
+		Before: []byte("old\nkeep\n"), After: []byte("new\nkeep\nextra\n"),
+		Provenance: filetrack.ProvenanceDirect, ClaimCoverage: filetrack.CoverageComplete, BaselineState: filetrack.BaselineNormal,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A nonempty latest turn still includes exact counts, not the count-only
+	// fallback or the historical path from run-1.
+	latestSelected := request(changed.ID)
+	if got := latestSelected.FileChangeSummary; got.FileCount != 1 || got.Adds != 2 || got.Dels != 1 {
+		t.Fatalf("latest-turn summary = %#v, want count=1 adds=2 dels=1", got)
 	}
 }
 
