@@ -312,6 +312,37 @@ func (exec *responseModelSwapExecution) markRolledBack() {
 	}
 }
 
+// Commit storage before releasing the previous runtime. A failed write must
+// not leave a new runtime running against the previous model's durable row.
+func (s *serveServer) commitModelSwap(ctx context.Context, sessionID string, exec *responseModelSwapExecution, strategy string) error {
+	candidate, plan := exec.candidate, exec.plan
+	if err := s.syncPersistedSessionRuntime(ctx, sessionID, candidate, effectiveTargetModel(plan, candidate), plan.requestedEffort, plan.requestedReasoningMode, true, "", false); err != nil {
+		exec.markRolledBack()
+		s.restoreModelSwapRollback(ctx, sessionID, exec, candidate, "failed", strategy)
+		return fmt.Errorf("%w: commit model switch: %w", errServeSessionPersistence, err)
+	}
+	exec.markCommitted()
+	candidate.mu.Lock()
+	defer candidate.mu.Unlock()
+	candidate.swapCandidate.Store(false)
+	candidate.persistProviderState(ctx, sessionID)
+	return nil
+}
+
+// syncSessionMetadata publishes the candidate reading with its new identity.
+func (rt *serveRuntime) syncSessionMetadata(ctx context.Context, store session.Store, meta *session.Session, changed bool) error {
+	if rt.swapCandidate.Load() && rt.engine != nil {
+		if total, count, window := rt.engine.ContextEstimateSnapshot(); total > 0 {
+			meta.LastTotalTokens, meta.LastMessageCount, meta.LastContextWindow = total, count, window
+			return store.UpdateWithContextEstimate(ctx, meta)
+		}
+	}
+	if changed {
+		return store.Update(ctx, meta)
+	}
+	return nil
+}
+
 func isModelSwapFallbackEligible(err error) bool {
 	return !errors.Is(err, errServeSessionBusy) && modelswap.FallbackEligible(err)
 }
@@ -489,13 +520,11 @@ func (s *serveServer) settleStoppedModelSwap(ctx context.Context, sessionID stri
 		}
 		return
 	}
-	exec.markCommitted()
-	if s.store == nil || sessionID == "" {
-		return
-	}
 	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	s.syncPersistedSessionRuntime(dbCtx, sessionID, candidate, effectiveTargetModel(exec.plan, candidate), exec.plan.requestedEffort, exec.plan.requestedReasoningMode, true, "", false)
+	if err := s.commitModelSwap(dbCtx, sessionID, exec, strategy); err != nil || s.store == nil || sessionID == "" {
+		return
+	}
 	candidate.mu.Lock()
 	defer candidate.mu.Unlock()
 	if candidate.store == nil {
@@ -654,26 +683,19 @@ func (s *serveServer) executeResponseRunModelSwap(runCtx context.Context, runtim
 		return true
 	}
 
-	appendProgress("naive_start", exec.plan.startMessage(runtime))
-	visible, responded := false, false
-	streamState := &responseRunStreamState{}
-	result, err := runtime.RunWithEventsAndStart(runCtx, true, false, inputMessages, llmReq, func() {
-		mgr.setActiveRun(sessionID, respID)
-	}, func(ev core.Event) error {
-		visible = visible || modelswap.VisibleOutput(ev)
-		responded = responded || modelswap.Responded(ev)
-		return s.appendResponseRunEvent(runtime, run, streamState, ev)
-	})
-	if err == nil {
+	completeSwap := func(strategy string, result serveRunResult) {
+		if err := s.commitModelSwap(runCtx, sessionID, exec, strategy); err != nil {
+			appendProgress("failed", fmt.Sprintf("Model swap failed; restored %s.", exec.plan.previousLabel()))
+			failRun("server_error", errServeSessionPersistence)
+			return
+		}
 		if options.uiSession {
 			runtime.clearLastUIRunError()
 		}
 		if options.resetResponseIDsOnSuccess {
 			s.unregisterSessionResponseIDs(sessionID)
 		}
-		exec.markCommitted()
-		s.syncPersistedSessionRuntime(runCtx, sessionID, runtime, effectiveTargetModel(exec.plan, runtime), exec.plan.requestedEffort, exec.plan.requestedReasoningMode, true, "", false)
-		s.persistModelSwapMarker(runCtx, sessionID, exec.plan, runtime, "succeeded", "naive")
+		s.persistModelSwapMarker(runCtx, sessionID, exec.plan, runtime, "succeeded", strategy)
 		appendProgress("complete", fmt.Sprintf("Continuing on %s.", exec.plan.targetLabel(runtime)))
 		completeResponse := map[string]any{
 			"id":            continuationID(),
@@ -691,12 +713,23 @@ func (s *serveServer) executeResponseRunModelSwap(runCtx context.Context, runtim
 		if effort := strings.TrimSpace(exec.plan.requestedEffort); effort != "" {
 			completeResponse["reasoning_effort"] = effort
 		}
-		if err := run.complete(map[string]any{"response": completeResponse}, result.Usage, result.SessionUsage); err != nil {
-			// Keep parity with the normal path: best-effort terminal event.
-			_ = err
-			return
+		if err := run.complete(map[string]any{"response": completeResponse}, result.Usage, result.SessionUsage); err == nil {
+			s.scheduleAutoTitle(sessionID, runtime.providerKey)
 		}
-		s.scheduleAutoTitle(sessionID, runtime.providerKey)
+	}
+
+	appendProgress("naive_start", exec.plan.startMessage(runtime))
+	visible, responded := false, false
+	streamState := &responseRunStreamState{}
+	result, err := runtime.RunWithEventsAndStart(runCtx, true, false, inputMessages, llmReq, func() {
+		mgr.setActiveRun(sessionID, respID)
+	}, func(ev core.Event) error {
+		visible = visible || modelswap.VisibleOutput(ev)
+		responded = responded || modelswap.Responded(ev)
+		return s.appendResponseRunEvent(runtime, run, streamState, ev)
+	})
+	if err == nil {
+		completeSwap("naive", result)
 		return
 	}
 
@@ -755,35 +788,7 @@ func (s *serveServer) executeResponseRunModelSwap(runCtx context.Context, runtim
 	result.Usage.Add(handover.Usage)
 	result.SessionUsage.Add(handover.Usage)
 
-	if options.uiSession {
-		runtime.clearLastUIRunError()
-	}
-	if options.resetResponseIDsOnSuccess {
-		s.unregisterSessionResponseIDs(sessionID)
-	}
-	exec.markCommitted()
-	s.syncPersistedSessionRuntime(runCtx, sessionID, runtime, effectiveTargetModel(exec.plan, runtime), exec.plan.requestedEffort, exec.plan.requestedReasoningMode, true, "", false)
-	s.persistModelSwapMarker(runCtx, sessionID, exec.plan, runtime, "succeeded", "handover")
-	appendProgress("complete", fmt.Sprintf("Continuing on %s.", exec.plan.targetLabel(runtime)))
-	completeResponse := map[string]any{
-		"id":            continuationID(),
-		"object":        "response",
-		"created":       created,
-		"model":         model,
-		"provider":      exec.plan.requestedProvider,
-		"status":        "completed",
-		"usage":         usagePayload(result.Usage),
-		"session_usage": usagePayload(result.SessionUsage),
-		"context_usage": result.ContextUsage,
-		// The client tool calls this response stopped on; authoritative even when empty.
-		"pending_client_calls": pendingClientCallsPayload(result.PendingClientCalls()),
-	}
-	if effort := strings.TrimSpace(exec.plan.requestedEffort); effort != "" {
-		completeResponse["reasoning_effort"] = effort
-	}
-	if err := run.complete(map[string]any{"response": completeResponse}, result.Usage, result.SessionUsage); err == nil {
-		s.scheduleAutoTitle(sessionID, runtime.providerKey)
-	}
+	completeSwap("handover", result)
 }
 
 func (s *serveServer) runResponseWithModelSwapFallback(ctx context.Context, runtime *serveRuntime, stateful bool, replaceHistory bool, inputMessages []core.Message, llmReq core.Request, sessionID string, exec *responseModelSwapExecution) (serveRunResult, string, error) {
@@ -798,8 +803,9 @@ func (s *serveServer) runResponseWithModelSwapFallback(ctx context.Context, runt
 		return nil
 	})
 	if err == nil {
-		exec.markCommitted()
-		s.syncPersistedSessionRuntime(ctx, sessionID, runtime, effectiveTargetModel(exec.plan, runtime), exec.plan.requestedEffort, exec.plan.requestedReasoningMode, true, "", false)
+		if err := s.commitModelSwap(ctx, sessionID, exec, "naive"); err != nil {
+			return serveRunResult{}, "", err
+		}
 		s.persistModelSwapMarker(ctx, sessionID, exec.plan, runtime, "succeeded", "naive")
 		return result, "naive", nil
 	}
@@ -839,8 +845,9 @@ func (s *serveServer) runResponseWithModelSwapFallback(ctx context.Context, runt
 	addRuntimeUsage(runtime, handover.Usage)
 	result.Usage.Add(handover.Usage)
 	result.SessionUsage.Add(handover.Usage)
-	exec.markCommitted()
-	s.syncPersistedSessionRuntime(ctx, sessionID, runtime, effectiveTargetModel(exec.plan, runtime), exec.plan.requestedEffort, exec.plan.requestedReasoningMode, true, "", false)
+	if err := s.commitModelSwap(ctx, sessionID, exec, "handover"); err != nil {
+		return serveRunResult{}, "", err
+	}
 	s.persistModelSwapMarker(ctx, sessionID, exec.plan, runtime, "succeeded", "handover")
 	return result, "handover", nil
 }

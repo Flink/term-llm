@@ -345,9 +345,8 @@ type Usage struct {
 
 // ContextUsage describes the context occupied by the latest provider request.
 type ContextUsage struct {
-	UsedTokens            int // Prompt tokens of the most recent request (input + cache read + cache write)
-	Window                int // Context window the provider reports for the model; 0 if unknown
-	ProviderAutoCompactAt int // Display only. Provider-owned compaction threshold; 0 if disabled or unknown.
+	UsedTokens int // Prompt tokens of the most recent request (input + cache read + cache write)
+	Window     int // Context window the provider reports for the model; 0 if unknown
 }
 
 // Add accumulates another usage value into u.

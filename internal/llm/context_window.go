@@ -292,6 +292,18 @@ func InputLimitForModel(model string) int {
 	return configInputLimit(model)
 }
 
+// SessionDisplayInputLimit prefers an observed window and never guesses a
+// Claude Code window from the corresponding Anthropic API model.
+func SessionDisplayInputLimit(provider, model string, observed int) int {
+	if observed > 0 {
+		return observed
+	}
+	if resolveProviderType(provider) == string(config.ProviderTypeClaudeBin) {
+		return 0
+	}
+	return InputLimitForProviderModel(provider, model)
+}
+
 // InputLimitForProviderModel returns the effective input token limit for a model
 // accessed through a specific provider. Some providers expose/reroute models
 // with limits that differ from the model's canonical direct-API limit.

@@ -441,7 +441,7 @@ func ResetContextEstimate(ctx context.Context, store Store, sess *Session) error
 	if store == nil || sess == nil {
 		return nil
 	}
-	if err := store.UpdateContextEstimate(ctx, sess.ID, 0, 0); err != nil {
+	if err := store.UpdateContextEstimate(ctx, sess.ID, 0, 0, 0); err != nil {
 		return err
 	}
 	sess.LastTotalTokens = 0

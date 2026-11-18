@@ -25,7 +25,7 @@ func TestContextWindowPersistence(t *testing.T) {
 	check(11, 2, 100)
 	wrapped := NewLoggingStore(store, nil)
 	for _, change := range []func(){func() { sess.Provider = "changed" }, func() { sess.ProviderKey = "alias" }, func() { sess.Model = "new-model" }} {
-		if err := UpdateContextEstimateWithWindow(ctx, wrapped, sess.ID, 14, 3, 200); err != nil {
+		if err := wrapped.UpdateContextEstimate(ctx, sess.ID, 14, 3, 200); err != nil {
 			t.Fatal(err)
 		}
 		// Ordinary metadata writes must not replace a newer measurement with a stale snapshot.
@@ -40,13 +40,14 @@ func TestContextWindowPersistence(t *testing.T) {
 		}
 		check(14, 3, 0)
 	}
-	if err := UpdateContextEstimateWithWindow(ctx, store, sess.ID, 15, 4, 300); err != nil {
+	if err := store.UpdateContextEstimate(ctx, sess.ID, 15, 4, 300); err != nil {
 		t.Fatal(err)
 	}
-	// Wrapping only the original interface exercises the legacy API fallback.
-	legacy := struct{ Store }{store}
-	if err := UpdateContextEstimateWithWindow(ctx, legacy, sess.ID, 16, 5, 400); err != nil {
+	// A model swap can replace the identity and its reading in one write.
+	sess.Model = "target"
+	sess.LastTotalTokens, sess.LastMessageCount, sess.LastContextWindow = 16, 5, 400
+	if err := wrapped.UpdateWithContextEstimate(ctx, sess); err != nil {
 		t.Fatal(err)
 	}
-	check(16, 5, 0)
+	check(16, 5, 400)
 }

@@ -1212,13 +1212,9 @@ func persistedContextUsage(sess *session.Session, provider string) *serveContext
 		return nil
 	}
 	provider = cmp.Or(strings.TrimSpace(provider), strings.TrimSpace(sess.ProviderKey), strings.TrimSpace(sess.Provider))
-	inputLimit := sess.LastContextWindow
-	if inputLimit <= 0 {
-		inputLimit = llm.InputLimitForProviderModel(provider, sess.Model)
-	}
 	return &serveContextUsage{
 		UsedTokens:        sess.LastTotalTokens,
-		InputLimit:        inputLimit,
+		InputLimit:        llm.SessionDisplayInputLimit(provider, sess.Model, sess.LastContextWindow),
 		CachedInputTokens: sess.CachedInputTokens,
 		Estimated:         true,
 	}
@@ -3665,14 +3661,14 @@ func (s *serveServer) ensurePersistedSessionForProjectBinding(ctx context.Contex
 // does not yet exist, it is created here so the client-supplied model and
 // effort are persisted (rather than the runtime defaults that rt would
 // otherwise use when Run creates the row).
-func (s *serveServer) syncPersistedSessionRuntime(ctx context.Context, sessionID string, rt *serveRuntime, clientModel, clientEffort, reasoningMode string, syncReasoningMode bool, worktreeDir string, useDefaultWorkspace bool) {
+func (s *serveServer) syncPersistedSessionRuntime(ctx context.Context, sessionID string, rt *serveRuntime, clientModel, clientEffort, reasoningMode string, syncReasoningMode bool, worktreeDir string, useDefaultWorkspace bool) error {
 	if s.store == nil || sessionID == "" || rt == nil {
-		return
+		return nil
 	}
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	if rt.retiredInputs.Load() {
-		return
+		return errServeSessionBusy
 	}
 	providerKey := strings.TrimSpace(rt.providerKey)
 	providerName := providerKey
@@ -3712,7 +3708,7 @@ func (s *serveServer) syncPersistedSessionRuntime(ctx context.Context, sessionID
 
 	sess, err := s.store.Get(ctx, sessionID)
 	if err != nil {
-		return
+		return err
 	}
 	// The first-party web UI explicitly requests the validated Git root for a
 	// new root-checkout session. Omission remains unbound for API clients.
@@ -3722,6 +3718,9 @@ func (s *serveServer) syncPersistedSessionRuntime(ctx context.Context, sessionID
 		}
 	}
 	if sess == nil {
+		if rt.swapCandidate.Load() {
+			return session.ErrNotFound
+		}
 		sess = &session.Session{
 			ID:          sessionID,
 			Provider:    providerName,
@@ -3754,7 +3753,7 @@ func (s *serveServer) syncPersistedSessionRuntime(ctx context.Context, sessionID
 				sess = existing
 			} else {
 				log.Printf("[serve] session Create failed for %s: %v", sessionID, createErr)
-				return
+				return createErr
 			}
 		} else {
 			if sess.WorktreeDir != "" {
@@ -3763,7 +3762,7 @@ func (s *serveServer) syncPersistedSessionRuntime(ctx context.Context, sessionID
 				applyRuntimeRootBaseDir(ctx, s.store, sessionID, rt, sess.CWD)
 			}
 			rt.sessionMeta = sess
-			return
+			return nil
 		}
 	}
 
@@ -3785,16 +3784,9 @@ func (s *serveServer) syncPersistedSessionRuntime(ctx context.Context, sessionID
 			changed = true
 		}
 	}
-	if strings.TrimSpace(sess.Provider) != providerName {
-		sess.Provider = providerName
-		changed = true
-	}
-	if strings.TrimSpace(sess.ProviderKey) != providerKey {
-		sess.ProviderKey = providerKey
-		changed = true
-	}
-	if strings.TrimSpace(sess.Model) != modelName {
-		sess.Model = modelName
+	if strings.TrimSpace(sess.Provider) != providerName || strings.TrimSpace(sess.ProviderKey) != providerKey || strings.TrimSpace(sess.Model) != modelName {
+		sess.Provider, sess.ProviderKey, sess.Model = providerName, providerKey, modelName
+		sess.LastContextWindow = 0
 		changed = true
 	}
 	if strings.TrimSpace(sess.ReasoningEffort) != effort {
@@ -3842,11 +3834,9 @@ func (s *serveServer) syncPersistedSessionRuntime(ctx context.Context, sessionID
 			log.Printf("[serve] ignoring conflicting worktree_dir %q for %s already bound to %q", requestedWorktree, sessionID, acceptedWorktree)
 		}
 	}
-	if changed {
-		if err := s.store.Update(ctx, sess); err != nil {
-			log.Printf("[serve] session Update failed for %s: %v", sessionID, err)
-			return
-		}
+	if err := rt.syncSessionMetadata(ctx, s.store, sess, changed); err != nil {
+		log.Printf("[serve] session Update failed for %s: %v", sessionID, err)
+		return err
 	}
 	if acceptedWorktree != "" {
 		applyRuntimeWorktreeBaseDir(ctx, s.store, sessionID, rt, acceptedWorktree)
@@ -3854,6 +3844,7 @@ func (s *serveServer) syncPersistedSessionRuntime(ctx context.Context, sessionID
 		applyRuntimeRootBaseDir(ctx, s.store, sessionID, rt, acceptedRoot)
 	}
 	rt.sessionMeta = sess
+	return nil
 }
 
 func (s *serveServer) syncPersistedSessionReasoningMode(ctx context.Context, sessionID string, rt *serveRuntime, reasoningMode string) {

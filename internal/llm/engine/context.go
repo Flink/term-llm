@@ -185,12 +185,25 @@ func (e *Engine) ContextEstimateBaseline() (int, int) {
 // ContextEstimateSnapshot reads the baseline and its provider-reported window
 // atomically. Never persist the engine's configured limit as a provider reading.
 func (e *Engine) ContextEstimateSnapshot() (total, count, reportedWindow int) {
+	return e.contextEstimateSnapshot("")
+}
+
+// ContextEstimateSnapshotFor omits the window when persisting against a
+// different identity, for example a job running in a reused session.
+func (e *Engine) ContextEstimateSnapshotFor(provider, model string) (total, count, reportedWindow int) {
+	return e.contextEstimateSnapshot(strings.TrimSpace(provider) + "\x00" + strings.TrimSpace(model))
+}
+
+func (e *Engine) contextEstimateSnapshot(key string) (total, count, reportedWindow int) {
 	e.callbackMu.RLock()
 	defer e.callbackMu.RUnlock()
-	if e.reportedContext.UsedTokens > 0 {
-		return e.reportedContext.UsedTokens, 0, e.reportedContext.Window
+	if e.reportedContext.UsedTokens <= 0 {
+		return e.lastTotalTokens, e.lastMessageCount, 0
 	}
-	return e.lastTotalTokens, e.lastMessageCount, 0
+	if key == "" || key == e.reportedContextKey {
+		reportedWindow = e.reportedContext.Window
+	}
+	return e.reportedContext.UsedTokens, 0, reportedWindow
 }
 
 // RestoreReportedWindow seeds only the display reading. A cold session may

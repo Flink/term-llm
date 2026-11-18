@@ -968,10 +968,7 @@ func (m *telegramSessionMgr) newSession(ctx context.Context, chatID int64) (*tel
 	if providerName == "" {
 		providerName = "unknown"
 	}
-	modelName := strings.TrimSpace(runtime.ModelName)
-	if modelName == "" {
-		modelName = "unknown"
-	}
+	modelName := strings.TrimSpace(runtime.ModelName) // Keep the blank CLI default as part of the identity.
 
 	meta := &session.Session{
 		ID:          session.NewID(),

@@ -27,7 +27,7 @@ func TestStreamResponses_ForwardsProviderReportedContextMidRun(t *testing.T) {
 			WithCapabilities(core.Capabilities{ManagesOwnContext: true})
 		provider.AddTurn(mockprovider.MockTurn{
 			Text:    "done",
-			Context: &core.ContextUsage{UsedTokens: 25670, Window: 1_000_000, ProviderAutoCompactAt: 967_000},
+			Context: &core.ContextUsage{UsedTokens: 25670, Window: 1_000_000},
 			Usage:   core.Usage{InputTokens: 6, CachedInputTokens: 63699, CacheWriteTokens: 13071, OutputTokens: 184},
 		})
 		rt := &serveRuntime{provider: provider, engine: engine.NewEngine(provider, nil), defaultModel: "mock-model"}
@@ -84,9 +84,6 @@ func TestStreamResponses_ForwardsProviderReportedContextMidRun(t *testing.T) {
 		got, _ := usage.(map[string]any)
 		if got["used_tokens"] != float64(25670) || got["input_limit"] != float64(1_000_000) {
 			t.Fatalf("%s context_usage = %v, want 25670/1000000 (summed billing usage must not leak in)", name, usage)
-		}
-		if got["provider_auto_compact_at"] != float64(967_000) {
-			t.Fatalf("%s: missing provider threshold in %v", name, got)
 		}
 		// Reporting this number does not turn engine-managed compaction on.
 		if _, ok := got["auto_compact_at"]; ok {

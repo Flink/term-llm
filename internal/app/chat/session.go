@@ -396,7 +396,7 @@ func (r *chatInvocation) buildChatSessionRuntime(ctx context.Context, launch cha
 
 	// Determine model name
 	modelName := getModelName(cfg)
-	if modelName == "" {
+	if modelName == "" && !provider.Capabilities().ManagesOwnContext {
 		modelName = runtime.ExtractModelFromProviderName(provider.Name())
 	}
 	providerKey := cfg.DefaultProvider

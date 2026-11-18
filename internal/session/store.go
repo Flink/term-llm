@@ -57,6 +57,8 @@ type Store interface {
 	GetByNumber(ctx context.Context, number int64) (*Session, error)
 	GetByPrefix(ctx context.Context, prefix string) (*Session, error)
 	Update(ctx context.Context, s *Session) error
+	// UpdateWithContextEstimate commits a new runtime identity and its reading together.
+	UpdateWithContextEstimate(ctx context.Context, s *Session) error
 	MarkTitleSkipped(ctx context.Context, id string, t time.Time) error
 	Delete(ctx context.Context, id string) error
 
@@ -94,7 +96,7 @@ type Store interface {
 	// per-model breakdown that recorded history cannot otherwise reconstruct.
 	RecordModelUsage(ctx context.Context, sessionID string, usage ModelUsage) error
 	ListModelUsage(ctx context.Context, sessionID string) ([]ModelUsage, error)
-	UpdateContextEstimate(ctx context.Context, id string, lastTotalTokens, lastMessageCount int) error
+	UpdateContextEstimate(ctx context.Context, id string, lastTotalTokens, lastMessageCount, window int) error
 	UpdateStatus(ctx context.Context, id string, status SessionStatus) error
 	IncrementUserTurns(ctx context.Context, id string) error
 

@@ -103,7 +103,7 @@ func TestSQLiteUndoRedoShrinksAndExactlyRestoresTranscriptAcrossRestart(t *testi
 	addUndoRedoMessage(t, store, sess.ID, assistant, base.Add(3*time.Second))
 	addUndoRedoMessage(t, store, sess.ID, core.Message{Role: core.RoleEvent, Parts: []core.Part{{Type: core.PartText, Text: "tail event"}}}, base.Add(4*time.Second))
 
-	if err := store.UpdateContextEstimateWithWindow(ctx, sess.ID, 200, 4, 2048); err != nil {
+	if err := store.UpdateContextEstimate(ctx, sess.ID, 200, 4, 2048); err != nil {
 		t.Fatal(err)
 	}
 	before, err := store.GetMessages(ctx, sess.ID, 0, 0)

@@ -639,14 +639,9 @@ func EnsureRequestSessionID(sessionID string, resuming bool) string {
 	return session.NewID()
 }
 
-// applyPersistedContextEstimate seeds the engine's context-estimate baseline from
-// persisted session state so resumed runs can use the last real provider-observed
-// context size instead of falling back to heuristic-only estimation.
+// applyPersistedContextEstimate seeds the last observed reading on resume.
 func applyPersistedContextEstimate(engine *engine.Engine, sess *session.Session) {
-	if engine == nil || sess == nil {
-		return
-	}
-	if sess.LastTotalTokens <= 0 {
+	if engine == nil || sess == nil || sess.LastTotalTokens <= 0 {
 		return
 	}
 	engine.SetContextEstimateBaseline(sess.LastTotalTokens, sess.LastMessageCount)

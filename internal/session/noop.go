@@ -32,6 +32,10 @@ func (s *NoopStore) Update(ctx context.Context, sess *Session) error {
 	return nil
 }
 
+func (s *NoopStore) UpdateWithContextEstimate(ctx context.Context, sess *Session) error {
+	return nil
+}
+
 func (s *NoopStore) MarkTitleSkipped(ctx context.Context, id string, t time.Time) error {
 	return nil
 }
@@ -108,7 +112,7 @@ func (s *NoopStore) ListModelUsage(ctx context.Context, sessionID string) ([]Mod
 	return nil, nil
 }
 
-func (s *NoopStore) UpdateContextEstimate(ctx context.Context, id string, lastTotalTokens, lastMessageCount int) error {
+func (s *NoopStore) UpdateContextEstimate(ctx context.Context, id string, lastTotalTokens, lastMessageCount, window int) error {
 	return nil
 }
 

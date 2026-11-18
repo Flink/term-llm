@@ -2,12 +2,14 @@ package clibin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -134,12 +136,13 @@ func TestClaudeResultWindowMatchesAssistantModel(t *testing.T) {
 		{"exact before alias", `"claude-sonnet-4-6":{"contextWindow":200000},"sonnet[1m]":{"canonicalModel":"claude-sonnet-4-6","contextWindow":1000000}`, 200000},
 		{"extended selector", `"claude-sonnet-4-6[1m]":{"contextWindow":1000000},"haiku":{"contextWindow":200000}`, 1000000},
 		{"reported alias", `"sonnet[1m]":{"canonicalModel":"claude-sonnet-4-6","contextWindow":500000},"haiku":{"contextWindow":200000}`, 500000},
+		{"reported canonical suffix", `"sonnet[1m]":{"canonicalModel":"claude-sonnet-4-6[1m]","contextWindow":1000000}`, 1000000},
 		{"ambiguous aliases", `"sonnet":{"canonicalModel":"claude-sonnet-4-6","contextWindow":200000},"sonnet[1m]":{"canonicalModel":"claude-sonnet-4-6","contextWindow":1000000}`, 0},
 		{"unrelated singleton", `"haiku":{"contextWindow":200000}`, 0},
 		{"unresolved alias", `"sonnet[1m]":{"contextWindow":1000000}`, 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			r := claudeContextReport{model: model, used: 123}
+			r := claudeContextReport{model: model, sawModel: true, used: 123}
 			got := r.observe("result", `{"type":"result","modelUsage":{`+tt.usage+`}}`)
 			if tt.want == 0 {
 				if got != nil {
@@ -154,194 +157,216 @@ func TestClaudeResultWindowMatchesAssistantModel(t *testing.T) {
 	}
 }
 
-// Only display fields from a real get_context_usage summary are needed.
-const claudeSummaryResponse = `{"type":"control_response","response":{"subtype":"success","request_id":"probe","response":{"model":"claude-sonnet-5-5","maxTokens":1000000,"rawMaxTokens":1000000,"autoCompactThreshold":967000,"isAutoCompactEnabled":true}}}`
-
-func TestClaudeProbeValidation(t *testing.T) {
-	for _, tt := range []struct {
-		name, from, to string
-		window, want   int
-	}{
-		{"matching", "", "", 1000000, 967000},
-		{"before result", "", "", 0, 967000},
-		{"other request", `"probe"`, `"interrupt"`, 0, 0},
-		{"error", `"success"`, `"error"`, 0, 0},
-		{"unknown model", `"claude-sonnet-5-5"`, `""`, 0, 0},
-		{"other model", `"claude-sonnet-5-5"`, `"haiku"`, 0, 0},
-		{"window mismatch", "", "", 200000, 0},
-		{"unknown window", `"maxTokens":1000000,"rawMaxTokens":1000000,`, ``, 0, 0},
-		{"maxTokens fallback", `"rawMaxTokens":1000000,`, ``, 0, 967000},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			r := claudeContextReport{model: "claude-sonnet-5-5", used: 100, requestID: "probe", window: tt.window}
-			got := r.observe("control_response", strings.Replace(claudeSummaryResponse, tt.from, tt.to, 1))
-			if tt.want == 0 {
-				if got != nil {
-					t.Fatalf("unexpected reading %+v", got)
-				}
-				return
-			}
-			if got == nil || *got != (core.ContextUsage{UsedTokens: 100, Window: 1000000, ProviderAutoCompactAt: tt.want}) {
-				t.Fatalf("reading = %+v", got)
-			}
-		})
+func TestClaudeContextFallbackWithoutUsageDoesNotRelabelPriorReading(t *testing.T) {
+	report := claudeContextReport{selector: "opus"}
+	report.observe("assistant", claudeAssistantUsageLine("msg_opus", "", 123, 0, 0))
+	report.observe("assistant", `{"type":"assistant","message":{"id":"msg_sonnet","model":"claude-sonnet-5-5"}}`)
+	if got := report.observe("result", `{"type":"result","modelUsage":{"claude-sonnet-5-5":{"contextWindow":200000}}}`); got != nil {
+		t.Fatalf("fallback result relabeled the previous model's occupancy: %+v", got)
+	}
+	report.beginTurn()
+	got := report.observe("assistant", `{"type":"assistant","message":{"id":"msg_new","model":"claude-sonnet-5-5","usage":{"input_tokens":456}}}`)
+	if got == nil || *got != (core.ContextUsage{UsedTokens: 456, Window: 200000}) {
+		t.Fatalf("next turn did not retain the fallback model's verified window: %+v", got)
 	}
 }
 
-func TestClaudeProbeWindowWithoutThreshold(t *testing.T) {
-	assistant := func(id string) string {
-		return strings.Replace(claudeAssistantUsageLine(id, "", 100, 0, 0), "claude-opus-5-5", "claude-sonnet-5-5", 1)
-	}
-	want := core.ContextUsage{UsedTokens: 100, Window: 1000000}
-	for _, tt := range []struct{ name, from, to string }{
-		{"disabled", `true`, `false`},
-		{"unknown enabled", `"isAutoCompactEnabled"`, `"other"`},
-		{"unknown threshold", `"autoCompactThreshold"`, `"other"`},
-		{"above effective window", `"maxTokens":1000000`, `"maxTokens":200000`},
-		{"above window", `967000`, `1000001`},
-		{"negative", `967000`, `-1`},
-		{"wrong threshold type", `967000`, `"967000"`},
-	} {
-		for _, order := range []string{"summary first", "assistant first"} {
-			t.Run(tt.name+"/"+order, func(t *testing.T) {
-				r := claudeContextReport{requestID: "probe"}
-				if order == "assistant first" {
-					r.observe("assistant", assistant("one"))
-				}
-				got := r.observe("control_response", strings.Replace(claudeSummaryResponse, tt.from, tt.to, 1))
-				if order == "summary first" {
-					if got != nil {
-						t.Fatalf("published before assistant usage: %+v", got)
-					}
-					got = r.observe("assistant", assistant("one"))
-				}
-				if got == nil || *got != want {
-					t.Fatalf("reading = %+v, want %+v", got, want)
-				}
-				r.observe("result", `{"type":"result"}`)
-				if got := r.observe("assistant", assistant("two")); got == nil || *got != want {
-					t.Fatalf("reading after result without modelUsage = %+v, want %+v", got, want)
-				}
-			})
-		}
-	}
-}
-
-func TestClaudeProbeDoesNotSurviveFallback(t *testing.T) {
-	r := claudeContextReport{requestID: "probe"}
-	line := strings.ReplaceAll(claudeAssistantUsageLine("one", "", 100, 0, 0), "claude-opus-5-5", "claude-sonnet-5-5")
-	if got := r.observe("control_response", claudeSummaryResponse); got != nil {
-		t.Fatal("published before assistant usage")
-	}
-	if got := r.observe("assistant", line); got.ProviderAutoCompactAt != 967000 {
-		t.Fatalf("reading = %+v", got)
-	}
-	fallback := claudeAssistantUsageLine("two", "", 120, 0, 0)
-	for _, line := range []string{fallback, line} {
-		if got := r.observe("assistant", line); got.ProviderAutoCompactAt != 0 {
-			t.Fatalf("stale threshold %+v", got)
-		}
-	}
-}
-
-// cutoffInput accepts exactly limit bytes and fails the first write crossing it.
-type cutoffInput struct {
-	accepted []byte
-	limit    int
-	failed   bool
-}
-
-func (w *cutoffInput) Write(p []byte) (int, error) {
-	n := min(len(p), w.limit-len(w.accepted))
-	w.accepted = append(w.accepted, p[:n]...)
-	if n < len(p) {
-		w.failed = true
-		return n, syscall.EPIPE
-	}
-	return n, nil
-}
-
-func TestClaudeStartupWriteBrokenPipe(t *testing.T) {
-	const prompt = `{"type":"user","message":{"role":"user","content":"hello"}}`
-	for _, tc := range []struct {
-		name  string
-		limit int
-		fatal bool
-	}{
-		{"before user newline", len(prompt), true},
-		{"after user newline", len(prompt) + 1, false},
-		{"within optional probe", len(prompt) + 5, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			w := &cutoffInput{limit: tc.limit}
-			var r claudeContextReport
-			err := r.writeInitialInput(w, prompt, false)
-			if !w.failed || string(w.accepted) != (prompt + "\n" + `{"type"`)[:tc.limit] {
-				t.Fatal("writer did not break at the expected frame boundary")
-			}
-			if tc.fatal && !errors.Is(err, syscall.EPIPE) || !tc.fatal && err != nil {
-				t.Fatalf("startup write after %d accepted bytes: err=%v, want fatal=%t", tc.limit, err, tc.fatal)
-			}
-		})
-	}
-}
-
-func TestClaudeContextProbeSubprocess(t *testing.T) {
+func TestClaudeContextPassiveSubprocess(t *testing.T) {
 	const script = `#!/usr/bin/env python3
 import json, sys
+
+opus = 'claude-opus-5-5'
+sonnet = 'claude-sonnet-5-5'
+
+def emit(**kwargs):
+    print(json.dumps(kwargs), flush=True)
+
+def assistant(model=None, tokens=None, id='main', parent=None):
+    msg = {'id': id}
+    if model is not None:
+        msg['model'] = model
+    if tokens is not None:
+        msg['usage'] = {'input_tokens': tokens}
+    emit(type='assistant', message=msg, parent_tool_use_id=parent)
+
 user = json.loads(sys.stdin.readline())
 assert user['type'] == 'user'
-if user['text'] != 'ephemeral':
-    req = json.loads(sys.stdin.readline())
-    assert req['type'] == 'control_request' and req['request'] == {'subtype':'get_context_usage','detail':'summary'}
-    if user['text'] == 'reply':
-        resp = json.loads('` + claudeSummaryResponse + `')
-        resp['response']['request_id'] = req['request_id']
-        resp['response']['response']['memoryFiles'] = [{'path':'PRIVATE-SENTINEL'}]
-        print(json.dumps(resp), flush=True)
-print('{"type":"assistant","message":{"id":"one","model":"claude-sonnet-5-5","usage":{"input_tokens":123}}}', flush=True)
-print('{"type":"result","result":"done"}', flush=True)
+mode = user['message']['content'][0]['text']
+emit(type='system', subtype='init', session_id='test-session', model='unverified-init-model')
+usage = {}
+if mode == 'learn':
+    assistant(opus, 123)
+    assistant(tokens=999, id='unknown') # Uncorrelated partial cannot relabel usage.
+    usage = {'opus[1m]': {'canonicalModel': opus, 'contextWindow': 1000000}}
+elif mode == 'same' or mode == 'extended':
+    if mode == 'extended':
+        assert sys.argv[sys.argv.index('--model') + 1] == 'opus[1m]'
+        assert sys.argv[sys.argv.index('--resume') + 1] == 'test-session'
+    assistant(opus, 123) # Repeat the message id and usage to exercise per-turn reset.
+    usage = {'haiku': {'contextWindow': 200000}}
+elif mode == 'result-only':
+    usage = {opus: {'contextWindow': 77000}}
+elif mode == 'no-real-assistant':
+    assistant(tokens=9) # The id from a past turn does not identify this frame.
+    assistant('<synthetic>', 10)
+    assistant(opus, 11, parent='toolu_side')
+    usage = {opus: {'contextWindow': 88000}}
+elif mode == 'ephemeral':
+    assistant(sonnet, 321)
+    usage = {sonnet: {'contextWindow': 204800}}
+elif mode == 'fallback':
+    assistant(opus, 123)
+    assistant(sonnet, id='fallback')
+    assistant(tokens=456, id='fallback') # Model-less partial of an identified message.
+    usage = {opus: {'contextWindow': 1000000},
+             'sonnet': {'canonicalModel': sonnet, 'contextWindow': 200000},
+             'sonnet[1m]': {'canonicalModel': sonnet, 'contextWindow': 1000000}}
+elif mode == 'different':
+    assistant(sonnet, 456)
+    usage = {opus: {'contextWindow': 1000000}}
+else:
+    raise AssertionError(mode)
+emit(type='result', subtype='success', result='done', modelUsage=usage)
+# EOF arrives only after the result; there must never have been another input frame.
 assert not sys.stdin.read()
-if user['text'] == 'reply': sys.exit(42)
 `
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	p := NewClaudeBinProvider("sonnet", nil)
-	for _, mode := range []string{"reply", "ignore", "ephemeral"} {
-		t.Run(mode, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			events := make(chan core.Event, 16)
-			err := p.runClaudeCommand(ctx, nil, "", `{"type":"user","text":"`+mode+`"}`, "", false, eventSender{ctx: ctx, ch: events}, mode == "ephemeral", false)
-			if mode == "reply" {
+	run := func(t *testing.T, p *ClaudeBinProvider, messages []core.Message, model, action string, want ...core.ContextUsage) []core.Message {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ephemeral := action == "ephemeral"
+		if ephemeral {
+			messages = nil
+		}
+		messages = append(messages, core.UserText(action))
+		stream, err := p.Stream(ctx, core.Request{Model: model, Messages: messages, Ephemeral: ephemeral})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer stream.Close()
+		var got []core.ContextUsage
+		for {
+			ev, err := stream.Recv()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err == nil {
+				err = ev.Err
+			}
+			if err != nil {
 				var ce *CLICommandError
-				if !errors.As(err, &ce) || ce.ExitCode != 42 || strings.Contains(ce.StdoutTail, "PRIVATE-SENTINEL") {
-					t.Fatal("expected a sanitized CLI failure")
+				if errors.As(err, &ce) {
+					t.Fatalf("fake CLI (%s) failed: %s", action, ce.StderrTail)
 				}
-			} else if err != nil {
 				t.Fatal(err)
 			}
-			close(events)
-			found := false
-			for ev := range events {
-				if ev.Type != core.EventContextUsage {
-					continue
-				}
-				found = true
-				want := 0
-				if mode == "reply" {
-					want = 967000
-				}
-				if ev.Context.ProviderAutoCompactAt != want {
-					t.Fatalf("unexpected reading %+v", ev.Context)
-				}
+			if ev.Type == core.EventContextUsage {
+				got = append(got, *ev.Context)
 			}
-			if found != (mode != "ephemeral") {
-				t.Fatalf("context reported = %t", found)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s readings = %+v, want %+v", action, got, want)
+		}
+		return append(messages, core.AssistantText("done"))
+	}
+
+	p := NewClaudeBinProvider("opus", nil)
+	known := core.ContextUsage{UsedTokens: 123, Window: 1000000}
+	unknown := core.ContextUsage{UsedTokens: 123}
+	transcript := run(t, p, nil, "", "learn", unknown, known)
+	state, ok := p.ExportProviderState()
+	if !ok {
+		t.Fatal("expected provider state after learning the window")
+	}
+	var exported map[string]any
+	if err := json.Unmarshal(state, &exported); err != nil {
+		t.Fatal(err)
+	}
+	if exported["context_model"] != "claude-opus-5-5" || exported["context_window"] != float64(1000000) || exported["context_selector"] != "opus" {
+		t.Fatalf("unexpected persisted window: %s", state)
+	}
+	// The blob has only its usual three continuation fields and the three
+	// context fields: no per-turn usage or message identity is carried over.
+	if len(exported) != 6 {
+		t.Fatalf("unexpected fields in provider state: %s", state)
+	}
+
+	t.Run("CLI default is measured again", func(t *testing.T) {
+		p := NewClaudeBinProvider("", nil)
+		messages := run(t, p, nil, "", "learn", unknown, known)
+		state, _ := p.ExportProviderState()
+		if strings.Contains(string(state), "context_window") {
+			t.Fatalf("unresolved selector should not checkpoint a reusable window: %s", state)
+		}
+		run(t, p, messages, "", "same", unknown)
+	})
+
+	t.Run("subsequent subprocesses", func(t *testing.T) {
+		messages := run(t, p, transcript, "", "same", known)
+		messages = run(t, p, messages, "", "result-only")
+		messages = run(t, p, messages, "", "no-real-assistant")
+		run(t, p, nil, "sonnet", "ephemeral")
+		messages = run(t, p, messages, "", "same", known)
+		messages = run(t, p, messages, "", "fallback", known, core.ContextUsage{UsedTokens: 456})
+		run(t, p, messages, "", "same", unknown)
+	})
+
+	for _, tc := range []struct {
+		name, model, action string
+		want                []core.ContextUsage
+	}{
+		{"same effective selector and actual model", "opus-max", "same", []core.ContextUsage{known}},
+		{"same selector but different actual model", "opus", "different", []core.ContextUsage{{UsedTokens: 456}}},
+		{"different selector with same wire model", "opus[1m]", "extended", []core.ContextUsage{unknown}},
+		{"no confirmed main model", "opus", "no-real-assistant", nil},
+	} {
+		t.Run("rehydrate/"+tc.name, func(t *testing.T) {
+			restored := NewClaudeBinProvider("opus", nil)
+			if err := restored.ImportProviderState(state); err != nil {
+				t.Fatal(err)
+			}
+			run(t, restored, slices.Clone(transcript), tc.model, tc.action, tc.want...)
+		})
+	}
+}
+
+func TestClaudeContextProviderStateValidationAndReset(t *testing.T) {
+	for _, fields := range []string{
+		``, // Legacy state.
+		`,"context_model":"claude-opus-5-5","context_window":0,"context_selector":"opus"`,
+		`,"context_model":"claude-opus-5-5","context_window":-1,"context_selector":"opus"`,
+		`,"context_model":"<synthetic>","context_window":1000000,"context_selector":"opus"`,
+		`,"context_model":" ","context_window":1000000,"context_selector":"opus"`,
+		`,"context_window":1000000,"context_selector":"opus"`,
+		`,"context_model":"claude-opus-5-5","context_window":1000000`,
+		`,"context_model":"claude-opus-5-5","context_window":1000000,"context_selector":" "`,
+	} {
+		t.Run(fields, func(t *testing.T) {
+			p := NewClaudeBinProvider("opus", nil)
+			if err := p.ImportProviderState([]byte(`{"session_id":"native","messages_sent":2` + fields + `}`)); err != nil {
+				t.Fatal(err)
+			}
+			state, ok := p.ExportProviderState()
+			if !ok || strings.Contains(string(state), "context_") || p.sessionID != "native" || p.messagesSent != 2 {
+				t.Fatalf("invalid window affected legacy continuation: %s", state)
 			}
 		})
+	}
+
+	p := NewClaudeBinProvider("opus", nil)
+	state := []byte(`{"session_id":"native","messages_sent":2,"context_model":"claude-opus-5-5","context_window":1000000,"context_selector":"opus"}`)
+	if err := p.ImportProviderState(state); err != nil {
+		t.Fatal(err)
+	}
+	p.ResetConversation()
+	p.contextReport.useSelector("opus")
+	got := p.contextReport.observe("assistant", claudeAssistantUsageLine("msg_new", "", 123, 0, 0))
+	if got == nil || *got != (core.ContextUsage{UsedTokens: 123}) {
+		t.Fatalf("fresh conversation inherited a stale window: %+v", got)
 	}
 }

@@ -235,9 +235,9 @@ func appendStatsContextSections(out *serveStatsResponse, meta *session.Session, 
 		} else {
 			out.DurableMetrics = &durable
 		}
-		provider, model = meta.ProviderKey, meta.Model
+		provider, model = cmp.Or(meta.ProviderKey, meta.Provider), meta.Model
 		used = meta.LastTotalTokens
-		limit = cmp.Or(meta.LastContextWindow, llm.InputLimitForProviderModel(provider, model))
+		limit = llm.SessionDisplayInputLimit(provider, model, meta.LastContextWindow)
 		if session.HasCompactionBoundary(meta) {
 			active = nil
 			for _, message := range messages {
@@ -248,8 +248,10 @@ func appendStatsContextSections(out *serveStatsResponse, meta *session.Session, 
 		}
 	}
 	if rt != nil && rt.engine != nil {
-		if live := rt.engine.ContextUsage(); live.UsedTokens > 0 || live.Window > 0 {
+		if live := rt.engine.ContextUsage(); live.UsedTokens > 0 {
 			used, limit = live.UsedTokens, live.Window
+		} else {
+			limit = cmp.Or(live.Window, limit)
 		}
 		soft, hard, compactEnabled = rt.engine.CompactionThresholds()
 		if diagnostics, ok := rt.engine.ToolDiscoveryDiagnostics(id); ok {

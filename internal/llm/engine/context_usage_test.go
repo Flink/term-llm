@@ -72,6 +72,12 @@ func testReportedContextIsDisplayOnly(t *testing.T, withTools bool) {
 	if _, _, enabled := e.CompactionThresholds(); enabled {
 		t.Fatal("compaction enabled for a self-managed provider")
 	}
+	if total, _, window := e.ContextEstimateSnapshotFor("claude-bin", "opus"); total != 25670 || window != 1_000_000 {
+		t.Fatalf("persisted context for the active model = %d/%d", total, window)
+	}
+	if total, _, window := e.ContextEstimateSnapshotFor("claude-bin", "sonnet"); total != 25670 || window != 0 {
+		t.Fatalf("persisted context under a different model = %d/%d; want tokens only", total, window)
+	}
 	// The summed per-turn billing usage must not become a context baseline.
 	if got := e.LastTotalTokens(); got != 0 {
 		t.Fatalf("LastTotalTokens() = %d, want 0", got)

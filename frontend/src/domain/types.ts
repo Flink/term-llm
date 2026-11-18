@@ -148,8 +148,6 @@ export interface ContextUsage {
   estimated: boolean;
   /** Occupancy at which term-llm itself compacts; absent when it does not compact this context. */
   autoCompactAt?: number;
-  /** Provider-managed threshold, currently reported only by Claude Code. */
-  providerAutoCompactAt?: number;
 }
 
 export interface Usage {

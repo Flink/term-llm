@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -724,7 +725,7 @@ func (r *cmdRunner) ensureRunSession(ctx context.Context, store session.Store, r
 			providerName = n
 		}
 	}
-	if strings.TrimSpace(modelName) == "" {
+	if strings.TrimSpace(modelName) == "" && (provider == nil || !provider.Capabilities().ManagesOwnContext) {
 		modelName = "unknown"
 	}
 	sess := &session.Session{
@@ -829,8 +830,8 @@ func (r *cmdRunner) runProgressive(ctx context.Context, runtime *serveRuntime, e
 					CachedInputTokens: metrics.CachedInputTokens, CacheWriteTokens: metrics.CacheWriteTokens,
 				}, 1, metrics.ToolCalls)
 			}
-			if total, count, window := engine.ContextEstimateSnapshot(); total > 0 {
-				if err := session.UpdateContextEstimateWithWindow(cbCtx, persistStore, sess.ID, total, count, window); err != nil {
+			if total, count, window := engine.ContextEstimateSnapshotFor(cmp.Or(sess.ProviderKey, sess.Provider), sess.Model); total > 0 {
+				if err := persistStore.UpdateContextEstimate(cbCtx, sess.ID, total, count, window); err != nil {
 					runtimeoutput.Logf("[runner] session UpdateContextEstimate failed for %s: %v", sess.ID, err)
 				}
 			}

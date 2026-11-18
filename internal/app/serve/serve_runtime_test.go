@@ -511,6 +511,10 @@ func (s *serveRuntimeTestStore) Update(ctx context.Context, sess *session.Sessio
 	return nil
 }
 
+func (s *serveRuntimeTestStore) UpdateWithContextEstimate(ctx context.Context, sess *session.Session) error {
+	return s.Update(ctx, sess)
+}
+
 func (s *serveRuntimeTestStore) MarkTitleSkipped(ctx context.Context, id string, t time.Time) error {
 	return nil
 }
@@ -844,12 +848,11 @@ func (s *serveRuntimeTestStore) ListModelUsage(ctx context.Context, sessionID st
 	return out, nil
 }
 
-func (s *serveRuntimeTestStore) UpdateContextEstimate(ctx context.Context, id string, lastTotalTokens, lastMessageCount int) error {
+func (s *serveRuntimeTestStore) UpdateContextEstimate(ctx context.Context, id string, lastTotalTokens, lastMessageCount, window int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if sess, ok := s.sessions[id]; ok {
-		sess.LastTotalTokens = lastTotalTokens
-		sess.LastMessageCount = lastMessageCount
+		sess.LastTotalTokens, sess.LastMessageCount, sess.LastContextWindow = lastTotalTokens, lastMessageCount, window
 	}
 	s.updateContextEstimateCalls++
 	return nil

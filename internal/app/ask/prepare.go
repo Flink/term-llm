@@ -33,7 +33,9 @@ func prepareAskConversation(ctx context.Context, selected appruntime.ModelSelect
 			sessionID = session.NewID()
 		}
 		model := selected.Model
-		if model == "" {
+		// For CLI-managed context, a blank default selector is an identity;
+		// the provider display name may instead suggest an explicit model.
+		if model == "" && !provider.Capabilities().ManagesOwnContext {
 			model = appruntime.ExtractModelFromProviderName(provider.Name())
 		}
 		agentName := ""

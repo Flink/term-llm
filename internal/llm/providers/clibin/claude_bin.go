@@ -183,6 +183,7 @@ func (p *ClaudeBinProvider) ResetConversation() {
 	p.sessionID = ""
 	p.messagesSent = 0
 	p.transcriptDigest = ""
+	p.contextReport = claudeContextReport{}
 	p.lastSystemPrompt, p.sessionWorkingDir = "", ""
 	// There is no session left to branch from, so a pending branch request would
 	// only make the next turn ask Claude Code to fork nothing.
@@ -280,6 +281,9 @@ type claudeBinProviderState struct {
 	MessagesSent     int    `json:"messages_sent"`
 	TranscriptDigest string `json:"transcript_digest,omitempty"`
 	WorkingDir       string `json:"working_dir,omitempty"`
+	ContextModel     string `json:"context_model,omitempty"`
+	ContextWindow    int    `json:"context_window,omitempty"`
+	ContextSelector  string `json:"context_selector,omitempty"`
 }
 
 // ExportProviderState persists Claude Code's session id plus the term-llm
@@ -290,12 +294,17 @@ func (p *ClaudeBinProvider) ExportProviderState() ([]byte, bool) {
 	if p.sessionID == "" {
 		return nil, false
 	}
-	data, err := json.Marshal(claudeBinProviderState{
+	state := claudeBinProviderState{
 		SessionID:        p.sessionID,
 		MessagesSent:     p.messagesSent,
 		TranscriptDigest: p.transcriptDigest,
 		WorkingDir:       p.sessionWorkingDir,
-	})
+	}
+	if p.contextReport.window > 0 && p.contextReport.selector != "" {
+		state.ContextModel, state.ContextWindow = p.contextReport.model, p.contextReport.window
+		state.ContextSelector = p.contextReport.selector
+	}
+	data, err := json.Marshal(state)
 	if err != nil {
 		return nil, false
 	}
@@ -325,6 +334,8 @@ func (p *ClaudeBinProvider) ImportProviderState(data []byte) error {
 	// The cached prompt may belong to another session; use the caller's until
 	// this session's next turn.
 	p.sessionWorkingDir, p.lastSystemPrompt = state.WorkingDir, ""
+	// The optional window is a hint until the next main assistant confirms its model.
+	p.contextReport.restoreWindow(state.ContextModel, state.ContextWindow, state.ContextSelector)
 	return nil
 }
 
@@ -455,6 +466,11 @@ func (p *ClaudeBinProvider) Stream(ctx context.Context, req core.Request) (core.
 			runtimeoutput.Warn("claude-bin resume boundary no longer matches the request transcript; resetting conversation state",
 				"messages_sent", p.messagesSent, "request_messages", len(req.Messages))
 			p.ResetConversation()
+		}
+
+		if !req.Ephemeral {
+			selector, _ := p.requestModelSelector(req.Model)
+			p.contextReport.useSelector(selector)
 		}
 
 		// Build the command arguments, passing events channel for tool execution routing.
@@ -786,7 +802,7 @@ func (p *ClaudeBinProvider) runClaudeCommand(
 
 	p.interruptSent.Store(false)
 	streamInput := &claudeStreamInput{writer: stdin}
-	if err := p.contextReport.writeInitialInput(stdin, userPrompt, ephemeral); err != nil {
+	if err := streamInput.WriteLine([]byte(userPrompt)); err != nil {
 		_ = streamInput.Close()
 		return fmt.Errorf("write claude stream-json input: %w", err)
 	}
@@ -860,16 +876,8 @@ func (p *ClaudeBinProvider) runClaudeCommand(
 		scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
-			lineType := claudeStreamLineType(line)
-			// Drop malformed control replies too: neither the diagnostic tail nor
-			// the debug parse error should contain private breakdowns.
-			if lineType == "" && strings.Contains(line, `"control_response"`) {
-				continue
-			}
-			if lineType != "control_response" {
-				recordCLITailLine(&stdoutMu, &stdoutTail, line, claudeStdoutTailMaxLines)
-			}
-			if lineType == "result" {
+			recordCLITailLine(&stdoutMu, &stdoutTail, line, claudeStdoutTailMaxLines)
+			if claudeStreamLineType(line) == "result" {
 				// Streaming input keeps Claude alive for more user turns. term-llm
 				// resumes those as separate provider turns, so EOF after this
 				// terminal frame lets the current subprocess exit cleanly.
@@ -982,6 +990,9 @@ func (p *ClaudeBinProvider) dispatchClaudeEvents(
 	send eventSender,
 	ephemeral bool,
 ) (*core.Usage, bool, bool, error) {
+	if !ephemeral {
+		p.contextReport.beginTurn()
+	}
 	var (
 		lastUsage             *core.Usage
 		linesOpen             = true
@@ -1048,6 +1059,16 @@ func (p *ClaudeBinProvider) dispatchClaudeEvents(
 drained:
 
 	return lastUsage, toolsExecuted, handledTerminalResult, nil
+}
+
+func claudeStreamLineType(line string) string {
+	var message struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal([]byte(line), &message) != nil {
+		return ""
+	}
+	return message.Type
 }
 
 func (p *ClaudeBinProvider) handleClaudeLine(
@@ -1284,6 +1305,11 @@ func claudeResumeDelivery(messages []core.Message) []core.Message {
 	return delivery
 }
 
+func (p *ClaudeBinProvider) requestModelSelector(model string) (selector, effort string) {
+	model, effort = parseClaudeEffort(core.ChooseModel(model, p.model))
+	return mapModelToClaudeArg(model), effort
+}
+
 // buildArgs constructs the command line arguments for the claude binary.
 // The events channel is passed to the MCP server for routing tool execution events.
 // The MCP server is kept alive across turns - call CleanupMCP() when the conversation ends.
@@ -1324,8 +1350,7 @@ func (p *ClaudeBinProvider) buildArgs(ctx context.Context, req core.Request, sen
 	args = append(args, "--max-turns", strconv.Itoa(claudeMaxTurns(req)))
 
 	// Effort precedence: req.ReasoningEffort wins over model suffix, which wins over provider-level effort.
-	model := core.ChooseModel(req.Model, p.model)
-	strippedModel, reqEffort := parseClaudeEffort(model)
+	selector, reqEffort := p.requestModelSelector(req.Model)
 	effort := p.effort
 	if reqEffort != "" {
 		effort = reqEffort
@@ -1333,8 +1358,8 @@ func (p *ClaudeBinProvider) buildArgs(ctx context.Context, req core.Request, sen
 	if v := strings.TrimSpace(req.ReasoningEffort); v != "" {
 		effort = v
 	}
-	if strippedModel != "" {
-		args = append(args, "--model", mapModelToClaudeArg(strippedModel))
+	if selector != "" {
+		args = append(args, "--model", selector)
 	}
 
 	// Disable all built-in Claude Code tools. MCP tools supplied via --mcp-config

@@ -178,6 +178,10 @@ func (s *SQLiteStore) GetByPrefix(ctx context.Context, prefix string) (*Session,
 // PinnedSessionStore, so a long-running runtime's stale snapshot cannot unpin
 // or reorder a conversation.
 func (s *SQLiteStore) Update(ctx context.Context, sess *Session) error {
+	return s.update(ctx, sess, false)
+}
+
+func (s *SQLiteStore) update(ctx context.Context, sess *Session, withEstimate bool) error {
 	sess.UpdatedAt = time.Now()
 	if sess.Origin == "" {
 		sess.Origin = OriginTUI
@@ -225,10 +229,16 @@ func (s *SQLiteStore) Update(ctx context.Context, sess *Session) error {
 	if s.hasShare {
 		shareClause = ", share = ?"
 	}
+	contextClause := "last_context_window = CASE WHEN provider IS NOT ? OR COALESCE(provider_key, '') <> ? OR model IS NOT ? THEN 0 ELSE last_context_window END"
+	contextArgs := []any{sess.Provider, sess.ProviderKey, sess.Model}
+	if withEstimate {
+		contextClause = "last_total_tokens = ?, last_message_count = ?, last_context_window = ?"
+		contextArgs = []any{max(0, sess.LastTotalTokens), max(0, sess.LastMessageCount), max(0, sess.LastContextWindow)}
+	}
 	query := `
 		UPDATE sessions SET name = ?, summary = ?, generated_short_title = ?, generated_long_title = ?, title_source = ?, title_generated_at = ?, title_basis_msg_seq = ?` +
 		titleSkippedAtClause + `,
-		       last_context_window = CASE WHEN provider IS NOT ? OR COALESCE(provider_key, '') <> ? OR model IS NOT ? THEN 0 ELSE last_context_window END,
+		       ` + contextClause + `,
 		       provider = ?, provider_key = ?, model = ?` + reasoningEffortClause + reasoningModeClause + `, mode = ?` + approvalModeClause + `, origin = ?,
 		       agent = CASE WHEN COALESCE(agent, '') <> '' AND COALESCE(?, '') = '' THEN agent ELSE ? END, ` + cwdAssignment + worktreeDirClause + `,
 		       updated_at = ?, archived = ?, parent_id = ?, search = ?, tools = ?, mcp = ?,
@@ -241,10 +251,8 @@ func (s *SQLiteStore) Update(ctx context.Context, sess *Session) error {
 	if s.hasTitleSkippedAt {
 		args = append(args, nullTime(sess.TitleSkippedAt))
 	}
-	args = append(args,
-		sess.Provider, sess.ProviderKey, sess.Model,
-		sess.Provider, nullString(sess.ProviderKey), sess.Model,
-	)
+	args = append(args, contextArgs...)
+	args = append(args, sess.Provider, nullString(sess.ProviderKey), sess.Model)
 	if s.hasReasoningEffort {
 		args = append(args, nullString(sess.ReasoningEffort))
 	}

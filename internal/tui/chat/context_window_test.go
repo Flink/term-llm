@@ -21,11 +21,11 @@ func reportedWindowSession() *session.Session {
 
 func reportedWindowChat(store session.Store, s *session.Session) (*Model, *mockprovider.MockProvider) {
 	p := mockprovider.NewMockProvider("claude-bin").WithCapabilities(core.Capabilities{ManagesOwnContext: true})
-	return newReportedWindowChat(store, s, p, engine.NewEngine(p, nil)), p
+	return newReportedWindowChat(store, s, p, engine.NewEngine(p, nil), "opus"), p
 }
 
-func newReportedWindowChat(store session.Store, s *session.Session, p *mockprovider.MockProvider, e *engine.Engine) *Model {
-	return New(&config.Config{DefaultProvider: "claude-bin"}, p, e, "claude-bin", "opus", nil, 20, false, false, false, nil, "", "", false, "", store, s, false, nil, false, false, "", "", false)
+func newReportedWindowChat(store session.Store, s *session.Session, p *mockprovider.MockProvider, e *engine.Engine, model string) *Model {
+	return New(&config.Config{DefaultProvider: "claude-bin"}, p, e, "claude-bin", model, nil, 20, false, false, false, nil, "", "", false, "", store, s, false, nil, false, false, "", "", false)
 }
 
 func streamWindowReading(t *testing.T, m *Model, p *mockprovider.MockProvider, reading core.ContextUsage) {
@@ -49,12 +49,14 @@ func streamWindowReading(t *testing.T, m *Model, p *mockprovider.MockProvider, r
 
 func TestTUIContextWindowStreamDoneSQLiteReopen(t *testing.T) {
 	for _, tc := range []struct {
-		name, savedProvider, savedModel string
-		wantWindow                      int
+		name, savedProvider, savedModel, activeModel string
+		wantWindow                                   int
 	}{
-		{"matching identity", "claude-bin", "opus", 1000000},
-		{"different provider", "other-provider", "opus", 0},
-		{"different model", "claude-bin", "sonnet", 0},
+		{"matching identity", "claude-bin", "opus", "opus", 1000000},
+		{"CLI default", "claude-bin", "", "", 1000000},
+		{"different provider", "other-provider", "opus", "opus", 0},
+		{"different model", "claude-bin", "sonnet", "opus", 0},
+		{"CLI default differs from saved model", "claude-bin", "sonnet", "", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := session.Config{Enabled: true, Path: filepath.Join(t.TempDir(), "sessions.db")}
@@ -67,7 +69,8 @@ func TestTUIContextWindowStreamDoneSQLiteReopen(t *testing.T) {
 			if err := store.Create(t.Context(), s); err != nil {
 				t.Fatal(err)
 			}
-			m, p := reportedWindowChat(store, s)
+			p := mockprovider.NewMockProvider("claude-bin").WithCapabilities(core.Capabilities{ManagesOwnContext: true})
+			m := newReportedWindowChat(store, s, p, engine.NewEngine(p, nil), tc.activeModel)
 			reading := core.ContextUsage{UsedTokens: 634800, Window: 1000000}
 			streamWindowReading(t, m, p, reading)
 			m.streaming = true
@@ -124,15 +127,24 @@ func TestTUIContextWindowRestore(t *testing.T) {
 }
 
 func TestTUIContextWindowRestoreUsesActiveIdentity(t *testing.T) {
-	for _, tc := range []struct{ provider, model string }{{"other-provider", "opus"}, {"claude-bin", "other-model"}} {
-		t.Run(tc.provider+"/"+tc.model, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, savedProvider, savedModel, activeModel string
+		wantWindow                                   int
+	}{
+		{"different provider", "other-provider", "opus", "opus", 0},
+		{"different model", "claude-bin", "other-model", "opus", 0},
+		{"same CLI default", "claude-bin", "", "", 200000},
+		{"CLI default differs from saved model", "claude-bin", "sonnet", "", 0},
+		{"explicit model differs from saved CLI default", "claude-bin", "", "sonnet", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			saved := reportedWindowSession()
-			saved.ProviderKey = tc.provider
-			saved.Model = tc.model
+			saved.ProviderKey, saved.Model = tc.savedProvider, tc.savedModel
 			saved.LastTotalTokens, saved.LastContextWindow = 12000, 200000
-			m, _ := reportedWindowChat(nil, saved) // runtime remains claude-bin:opus
-			if got := m.engine.ContextUsage(); got.Window != 0 {
-				t.Fatalf("active runtime inherited saved window: %+v", got)
+			p := mockprovider.NewMockProvider("claude-bin").WithCapabilities(core.Capabilities{ManagesOwnContext: true})
+			m := newReportedWindowChat(nil, saved, p, engine.NewEngine(p, nil), tc.activeModel)
+			if got := m.engine.ContextUsage(); got.Window != tc.wantWindow {
+				t.Fatalf("active runtime context = %+v, want window %d", got, tc.wantWindow)
 			}
 		})
 	}
@@ -177,7 +189,7 @@ func TestTUIContextWindowNewPreservesLiveEngine(t *testing.T) {
 			first, p := reportedWindowChat(nil, saved)
 			live := core.ContextUsage{UsedTokens: 6000}
 			streamWindowReading(t, first, p, live)
-			resumed := newReportedWindowChat(nil, saved, p, first.engine)
+			resumed := newReportedWindowChat(nil, saved, p, first.engine, "opus")
 			if got := resumed.engine.ContextUsage(); got != live {
 				t.Fatalf("New replaced live reading %+v with %+v", live, got)
 			}

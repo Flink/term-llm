@@ -2395,7 +2395,7 @@ func TestSQLiteStoreUpdateMetricsIncludesCachedTokens(t *testing.T) {
 	if err := store.UpdateMetrics(ctx, sess.ID, 1, 2, 50, 100, 1200, 50); err != nil {
 		t.Fatalf("failed to update session metrics (turn 2): %v", err)
 	}
-	if err := store.UpdateContextEstimate(ctx, sess.ID, 127_637, 42); err != nil {
+	if err := store.UpdateContextEstimate(ctx, sess.ID, 127_637, 42, 0); err != nil {
 		t.Fatalf("failed to update context estimate: %v", err)
 	}
 	loaded2, err := store.Get(ctx, sess.ID)
@@ -2500,7 +2500,7 @@ func TestUpdateDoesNotClobberTokenMetrics(t *testing.T) {
 	if err := store.UpdateMetrics(ctx, sess.ID, 3, 5, 1000, 250, 700, 500); err != nil {
 		t.Fatalf("UpdateMetrics: %v", err)
 	}
-	if err := store.UpdateContextEstimate(ctx, sess.ID, 127_637, 42); err != nil {
+	if err := store.UpdateContextEstimate(ctx, sess.ID, 127_637, 42, 0); err != nil {
 		t.Fatalf("UpdateContextEstimate: %v", err)
 	}
 

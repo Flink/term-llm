@@ -1,4 +1,3 @@
-import type { ComponentChildren } from 'preact';
 import type { ContextReading } from '../domain/context-meter';
 
 /** A ring filled clockwise from twelve o'clock with the reading's share of the window. */
@@ -6,12 +5,12 @@ export function ContextRing({
   reading,
   size,
   stroke,
-  children,
+  label,
 }: {
   reading: ContextReading;
   size: number;
   stroke: number;
-  children?: ComponentChildren;
+  label?: string;
 }) {
   const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
@@ -36,7 +35,17 @@ export function ContextRing({
           transform={`rotate(-90 ${center} ${center})`}
         />
       )}
-      {children}
+      {label && (
+        <text
+          class="context-ring-label"
+          x="50%"
+          y="50%"
+          text-anchor="middle"
+          dominant-baseline="central"
+        >
+          {label}
+        </text>
+      )}
     </svg>
   );
 }

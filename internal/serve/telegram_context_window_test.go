@@ -25,7 +25,8 @@ func TestTelegramContextWindowWriter(t *testing.T) {
 	}()
 	h := testutil.NewEngineHarness()
 	mgr, template := newTestMgrAndSession(h)
-	template.runtime.ProviderName = "Claude CLI (test)"
+	template.runtime.ProviderName = "Claude CLI (sonnet)"
+	template.runtime.ModelName = ""
 	template.runtime.ProviderKey = "claude-bin"
 	mgr.store = store
 	mgr.settings.NewSession = func(context.Context) (*SessionRuntime, error) { return template.runtime, nil }
@@ -58,12 +59,13 @@ func TestTelegramContextWindowWriter(t *testing.T) {
 			t.Fatal(err)
 		}
 		check("reopened SQLite", saved)
-		if saved.ProviderKey != "claude-bin" || saved.Provider != "Claude CLI (test)" {
-			t.Fatalf("persisted identity = %q / %q", saved.ProviderKey, saved.Provider)
+		if saved.ProviderKey != "claude-bin" || saved.Provider != "Claude CLI (sonnet)" || saved.Model != "" {
+			t.Errorf("persisted provider key/display/model = %q / %q / %q", saved.ProviderKey, saved.Provider, saved.Model)
 		}
 		if reading.Window != 0 {
 			freshMgr, fresh := newTestMgrAndSession(testutil.NewEngineHarness())
 			fresh.runtime.ProviderKey, fresh.runtime.ProviderName = saved.ProviderKey, saved.Provider
+			fresh.runtime.ModelName = ""
 			freshMgr.store = store
 			freshMgr.settings.TelegramCarryoverChars = 4096
 			freshMgr.settings.NewSession = func(context.Context) (*SessionRuntime, error) { return fresh.runtime, nil }
@@ -85,14 +87,17 @@ func TestTelegramContextWindowReload(t *testing.T) {
 	saved := core.ContextUsage{UsedTokens: 12100, Window: 200000}
 	live := core.ContextUsage{UsedTokens: 302}
 	for _, tc := range []struct {
-		name, model, key string
-		live             bool
-		want             core.ContextUsage
+		name, model, savedModel, key string
+		live                         bool
+		want                         core.ContextUsage
 	}{
-		{"same model", "test", "claude-bin", false, saved},
-		{"new model", "other", "claude-bin", false, core.ContextUsage{}},
-		{"different provider with same label", "test", "other-key", false, core.ContextUsage{}},
-		{"newer reading with unknown window", "test", "claude-bin", true, live},
+		{"same model", "test", "test", "claude-bin", false, saved},
+		{"same CLI default", "", "", "claude-bin", false, saved},
+		{"CLI default differs from saved model", "", "sonnet", "claude-bin", false, core.ContextUsage{}},
+		{"explicit model differs from saved CLI default", "sonnet", "", "claude-bin", false, core.ContextUsage{}},
+		{"new model", "other", "test", "claude-bin", false, core.ContextUsage{}},
+		{"different provider with same label", "test", "test", "other-key", false, core.ContextUsage{}},
+		{"newer reading with unknown window", "test", "test", "claude-bin", true, live},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := testutil.NewEngineHarness()
@@ -108,7 +113,7 @@ func TestTelegramContextWindowReload(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			mgr.restored = map[int64]telegramReloadChat{42: {Meta: &session.Session{ID: "saved", Provider: "Claude CLI (test)", ProviderKey: "claude-bin", Model: "test", LastTotalTokens: saved.UsedTokens, LastContextWindow: saved.Window}}}
+			mgr.restored = map[int64]telegramReloadChat{42: {Meta: &session.Session{ID: "saved", Provider: "Claude CLI (test)", ProviderKey: "claude-bin", Model: tc.savedModel, LastTotalTokens: saved.UsedTokens, LastContextWindow: saved.Window}}}
 			sess, err := mgr.getOrCreate(t.Context(), 42)
 			if err != nil {
 				t.Fatal(err)

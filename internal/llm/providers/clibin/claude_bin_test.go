@@ -30,10 +30,9 @@ func TestClaudeBinProvider_ImplementsToolExecutorSetter(t *testing.T) {
 	}
 }
 
-func TestClaudeProbePrecedesStartupSteeringOnFastResult(t *testing.T) {
-	// Return the result as soon as the real user frame arrives. Never read or
-	// acknowledge the probe before completing the turn. EOF then lets us inspect
-	// exactly what startup sent, without a scheduling delay in the fake CLI.
+func TestClaudeStartupSteeringSendsOnlyNativeInterrupt(t *testing.T) {
+	// Return the result as soon as the user frame arrives. EOF lets the fake CLI
+	// inspect exactly what startup sent without a scheduling delay.
 	const script = `#!/usr/bin/env python3
 import json, sys
 user = json.loads(sys.stdin.readline())
@@ -42,7 +41,7 @@ print('{"type":"result","result":"done"}', flush=True)
 controls = [json.loads(line) for line in sys.stdin]
 assert all(frame['type'] == 'control_request' and frame['request_id'] for frame in controls)
 requests = [frame['request'] for frame in controls]
-assert requests == [{'subtype':'get_context_usage','detail':'summary'}, {'subtype':'interrupt'}], requests
+assert requests == [{'subtype':'interrupt'}], requests
 `
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0755); err != nil {
@@ -73,8 +72,6 @@ if first.get("type") != "user":
     sys.exit(2)
 open(os.environ["CLAUDE_INTERRUPT_READY"], "w").close()
 control = json.loads(sys.stdin.readline())
-if control.get("request", {}).get("subtype") == "get_context_usage":
-    control = json.loads(sys.stdin.readline())
 if control.get("type") != "control_request" or control.get("request", {}).get("subtype") != "interrupt":
     sys.exit(3)
 print(json.dumps({"type":"control_response","response":{"subtype":"success","request_id":control.get("request_id"),"response":{"still_queued":[]}}}), flush=True)

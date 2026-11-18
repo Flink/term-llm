@@ -644,6 +644,37 @@ func TestStatsLiveUsageMustNotInheritStoredWindow(t *testing.T) {
 	}
 	var out serveStatsResponse
 	appendStatsContextSections(&out, meta, nil, rt, "session")
+	rows := statsContextRows(out)
+	if rows["Current context"] != "321" || rows["Input limit"] != "unavailable" || rows["Window used"] != "" || rows["Free space"] != "" {
+		t.Fatalf("stats mixed live and saved readings: %v", rows)
+	}
+}
+
+func TestStatsColdClaudeDoesNotGuessAWindow(t *testing.T) {
+	meta := &session.Session{ProviderKey: "claude-bin", Model: "claude-sonnet-4-6", LastTotalTokens: 250}
+	if got := persistedContextUsage(meta, ""); got == nil || got.UsedTokens != 250 || got.InputLimit != 0 {
+		t.Fatalf("cold meter = %+v; want tokens only", got)
+	}
+	var out serveStatsResponse
+	appendStatsContextSections(&out, meta, nil, nil, "session")
+	rows := statsContextRows(out)
+	if rows["Input limit"] != "unavailable" || rows["Window used"] != "" {
+		t.Fatalf("cold stats guessed a limit: %v", rows)
+	}
+}
+
+func TestStatsConfiguredLimitDoesNotEraseStoredUsage(t *testing.T) {
+	rt := &serveRuntime{engine: engine.NewEngine(nil, nil)}
+	rt.engine.SetContextTracking(1000)
+	var out serveStatsResponse
+	appendStatsContextSections(&out, &session.Session{LastTotalTokens: 250}, nil, rt, "session")
+	rows := statsContextRows(out)
+	if rows["Current context"] != "250" || rows["Window used"] != "25.0%" {
+		t.Fatalf("configured limit erased the saved token count: %v", rows)
+	}
+}
+
+func statsContextRows(out serveStatsResponse) map[string]string {
 	rows := map[string]string{}
 	for _, sec := range out.Sections {
 		if sec.Title == "Current Context / Window Pressure" {
@@ -652,7 +683,5 @@ func TestStatsLiveUsageMustNotInheritStoredWindow(t *testing.T) {
 			}
 		}
 	}
-	if rows["Current context"] != "321" || rows["Input limit"] != "unavailable" || rows["Window used"] != "" || rows["Free space"] != "" {
-		t.Fatalf("stats mixed live and saved readings: %v", rows)
-	}
+	return rows
 }

@@ -570,7 +570,7 @@ func TestHandleSessionsMessageCountMatchesConversationAcrossSelectedTranscriptRe
 	}
 	// Reproduce the live corruption: the legacy context checkpoint tracks raw
 	// model/transcript rows and must never be exposed as the conversation count.
-	if err := store.UpdateContextEstimate(ctx, sess.ID, 1234, transcriptRowCount); err != nil {
+	if err := store.UpdateContextEstimate(ctx, sess.ID, 1234, transcriptRowCount, 0); err != nil {
 		t.Fatalf("UpdateContextEstimate: %v", err)
 	}
 

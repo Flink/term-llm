@@ -458,11 +458,11 @@ type failingAfterCompactStore struct {
 	failGet           bool
 }
 
-func (s failingAfterCompactStore) UpdateContextEstimate(ctx context.Context, id string, lastTotalTokens, lastMessageCount int) error {
+func (s failingAfterCompactStore) UpdateContextEstimate(ctx context.Context, id string, lastTotalTokens, lastMessageCount, window int) error {
 	if s.failUpdateContext {
 		return errors.New("forced context estimate failure")
 	}
-	return s.Store.UpdateContextEstimate(ctx, id, lastTotalTokens, lastMessageCount)
+	return s.Store.UpdateContextEstimate(ctx, id, lastTotalTokens, lastMessageCount, window)
 }
 
 func (s failingAfterCompactStore) Get(ctx context.Context, id string) (*Session, error) {

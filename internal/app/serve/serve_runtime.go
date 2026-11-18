@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -366,7 +367,9 @@ func (rt *serveRuntime) restoreProviderState(ctx context.Context, sessionID stri
 }
 
 func (rt *serveRuntime) persistProviderState(ctx context.Context, sessionID string) {
-	if rt == nil || rt.store == nil || rt.provider == nil || strings.TrimSpace(sessionID) == "" {
+	// A tentative swap can share the source's provider key. Its checkpoint,
+	// including any learned window, only belongs on disk after the swap commits.
+	if rt == nil || rt.swapCandidate.Load() || rt.store == nil || rt.provider == nil || strings.TrimSpace(sessionID) == "" {
 		return
 	}
 	stateStore, ok := rt.store.(session.ProviderStateStore)
@@ -1067,7 +1070,7 @@ func (rt *serveRuntime) ensureSessionInStore(ctx context.Context, sessionID stri
 		}
 	}
 	modelName := strings.TrimSpace(rt.defaultModel)
-	if modelName == "" {
+	if modelName == "" && (rt.provider == nil || !rt.provider.Capabilities().ManagesOwnContext) {
 		modelName = "unknown"
 	}
 	sess := &session.Session{
@@ -1165,7 +1168,7 @@ func (rt *serveRuntime) ensurePersistedSession(ctx context.Context, sessionID st
 		}
 	}
 	modelName := strings.TrimSpace(rt.defaultModel)
-	if modelName == "" {
+	if modelName == "" && (rt.provider == nil || !rt.provider.Capabilities().ManagesOwnContext) {
 		modelName = "unknown"
 	}
 
@@ -1505,19 +1508,16 @@ func (rt *serveRuntime) persistTurnAccounting(ctx context.Context, persisted boo
 			rt.commitTurnTiming(timing)
 		}
 	}
-	if rt.engine == nil {
+	if rt.engine == nil || rt.swapCandidate.Load() {
 		return
 	}
-	total, count, window := rt.engine.ContextEstimateSnapshot()
+	total, count, window := rt.engine.ContextEstimateSnapshotFor(cmp.Or(rt.sessionMeta.ProviderKey, rt.sessionMeta.Provider), rt.sessionMeta.Model)
 	if total <= 0 {
 		return
 	}
-	if err := session.UpdateContextEstimateWithWindow(ctx, rt.store, sessionID, total, count, window); err != nil {
+	if err := session.PersistContextEstimate(ctx, rt.store, rt.sessionMeta, total, count, window); err != nil {
 		log.Printf("[serve] session UpdateContextEstimate failed for %s: %v", sessionID, err)
-		return
 	}
-	rt.sessionMeta.LastTotalTokens = total
-	rt.sessionMeta.LastMessageCount, rt.sessionMeta.LastContextWindow = count, window
 }
 
 func isModelTurnCompletion(messages []core.Message, metrics core.TurnMetrics) bool {
@@ -1640,8 +1640,7 @@ type serveContextUsage struct {
 	Estimated         bool `json:"estimated"`
 	// AutoCompactAt is where term-llm itself compacts; omitted when it does not (auto-compaction
 	// off, unknown window, or a provider such as the CLI ones that manages its own context).
-	AutoCompactAt         int `json:"auto_compact_at,omitempty"`
-	ProviderAutoCompactAt int `json:"provider_auto_compact_at,omitempty"`
+	AutoCompactAt int `json:"auto_compact_at,omitempty"`
 }
 
 func contextUsageSnapshot(engine *engine.Engine, messages []core.Message, cachedInputTokens int) *serveContextUsage {
@@ -1663,8 +1662,6 @@ func contextUsageSnapshot(engine *engine.Engine, messages []core.Message, cached
 	}
 	if soft, _, enabled := engine.CompactionThresholds(); enabled && soft > 0 {
 		usage.AutoCompactAt = soft
-	} else if at := current.ProviderAutoCompactAt; at > 0 && at <= current.Window {
-		usage.ProviderAutoCompactAt = at
 	}
 	return usage
 }

@@ -631,8 +631,8 @@ func (s *LoggingStore) ListModelUsage(ctx context.Context, sessionID string) ([]
 }
 
 // UpdateContextEstimate wraps Store.UpdateContextEstimate with error logging.
-func (s *LoggingStore) UpdateContextEstimate(ctx context.Context, id string, lastTotalTokens, lastMessageCount int) error {
-	err := s.Store.UpdateContextEstimate(ctx, id, lastTotalTokens, lastMessageCount)
+func (s *LoggingStore) UpdateContextEstimate(ctx context.Context, id string, lastTotalTokens, lastMessageCount, window int) error {
+	err := s.Store.UpdateContextEstimate(ctx, id, lastTotalTokens, lastMessageCount, window)
 	s.logOnce("UpdateContextEstimate", err)
 	return err
 }

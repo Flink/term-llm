@@ -49,6 +49,10 @@ func (s *serveServer) executeSynchronousResponse(ctx context.Context, w http.Res
 			writeOpenAIError(w, http.StatusConflict, "conflict_error", err.Error())
 			return
 		}
+		if errors.Is(err, errServeSessionPersistence) {
+			writeOpenAIError(w, http.StatusInternalServerError, "server_error", errServeSessionPersistence.Error())
+			return
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			writeOpenAIError(w, http.StatusRequestTimeout, "timeout_error", responseRunTimeoutMessage(s.responseTimeout()))
 			return

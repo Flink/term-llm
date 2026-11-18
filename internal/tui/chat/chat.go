@@ -1331,7 +1331,7 @@ func (m *Model) contextIdentities() (savedProvider, savedModel, provider, model 
 	savedProvider = cmp.Or(strings.TrimSpace(m.sess.ProviderKey), strings.TrimSpace(m.sess.Provider))
 	savedModel = strings.TrimSpace(m.sess.Model)
 	provider = cmp.Or(strings.TrimSpace(m.providerKey), savedProvider)
-	model = cmp.Or(strings.TrimSpace(m.modelName), savedModel)
+	model = strings.TrimSpace(m.modelName) // A blank selector can mean the CLI default, not the saved model.
 	return
 }
 
@@ -1341,7 +1341,7 @@ func (m *Model) configureContextManagementForSession() {
 	}
 
 	savedProvider, savedModel, provider, model := m.contextIdentities()
-	if model == "" {
+	if model == "" && !m.provider.Capabilities().ManagesOwnContext {
 		return
 	}
 	m.engine.ConfigureContextManagement(m.provider, provider, model, m.config.AutoCompact)
