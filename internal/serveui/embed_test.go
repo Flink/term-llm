@@ -275,15 +275,13 @@ func TestProductionBundleSizeBudgets(t *testing.T) {
 		// retain modest gzip headroom for the updated runtime and bundler.
 		"dist/hub.js":  {raw: 107_500, gzip: 35_500},
 		"dist/hub.css": {raw: 20_500, gzip: 5_500},
-		// Presets and the in-place key dialog reuse the existing route/secret
-		// forms. URL-backed tabs and numbered request pagination bring the
-		// standalone bundle to ~46.6/17.1 kB raw/gzip. Catalog data stays
-		// server-side; retain bounded headroom and the two-asset build.
-		"dist/proxy.js": {raw: 48_000, gzip: 17_500},
-		// Compact shared controls, contiguous request rows and responsive
-		// numbered pagination measure ~15.0/3.9 kB raw/gzip. Keep a bounded
-		// proxy-only ceiling; chat and Hub budgets remain unchanged.
-		"dist/proxy.css": {raw: 15_500, gzip: 4_100},
+		// Route setup, accounts, Claude/ChatGPT onboarding, live requests,
+		// payload debug, the Cost graph and the Clients list measure
+		// ~121.4/43.3 kB raw/Go-gzip6. Leave ~10% room for further features.
+		"dist/proxy.js": {raw: 134_000, gzip: 48_000},
+		// Routes, requests ledger, Home timeline and Clients list styles measure
+		// 25,379/6,229 bytes raw/Go-gzip6; ~10% headroom.
+		"dist/proxy.css": {raw: 28_000, gzip: 7_000},
 	}
 	for name, budget := range budgets {
 		body, err := testBuildAsset(name)

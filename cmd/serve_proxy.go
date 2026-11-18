@@ -15,6 +15,9 @@ func newServeProxyCommand() *cobra.Command {
 	opts := appproxy.Options{}
 	c := &cobra.Command{Use: "proxy", Short: "Run a standalone configuration-driven credential proxy", Args: cobra.NoArgs, Annotations: map[string]string{"isolated-startup": "true"}, PersistentPreRunE: proxyPreRun, RunE: func(c *cobra.Command, _ []string) error { return appproxy.Run(c.Context(), opts, c.OutOrStdout()) }}
 	c.Flags().StringVar(&opts.StateDir, "state-dir", "", "Private proxy state directory (default: user config directory/term-llm/proxy; separate from agent state)")
+	c.Flags().StringVar(&opts.DebugPayloadDir, "debug-payload-dir", "", "Start raw payload capture in this private directory (also controllable in the Debug UI)")
+	c.Flags().Int64Var(&opts.DebugPayloadMaxBytes, "debug-payload-max-bytes", 4<<20, "Maximum bytes per captured body or WebSocket direction")
+	c.Flags().Int64Var(&opts.DebugPayloadMaxTotalBytes, "debug-payload-max-total-bytes", appproxy.DefaultDebugPayloadMaxTotalBytes, "Maximum retained capture-file bytes in the debug directory (also limited to 1,000 requests)")
 	c.Flags().StringVar(&opts.Auth, "auth", "passkey", "Browser admin authentication: passkey or token (explicit legacy/local mode)")
 	c.Flags().StringVar(&opts.PasskeyBootstrapTokenFile, "passkey-bootstrap-token-file", "", "Private one-use enrollment secret file (created automatically for local setup)")
 	c.Flags().StringVar(&opts.PasskeyRecoveryTokenFile, "passkey-recovery-token-file", "", "Private one-use passkey recovery secret file (existing enrollment only)")

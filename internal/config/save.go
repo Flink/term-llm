@@ -10,6 +10,16 @@ import (
 
 // Save writes the config to disk
 func Save(cfg *Config) error {
+	// Materialized roots and scoped credentials are runtime-only. Saving a
+	// loaded delegated configuration would erase its original routing intent.
+	if cfg.Proxy.materialized {
+		return fmt.Errorf("cannot save a materialized proxy configuration; edit the source configuration instead")
+	}
+	for _, provider := range cfg.Providers {
+		if provider.ProxyBinding != "" {
+			return fmt.Errorf("cannot save a materialized proxy configuration; edit the source configuration instead")
+		}
+	}
 	path, err := GetConfigPath()
 	if err != nil {
 		return err
@@ -22,19 +32,20 @@ func Save(cfg *Config) error {
 	}
 
 	type saveProvider struct {
-		Type                      ProviderType      `yaml:"type,omitempty"`
-		Model                     string            `yaml:"model,omitempty"`
-		AllowedModels             []string          `yaml:"allowed_models,omitempty"`
-		FastModel                 string            `yaml:"fast_model,omitempty"`
-		FastProvider              string            `yaml:"fast_provider,omitempty"`
-		ServiceTier               string            `yaml:"service_tier,omitempty"`
-		UsePreviousResponseID     *bool             `yaml:"use_previous_response_id,omitempty"`
-		RequestEncryptedReasoning *bool             `yaml:"request_encrypted_reasoning,omitempty"`
-		Responses                 ResponsesConfig   `yaml:"responses,omitempty"`
-		FileUpload                *FileUploadConfig `yaml:"file_upload,omitempty"`
-		BaseURL                   string            `yaml:"base_url,omitempty"`
-		AppURL                    string            `yaml:"app_url,omitempty"`
-		AppTitle                  string            `yaml:"app_title,omitempty"`
+		Proxy                     *ProviderProxyConfig `yaml:"proxy,omitempty"`
+		Type                      ProviderType         `yaml:"type,omitempty"`
+		Model                     string               `yaml:"model,omitempty"`
+		AllowedModels             []string             `yaml:"allowed_models,omitempty"`
+		FastModel                 string               `yaml:"fast_model,omitempty"`
+		FastProvider              string               `yaml:"fast_provider,omitempty"`
+		ServiceTier               string               `yaml:"service_tier,omitempty"`
+		UsePreviousResponseID     *bool                `yaml:"use_previous_response_id,omitempty"`
+		RequestEncryptedReasoning *bool                `yaml:"request_encrypted_reasoning,omitempty"`
+		Responses                 ResponsesConfig      `yaml:"responses,omitempty"`
+		FileUpload                *FileUploadConfig    `yaml:"file_upload,omitempty"`
+		BaseURL                   string               `yaml:"base_url,omitempty"`
+		AppURL                    string               `yaml:"app_url,omitempty"`
+		AppTitle                  string               `yaml:"app_title,omitempty"`
 	}
 	type saveExec struct {
 		Suggestions int `yaml:"suggestions"`
@@ -42,7 +53,14 @@ func Save(cfg *Config) error {
 	type saveImage struct {
 		Provider string `yaml:"provider,omitempty"`
 	}
+	type saveProxy struct {
+		URL       string    `yaml:"url,omitempty"`
+		Token     string    `yaml:"token,omitempty"`
+		Direct    []string  `yaml:"direct,omitempty"`
+		Providers *[]string `yaml:"providers,omitempty"`
+	}
 	type saveConfig struct {
+		Proxy           *saveProxy              `yaml:"proxy,omitempty"`
 		MCP             *MCPConfig              `yaml:"mcp,omitempty"`
 		DefaultProvider string                  `yaml:"default_provider,omitempty"`
 		CredentialsDir  string                  `yaml:"credentials_dir,omitempty"`
@@ -56,6 +74,12 @@ func Save(cfg *Config) error {
 		CredentialsDir:  cfg.CredentialsDir,
 		Exec:            saveExec{Suggestions: cfg.Exec.Suggestions},
 		Providers:       make(map[string]saveProvider, len(cfg.Providers)),
+	}
+	if p := cfg.Proxy; p.URL != "" || p.Token != "" || len(p.Direct) != 0 || p.Providers != nil {
+		saved.Proxy = &saveProxy{URL: p.URL, Token: p.Token, Direct: p.Direct}
+		if p.Providers != nil {
+			saved.Proxy.Providers = &p.Providers
+		}
 	}
 	if saved.CredentialsDir == "" {
 		// Setup creates a fresh Config: preserve the YAML path, never bake in
@@ -82,6 +106,7 @@ func Save(cfg *Config) error {
 	}
 	for name, p := range cfg.Providers {
 		saved.Providers[name] = saveProvider{
+			Proxy:                     p.Proxy,
 			Type:                      p.Type,
 			Model:                     p.Model,
 			AllowedModels:             p.AllowedModels,

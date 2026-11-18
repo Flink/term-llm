@@ -94,16 +94,31 @@ API endpoints, JSON fields and `caller_auth` configuration compatible. Legacy
 routes only and submit the loaded revision; conflicts require explicit refresh.
 File-managed routes and file-sourced secrets are read-only, with explicit file
 reload; stored secrets remain rotatable. The UI cannot edit file references.
-The collapsed **Configuration file** disclosure offers secret-free route download
-and confirmed YAML replacement (file up to 1 MiB or **Paste YAML instead**). The
-server parses YAML; this is configuration transfer, not a full backup.
+The **Admin** tab owns secret-free route download and confirmed YAML replacement
+(file up to 1 MiB, or select **Paste YAML**). Configuration controls are directly
+visible, without nested disclosures. The server parses YAML; this is route
+configuration transfer, not a full backup.
 
 Provider presets come from `internal/app/proxy/presets.go` through authenticated
-state. They fill the existing route editor without persisting preset IDs or
-loading normal provider configuration. **Add API key** reuses the Secrets form
-and API without discarding the route draft. Secret storage and route save are
-separate commits; concurrent configuration changes must still produce conflicts.
+state. A single **Provider preset** dropdown fills the route editor without
+persisting preset IDs or loading normal provider configuration. **Add API key**
+reuses the Secrets form without discarding the route draft. Secret storage and
+route save are separate commits; concurrent changes still require conflict checks.
 Saving never probes an upstream.
+
+A preset may carry **subpath rules**: one local route, one client token and one
+client grant serving several upstream roots, with the client's protocol auth
+(e.g. bearer, `x-api-key`, `x-goog-api-key`) shown per subpath. A unified route
+has no parent client authentication or parent upstream substitution; each rule
+declares its own, and subpath mappings count as grant authority. OpenCode Go is
+a single preset with three editable rules for `/`, `/messages/` and `/gemini/`.
+Rules use one shared, origin-bound stored key selected or added once; every
+key-bearing rule's upstream must share that origin. Existing single-upstream
+routes keep the legacy editor and are never converted implicitly.
+
+The Routes setup guide disappears after the first persisted request.
+`has_requests` uses the SQLite sequence high-water mark, surviving retention and
+server restarts.
 
 Secrets are write-only and origin-bound. Duplicate names are rejected unless an
 explicit, confirmed Replace action sends `replace: true`. Header substitutions
@@ -111,6 +126,45 @@ default to stored secrets matching the upstream origin; literal values are publi
 configuration, not a credential store. Administrator tokens, secret values and
 client tokens are never persisted **in browser storage**; the server does store
 secrets, in plaintext at rest.
+
+The compact **Claude Code** card appears before generic route onboarding. **Set up
+Claude** creates its route, internal native slot and scoped client atomically via
+`POST /_proxy/api/claude/setup` with `{ revision }`, without probing the provider.
+The response `{ url, token, caller_id, revision }` is shown once as a safely quoted native
+launcher command; copying and trying that command needs no config-file edit.
+**Optional term-llm integration** exposes copyable `providers.claude-bin.proxy` YAML
+with the same scoped proxy token, never a real Claude credential. Neither output
+is stored in browser storage or URLs. State reconciliation preserves these one-time
+details, and navigation/refresh/sign-out guard against accidental dismissal.
+
+An enabled Claude route granted to an active client offers **Create another
+connection**, not token retrieval. Partial or disabled legacy setups offer **Set up
+Claude**. Any Claude resources enable **Clear Claude setup**, also available
+directly beside the one-time command.
+Clearing never requires claiming the token was saved. Confirmed
+`DELETE /_proxy/api/claude/setup` with `{ revision }`
+removes all Claude routes, slots, saved proxy sign-ins and Claude access. Claude-only
+clients are revoked; mixed clients retain other route grants. Revoked client rows
+may remain for audit. Other providers are untouched. Your normal Claude setup stays
+unchanged. The setup response revision is captured before the secondary state
+read so immediate clear still works if that read fails. Failed or cancelled clears retain the one-time
+details; a completed clear erases and unprotects them. Both mutations require
+exactly one fresh passkey assertion in passkey mode; conflicts refresh state without replaying the write. File-managed setups
+explain that they are read-only and expose no Claude mutation controls.
+
+Claude is excluded from the generic provider preset/editor and **Other provider accounts**
+maintenance UI, including existing manually configured routes classified by their
+account's `claude-code` kind. The generic four-step checklist is suppressed when
+only Claude is configured; other-provider onboarding and completed-history hiding
+are unchanged. There is no browser OAuth, token paste or pairing wizard for Claude.
+**Clients** still lists scoped clients/grants; Claude connection examples use the
+native launcher, not API-key curl commands.
+
+Other provider accounts retain write-only credential JSON and explicit replacement
+with fresh passkey authentication. **Manage** opens metadata and sign-out without
+nested disclosures. Generic route forms keep billing choices short and hide
+transport details and previews under **Advanced**; empty header-substitution
+controls are absent on account-backed routes.
 
 Client grants start unchecked and create/edit submits the state revision. Grant
 edits do not reissue tokens. Tokens are shown once with a Copy action; curl examples
@@ -123,12 +177,38 @@ preserve them. File configuration changes drop incompatible grants fail-closed.
 Warn before authority-bearing edits. Revoke, delete and disable block new requests,
 not requests already dispatched.
 
-Requests show recorded full local paths, human-readable outcomes/dates and inline
-grouped details. Filters start collapsed at every width. Numbered pages contain
-25 requests and show totals; older-sequence cursors remain a legacy API option,
-not the UI pagination model. Authenticated JSON export is bounded to 1,000 rows.
-Bodies and headers are not captured. Errors/incomplete results can still mean
-upstream work happened; do not suggest automatic retries.
+Requests use a compact aligned ledger: time, status, model, client, total input,
+output, cache-read share, duration and price. Local calendar-day headings and
+24-hour times replace repeated full timestamps. Narrow layouts use three lines;
+full paths, raw token counters, IDs, bytes and first-byte timing stay in expandable
+details. Total input includes cache components for Messages/Bedrock, but never
+adds them again to inclusive OpenAI/Gemini input. Unknown counters/prices are not
+zero. Plan API-equivalent estimates remain distinct from actual spending.
+
+Only consecutive identical HTTP errors without measured usage or prices collapse
+into expandable groups, within the loaded page. Group time/latency describe the
+latest request, not sums; pagination continues to count individual requests.
+Filters stay collapsed initially. **Apply filters** commits the draft on a successful
+load. The badge, pagination, **Refresh**, and metadata export use the applied query;
+**Clear** resets the fields and results. Numbered pages contain 25 requests; controls
+are in the footer, with a quiet result count above. Older-sequence cursors remain
+a legacy API option. Authenticated JSON export is bounded to 1,000 rows.
+
+Normal request history/export excludes bodies and headers. Expanding one request checks
+that request's capture metadata by exact ID; **View raw payload** opens the shared,
+bounded Debug preview inline without leaving the list. Never fetch captured bytes
+merely to render a ledger row. Errors/incomplete results can still mean upstream
+work happened; do not suggest automatic retries.
+
+The **Debug** tab explicitly enables/disables raw payload capture for the running
+process, with a sensitive-data confirmation before enabling. The fixed private
+archive defaults to the proxy state directory's `debug-payloads`; a CLI directory
+flag overrides it and enables startup capture. Admin-only APIs list captures and
+return bounded UTF-8/base64 previews, with offset paging for large files. Render
+payloads only as text, never HTML/markdown; do not persist them in browser storage,
+URLs, caches or the service worker. Navigation/sign-out disposes preview content
+and ignores stale responses. Debug inspection is not an arbitrary file browser;
+only capture manifests and body/frame files are supported.
 
 Only curated JSON `{error: string}` responses for 400/409 are shown as text,
 limited to 512 characters. Error reads are bounded; other responses use generic
@@ -141,6 +221,14 @@ Run the standalone coverage and checks from the repository root:
 npm --prefix frontend run typecheck
 (cd frontend && npx stylelint 'proxy/**/*.css')
 make test PKG=./internal/serveui
+```
+
+For browser layout coverage without changing embedded build artifacts, build the
+standalone bundle into scratch space and point Playwright at it:
+
+```sh
+(cd frontend && npx vite build --config vite.proxy.config.ts --outDir ../tmp/proxy-native-dist)
+(cd frontend && TERM_LLM_PROXY_DIST="$PWD/../tmp/proxy-native-dist" npx playwright test e2e/proxy-layout.spec.ts --project=desktop)
 ```
 
 The separate Vite test configuration covers `proxy/`; the chat suite covers

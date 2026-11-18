@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/term-llm/term-llm/internal/modelsdev"
 )
 
 const modelsDevFixture = `{
@@ -91,9 +93,17 @@ func TestModelsDevDirectoryOverridesBundledPricing(t *testing.T) {
 // be refetched.
 func TestModelsDevRefreshHonoursCacheAndStaysOffline(t *testing.T) {
 	fetcher := newDirectoryFetcher(t, modelsDevFixture)
-	cacheFile := filepath.Join(fetcher.cacheDir, modelsDevCacheFile)
-	cached := `{"version":2,"entries":{"cached-model":{"input_cost_per_token":1e-06,"output_cost_per_token":2e-06}}}`
-	if err := os.WriteFile(cacheFile, []byte(cached), 0o644); err != nil {
+	cacheFile := filepath.Join(fetcher.cacheDir, modelsdev.CacheFile)
+	cached, err := json.Marshal(map[string]any{
+		"version": 1, "fetched_at": time.Now().UTC(),
+		"catalog": map[string]any{"test": map[string]any{"models": map[string]any{
+			"cached-model": map[string]any{"cost": map[string]any{"input": 1, "output": 2}},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cacheFile, cached, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := fetcher.RefreshModelsDevPricing(context.Background()); err != nil {
@@ -106,28 +116,28 @@ func TestModelsDevRefreshHonoursCacheAndStaysOffline(t *testing.T) {
 	}
 
 	// Once it ages out, the directory is refetched.
-	old := time.Now().Add(-modelsDevTTL - time.Minute)
-	if err := os.Chtimes(cacheFile, old, old); err != nil {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(cached, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	envelope["fetched_at"], _ = json.Marshal(time.Now().Add(-modelsdev.TTL - time.Minute))
+	stale, _ := json.Marshal(envelope)
+	if err := os.WriteFile(cacheFile, stale, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := fetcher.RefreshModelsDevPricing(context.Background()); err != nil {
 		t.Fatalf("RefreshModelsDevPricing() error = %v", err)
 	}
-	var rewritten modelsDevCacheFileFormat
-	data, err := os.ReadFile(cacheFile)
-	if err != nil || json.Unmarshal(data, &rewritten) != nil {
-		t.Fatalf("refresh did not rewrite the cache: %v", err)
+	shared := modelsdev.NewClient(fetcher.cacheDir, nil)
+	if err := shared.Load(); err != nil {
+		t.Fatalf("refresh did not rewrite the shared cache: %v", err)
 	}
-	if rewritten.Version != modelsDevCacheVersion {
-		t.Fatalf("cache version = %d, want %d", rewritten.Version, modelsDevCacheVersion)
-	}
-	if _, ok := rewritten.Entries["claude-opus-5"]; !ok {
-		t.Fatalf("refreshed cache = %v", rewritten.Entries)
+	if _, _, ok := shared.Lookup("anthropic", "claude-opus-5"); !ok {
+		t.Fatal("refreshed shared catalog missing first-party model")
 	}
 
-	// A projection written by an older build is discarded rather than trusted:
-	// the rules that derived it have changed.
-	if err := os.WriteFile(cacheFile, []byte(`{"version":1,"entries":{"stale-model":{"input_cost_per_token":9e-06}}}`), 0o644); err != nil {
+	// An incompatible snapshot is discarded rather than trusted.
+	if err := os.WriteFile(cacheFile, []byte(`{"version":999,"entries":{"stale-model":{"input_cost_per_token":9e-06}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	modelsDevStore = &modelsDevPricing{}
@@ -184,4 +194,40 @@ func TestModelsDevKeepsBundledCacheRatesWhenTheCatalogOmitsThem(t *testing.T) {
 		pricing.CacheCreationInputTokenCost != bundled.CacheCreationInputTokenCost {
 		t.Fatalf("cache rates zeroed by an incomplete catalog entry: %+v", pricing)
 	}
+}
+
+func TestModelsDevUsageDiskReloadPreservesContextTier(t *testing.T) {
+	fetcher := newDirectoryFetcher(t, modelsDevFixture)
+	if err := fetcher.RefreshModelsDevPricing(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := fetcher.GetPricingLocal("gpt-5.6-sol-max")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a new process: discard the derived in-memory projection, then
+	// load only the shared disk catalog. ModelPricing's json:"-" fields must be
+	// reconstructed from the source tier rather than lost in a projection cache.
+	modelsDevStore = &modelsDevPricing{}
+	reloaded := NewPricingFetcher()
+	reloaded.cacheDir = fetcher.cacheDir
+	reloaded.httpClient = &http.Client{Transport: rejectModelsDevNetwork{t: t}}
+	after, err := reloaded.GetPricingLocal("gpt-5.6-sol-max")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after || after.TieredThreshold != 272_000 || !after.WholeRequestTier ||
+		after.InputCostPerTokenAbove200k != 8.0/1_000_000 ||
+		after.OutputCostPerTokenAbove200k != 30.0/1_000_000 ||
+		math.Abs(after.CacheReadCostAbove200k-0.8/1_000_000) > 1e-18 ||
+		after.CacheCreationCostAbove200k != 10.0/1_000_000 {
+		t.Fatalf("context tier changed on disk reload: before=%+v after=%+v", before, after)
+	}
+}
+
+type rejectModelsDevNetwork struct{ t *testing.T }
+
+func (r rejectModelsDevNetwork) RoundTrip(*http.Request) (*http.Response, error) {
+	r.t.Error("local pricing lookup attempted network I/O")
+	return nil, context.Canceled
 }

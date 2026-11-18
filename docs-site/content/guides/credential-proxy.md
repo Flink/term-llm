@@ -1,225 +1,487 @@
 ---
 title: "Credential proxy"
-description: "Keep upstream API keys on the proxy and give each client its own revocable token."
+description: "Keep provider credentials on the proxy; connect clients with revocable tokens."
 weight: 45
 ---
 
-`term-llm serve proxy` forwards HTTP requests to configured upstream services,
-replacing client tokens with server-held credentials. Each client gets a token
-and access to selected routes. It runs independently of chat, agents and provider
-configuration; setup never sends test requests to upstream services.
+`term-llm serve proxy` forwards HTTP/SSE and opt-in WebSockets to fixed upstreams,
+substituting server-held credentials. It runs independently of chat and provider
+configuration. Saving routes does not probe vendors. Each client has its own route grants;
+admin sessions never authorize forwarding.
 
 ## Quick start: local passkey administration
-
-Run this on the machine where you will open your browser:
 
 ```sh
 term-llm serve proxy
 ```
 
-1. Open the URL printed at startup: **http://localhost:8082** by default. Use
-   **localhost**, not `127.0.0.1` or an alias; passkeys are bound to the hostname.
-2. Run the printed `cat` command in another terminal. Paste its output into
-   **Bootstrap token**, enter a **Passkey name**, and choose **Create first
-   passkey**. The browser will ask you to verify your identity.
-3. Under **Routes → Add route**, choose a **Provider**. Select a stored secret or
-   choose **Add API key**, then **Save route**. For other services, choose
-   **Custom HTTP** and enter the upstream URL and authentication headers.
-4. Under **Clients**, enter a **Client name**, select its permitted routes, and
-   choose **Create client**. Save the token: it is shown only once.
-5. Set your application's API root to the route's local URL and its API key to
-   the **client token**, not the upstream key. The client page provides curl
-   examples using the route's required authentication header.
-6. Open **Requests** to inspect traffic.
+1. Open **http://localhost:8082** on the same computer. Use `localhost`, not an IP:
+   passkeys bind to the hostname.
+2. Run the printed `cat` command, paste the bootstrap token, name your passkey and
+   enroll. The token expires ten minutes after startup; restart if it expires.
+3. Open **Routes → Add route** and choose a preset. The preset asks for only
+   what it needs: sign in for ChatGPT, get a launcher for Claude Code, or add
+   an API key for a service like Venice.
+4. On the new route, choose **Grant access** to give an app or device access.
+   For Claude Code, use its launcher instead. Save the shown-once client token
+   privately. In an app that accepts a custom API root, use the route URL and
+   the client token, **not** the upstream credential. The **Clients** tab lets
+   you see and manage the routes a client already has access to.
 
-The listener defaults to `127.0.0.1:8082`. Keep the same state directory on
-restarts to retain configuration, secrets, clients, passkeys and browser sessions.
+The listener defaults to `127.0.0.1:8082`. Keep its state directory across restarts.
+Remote administration requires a stable HTTPS hostname and explicit enrollment.
 
-The local bootstrap token expires 10 minutes after startup. If setup expires,
-restart for a fresh token and follow the new printed command. Once enrolled,
-startup no longer creates a bootstrap token. Remote deployments require
-[explicit enrollment setup](#explicit-setup-and-production-administration) and
-[HTTPS termination](#https-termination-and-hostname-routing).
+## Connect a ChatGPT subscription
+
+1. Choose **Routes → Add route → ChatGPT plan**, then **Sign in to ChatGPT**.
+2. Open the OpenAI sign-in page from the proxy, enter the one-time code and
+   approve the request. Return to the proxy. The proxy stores the login and
+   creates the route; no local OAuth credential file is required. Your OpenAI
+   account must allow device-code sign-in.
+3. Choose **Grant access** on the route to authorize an app or device. A
+   successful provider sign-in does not give any new client access by itself.
+
+Use **Reconnect** on the route to renew its login without replacing its client
+access. Choose a distinct route name if you want separate routes for separate
+accounts. The main route is enough for chat; if needed, add the **ChatGPT plan
+usage and dictation** preset and select the same account for that route. A
+ChatGPT subscription is separate from the **OpenAI API** key preset. To route
+only ChatGPT through the proxy in term-llm, [configure the client allowlist](#using-term-llm-as-a-client)
+with the canonical `/chatgpt/` route.
+
+## Run native Claude Code through the proxy
+
+Claude Code can opt in to proxy-held credentials. The launcher never modifies
+ordinary `claude`: your regular `~/.claude` settings, credentials, hooks and plugins
+are untouched, and a plain `claude` run continues to use its own local login.
+
+### Set up or clear Claude
+
+1. Choose **Routes → Add route → Claude Code** and click **Create route & get
+   launcher**.
+2. Copy the launcher command, run it on your device and sign in normally in Claude.
+
+The proxy creates the route and gives the launcher scoped access. The route
+appears in the same list as other providers; there is no upstream URL, billing
+choice, or separate login form. The launcher token is shown once; save it
+privately. Use **Add device** on the route for another device or a replacement
+launcher.
+
+Under **Advanced**, **Clear all Claude setup** removes the Claude routes, stored proxy sign-ins and Claude
+access. Other providers, request history and your ordinary `~/.claude` are left
+alone. Clients shared with other providers keep their other grants. Already-sent
+requests may finish. Clearing does not revoke your subscription at Anthropic.
+
+### Optional: use the same connection with term-llm
+
+The copied launcher command works without changing any configuration file. For
+term-llm's `claude-bin` provider, copy the optional provider YAML shown with it.
+For example, using a private token file:
+
+```yaml {title="config.yaml"}
+providers:
+  claude-bin:
+    proxy:
+      url: https://proxy.example.test/claude-code/
+      token: file:///run/secrets/claude-proxy-token
+```
+
+`url` is the Claude route root supplied with the launcher, not the bare proxy origin.
+Set `token` to a credential reference for that client's scoped proxy token, not an
+Anthropic credential. This provider-local block redirects only `claude-bin`.
+If you also use a [top-level `proxy:` block](#using-term-llm-as-a-client), list
+only the other providers there (for example, `providers: [chatgpt, venice]`).
+Do not list `claude-bin` in both places.
+
+```sh
+term-llm proxy run claude
+term-llm proxy run claude -- --resume
+```
+
+The launcher is opt-in per invocation. Supply both `--url` and `--token` to use a
+different route root and scoped token for one run; they do not create a route or grant.
+Everything after `--` is passed to native Claude. Prefer a `file://` token reference
+over a literal value on the command line.
+
+Sign in normally when Claude starts. The native client runs its usual sign-in and
+refresh flow; the proxy intercepts HTTPS token exchange on `platform.claude.com`
+and API traffic on `api.anthropic.com`. Real access and refresh tokens stay in the
+proxy's encrypted vault for that caller, route and account; Claude receives opaque
+placeholders. The worker cannot reuse those placeholders as vendor credentials.
+
+The launcher sets a private, term-owned `CLAUDE_CONFIG_DIR` for the child, so normal
+Claude state stays separate. The proxy CA is fetched for that launch and trusted
+only through the process's `NODE_EXTRA_CA_CERTS`; it is not installed in the
+operating-system trust store, and TLS verification is never disabled. Competing
+vendor credentials, cloud auth switches and ambient proxy settings are removed
+from the child environment.
+
+The tunnel is not a general web proxy or MITM. Only `api.anthropic.com:443` and
+`platform.claude.com:443` are accepted. The public startup checks `GET/HEAD
+/api/hello` and `GET/HEAD /v1/oauth/hello` work before Claude sign-in; they still
+require a granted proxy client, send no credentials upstream, and check the real
+upstream response. Other platform traffic is limited to the fixed token endpoint.
+On the API host, the proxy forwards validated API-host paths over the authenticated
+native tunnel using that caller's own signed-in OAuth session, subject to any
+operator route Allow. This can include Claude background calls such as telemetry
+or hosted MCP reaching Anthropic; Anthropic still decides OAuth permissions and
+response status. Platform token exchange remains limited to the fixed token endpoint,
+and the public tokenless startup probes remain credentialless and restricted to their
+fixed paths. There is no credentialless API pass-through or expansion to other
+providers. Loopback and safe existing `NO_PROXY` entries stay direct so local tools
+and MCP servers keep working; other HTTPS destinations sent through the proxy are
+refused. Each connection lasts at most one hour. An intervening reverse proxy must
+support HTTP/1.1 CONNECT; otherwise point the launcher at the credential proxy
+listener directly. Revoking the client or grant, or signing out the account, closes
+open tunnels and requires a new native sign-in. A compromised worker can still use
+its granted route and isolated profile; this is not an OS sandbox.
+
+`term-llm usage -p claude-bin` uses Claude's native `get_usage` control request
+through the same binding. There is no separate quota-query implementation, and it
+does not fall back to local vendor credentials. The **Billing** selector only
+categorizes spending records; it does not change login permissions, provider charges
+or limits.
+
+If an older release installed its connector settings into your Claude profile, use
+`term-llm proxy disconnect claude` once to undo only the settings that connector
+owned. The old connector and its browser-approval flow are retired; the native
+launcher does not use them and never edits your Claude settings.
+
+## Provision clients with an admin API key
+
+In **Admin → API keys**, create a named key and save the token when shown. In
+passkey mode, creating or revoking a key requires fresh passkey confirmation.
+Send the key as a Bearer token to `/_proxy/manage/v1/` over **loopback or HTTPS
+only**. Keep it in a secret store; do not use it from browser code.
+
+A key can create clients for **any** grantable route, including routes added
+later. Any active key can list, regrant, revoke or purge API-created clients,
+regardless of which key created them. Keys cannot see or change browser-created
+clients, modify routes, access secrets, accounts, history, money, debug,
+passkeys or Claude setup, authorize forwarding, or sign in to the browser UI.
+Revoking a key stops provisioning immediately. Select **also revoke clients
+created by this key** to revoke its clients too; otherwise those tokens keep
+working under their existing grants.
+
+Fetch the route names and current configuration `revision` first:
+
+```sh
+api=https://proxy.example.test/_proxy/manage/v1
+curl -fsS -H "Authorization: Bearer $TERM_LLM_PROXY_ADMIN_KEY" "$api/routes"
+```
+
+Use that revision (replace `7` below) to create the client. Save the returned
+`token` privately; give the app that client token, not the admin key.
+
+```sh
+curl -fsS -H "Authorization: Bearer $TERM_LLM_PROXY_ADMIN_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Build worker","grants":["venice"],"revision":7,"external_id":"build/worker-1"}' \
+  "$api/clients"
+```
+
+To replace grants, `PUT /clients/{id}/grants` with `grants` and the current
+`revision`. If the revision is stale (`409`), fetch routes again and check the
+intended grants before retrying. To recover from a lost create response, look
+up the client by `external_id`; the API cannot recover its token. Revoke the
+active client (`revoked: false`) and recreate it with the same `external_id`. A duplicate active
+`external_id` returns `409` with `client_id`.
+
+```sh
+curl -fsS -G -H "Authorization: Bearer $TERM_LLM_PROXY_ADMIN_KEY" \
+  --data-urlencode 'external_id=build/worker-1' "$api/clients"
+curl -fsS -X DELETE -H "Authorization: Bearer $TERM_LLM_PROXY_ADMIN_KEY" \
+  "$api/clients/$client_id"
+```
+
+Use `DELETE /clients/{id}?purge=1` to remove an already revoked client. Purging
+leaves request and money history intact.
 
 ## Provider presets and client settings
 
-Presets fill editable URLs, authentication headers and credential substitutions;
-they do not change the forwarding protocol. **Add API key** stores the key
-immediately without losing your route draft. **Save route** is a separate step
-and does not grant client access. Existing routes do not change when presets
-change.
+Choose the preset from **Routes → Add route**. Keep provider sign-in and client
+access separate: provider credentials let the proxy call the vendor, while a
+route grant lets a particular app or device call the proxy. For a service
+that uses an API key, you can select a saved key or add one while setting up the
+route. The setup guide disappears after the first recorded request and stays
+complete across restarts and history cleanup. Route YAML download and
+replacement live under **Admin**, not Routes.
 
-Available services include OpenAI, Anthropic, Gemini, OpenRouter, xAI, Venice,
-NEAR AI, SambaNova, Obscurify, OpenCode Zen, ElevenLabs, Jina, Voyage AI and
-Mistral transcription. Ollama and vLLM are templates: supply the actual server
-URL; plain HTTP requires explicit acknowledgement. OpenCode Go offers **Chat /
-Responses** and **Messages** profiles, which still require client/session
-attribution headers from the client.
+Presets supply editable creation defaults, not vendor guarantees or discovery.
+Existing routes do not change when presets change. Available families include
+API-key inference/media/search services, account integrations for ChatGPT, Grok and
+Copilot, Bedrock signing, Ollama and configurable compatible servers. OpenCode Go
+uses one consolidated route for Chat/Responses, Messages and Gemini; clients
+retain its client/session headers. Bedrock requires the regional runtime matching
+its account.
 
-Use the local route URL as the replacement API root; do not append the vendor's
-version path again. Client authentication follows the route's configured header:
+Use the route URL without duplicating the vendor version prefix. Client headers:
 
-| Service | Client token header |
+| Service | Client credential header |
 | --- | --- |
-| Most compatible clients | `Authorization: Bearer <token>` |
-| Anthropic | `x-api-key: <token>` |
-| Gemini | `x-goog-api-key: <token>` |
-| ElevenLabs | `xi-api-key: <token>` |
+| Most services, subscription accounts | `Authorization: Bearer <token>` |
+| Anthropic API, OpenCode Go Messages | `x-api-key` |
+| Gemini/Live, OpenCode Go Gemini | `x-goog-api-key` |
+| ElevenLabs | `xi-api-key` |
+| Flux | `x-key` |
 
-Clients must support changing their destination URL and authentication header.
-Query-key authentication and WebSockets are unsupported; HTTP/SSE is supported.
-Version and session headers still come from the client. Presets do not discover
-keys from term-llm configuration or the environment, perform OAuth/CLI login,
-or implement Bedrock signing, FLUX workflows or OpenCode Go's Gemini protocol.
+Query-key auth is unsupported. Claude and Grok CLI gateway paths have fixture
+proof; Cursor, Antigravity and Vibe remain gated. Version/session headers come
+from clients. Advanced route fields enable `websocket: true` and `usage: auto`.
+WebSockets require HTTP/1.1 and have a one-hour cap; revocation closes live use.
+For Responses WebSockets, **Requests** gets one row per observed response turn,
+usually as soon as the upstream terminal event arrives. A reused connection
+can therefore show several rows before it closes. The first saved turn replaces
+the connection's handshake row so it does not double-count usage. Turns still
+open when the connection closes are recorded as incomplete, with unknown
+usage if there were no terminal counters. A connection with no identifiable turn
+keeps its connection row. Turn details link to the shared connection capture
+when debug recording was enabled. Previously recorded connection totals are
+not split retroactively.
 
-## Requests and durability
+Venice routes using the official `https://api.venice.ai/api/v1` root enable
+response token accounting by default, including older routes where `usage` was
+unset. An explicit `usage: off` still disables it. The term-llm Venice client
+requests streaming usage automatically. Other streaming clients must send
+`"stream_options": {"include_usage": true}`; the proxy does not rewrite their
+request bodies or invent missing counts. Existing unmeasured records cannot be
+backfilled from responses that were not retained.
 
-**Requests** has numbered pages of **25 requests**, a matching-row count, and
-controls above and below the list. Expand **Filters** to search by client,
-route, method, path, outcome, local time or request ID, or export up to **1,000**
-matching records as JSON. Path searches accept a relative path or the full local
-route path. Select a row for details. New traffic and retention cleanup can
-shift page boundaries between visits.
 
-History contains paths, client/route identifiers, status, timing, body-byte
-counts, peer IP and an optional configured upstream request ID. It contains no
-bodies, query values, arbitrary headers, model/token counts or costs. Generated
-request IDs are also returned in `X-Term-LLM-Proxy-Request-ID`.
+### OpenCode Go: one key, one route, one grant
 
-Retention defaults to **30 days** (`--retention-days`). Known credentials are
-redacted from paths, but arbitrary secrets embedded in path identifiers cannot
-be reliably detected. Avoid APIs that put sensitive values in paths.
+Choose the **OpenCode Go** preset and store one upstream OpenCode Go API key.
+The parent route prefix is `/opencode-go/`; grant that single route to the client.
+All protocols use the same scoped client token, not the upstream key. Configure
+term-llm's OpenCode Go native base URL as `https://proxy.example.test/opencode-go`.
+Its protocol clients select these three API roots:
 
-A history row must commit before forwarding; if that fails, the proxy returns
-503 without contacting the upstream. Incomplete records remain **unknown**, not
-successful. Errors, timeouts, byte counts and interrupted streams do not prove
-whether upstream work or billing occurred. The proxy never retries or replays
-requests automatically.
+| Protocol | Client API root | Fixed upstream API root |
+| --- | --- | --- |
+| Chat Completions / Responses | `https://proxy.example.test/opencode-go` | `https://opencode.ai/zen/go/v1` |
+| Messages | `https://proxy.example.test/opencode-go/messages` | `https://opencode.ai/zen/go` |
+| Gemini | `https://proxy.example.test/opencode-go/gemini` | `https://opencode.ai/inference/go/v1` |
+
+The parent rule `/` handles Chat/Responses; `/messages/` and `/gemini/` select
+Messages and Gemini respectively. Native clients append their operation paths:
+`/chat/completions` or `/responses`, `/v1/messages`, and
+`/models/<model>:streamGenerateContent`. Each protocol uses the client credential
+header shown above. No body conversion is involved; the OpenCode client/session
+headers still come from the client.
+
+Named term-llm providers of type `opencode-go` use their own parent namespace:
+for example, `household` uses `/household`, `/household/messages` and
+`/household/gemini`. Create and grant that parent route explicitly; it does not
+borrow the built-in OpenCode Go route or another named provider's subpaths.
+
+**Existing sibling-route installations require explicit migration.** Older
+`/opencode-go-messages/` and `/opencode-go-gemini/` routes are not silently moved,
+merged or granted by changing presets. Review and explicitly replace the old
+setup with the consolidated parent and its three rules, then review/regrant
+client access and update client roots; remove obsolete sibling routes/grants.
+Route authority/rule changes invalidate existing grants. Global term-llm proxy
+configuration now registers only the nested roots, so migrate the server and
+regrant before switching those clients. Explicitly manually registered legacy
+sibling roots remain compatible when bound to the same client principal; missing
+protocol roots fail closed rather than contacting a public vendor endpoint.
+
+## Trusted accounts
+
+Under **Routes → Advanced**, manual credential JSON is still supported for
+`chatgpt`, `grok`, `copilot` and `aws-sigv4`. Use the guided sign-in for new
+ChatGPT plan routes. Passkey mode requires fresh consent for credential changes.
+Select the account when creating its route. Credentials are write-only; metadata
+contains state, mode and expiry. Account-managed headers cannot also have static
+substitutions. Origins and API paths are restricted to that integration. Sign-out
+clears credentials and closes streams; requests fail closed until credentials are
+replaced. Claude uses **Add device** on the route and **Clear all Claude setup**
+under **Advanced**, not this account editor.
+
+For rotating accounts, move custody to the proxy: do not leave another process
+refreshing the same token. Rotation is durably fenced and committed before use.
+Uncertain post-connection issuer outcomes can require fresh login rather than
+reusing a consumed token. Safe pre-connection failures back off. Inference is never
+replayed automatically after a vendor 401. AWS supports static/session signing,
+not automatic credential-chain renewal.
+
+Operator-only startup import:
+
+```yaml
+accounts:
+  home-chat:
+    kind: chatgpt
+    file: /run/secrets/chatgpt-account.json
+```
+
+The private regular file is limited to 128 KiB, read only when that account is absent.
+After import the stored account is authoritative; remove the bootstrap file.
+A different existing kind rejects startup. The Admin UI cannot introduce files.
+
+## Using term-llm as a client
+
+To proxy only built-in ChatGPT, add this top-level block to the client's
+`config.yaml`. The proxy shows this example when you create a client from the
+canonical ChatGPT route. Use the proxy origin, not the `/chatgpt/` route URL,
+and point `token` at a private file containing the scoped client token.
+
+```yaml
+proxy:
+  url: https://proxy.example.test
+  token: file:///run/secrets/proxy-client-token
+  providers: [chatgpt]
+```
+
+`proxy.providers` is an exact allowlist. `chatgpt` selects built-in ChatGPT and
+its related features, including those that use `/chatgpt-backend/` (usage and
+dictation) or `/chatgpt-openai/` (embeddings and realtime sideband). Grant the
+same client every route it needs. Other providers, including named providers
+of type `chatgpt`, keep using their own endpoints and credentials.
+
+- To proxy a configured named provider, list its exact configuration name. This
+  selects only that provider, not other providers of the same type or their
+  ancillary integrations. The named provider uses its own `/<name>/` route.
+- To proxy a media-only integration, list its route ID, for example `flux`.
+- `providers: []` selects nothing. Omit `providers` to keep the legacy behavior:
+  proxy all supported integrations except those listed in `proxy.direct`.
+  A nonempty `proxy.direct` conflicts with any explicit `proxy.providers` list,
+  even an empty one.
+
+Selected integrations use the scoped client token instead of resolving local
+provider secrets, including when they previously used custom API roots. Built-ins
+use their canonical route IDs. A missing route or grant never falls back to the
+vendor. OpenCode Go uses one parent grant with nested `/messages` and `/gemini`
+API roots.
+
+In legacy mode, `direct: [opencode-go]` keeps the whole OpenCode Go protocol
+family direct, including named providers of that type. A named provider's own
+`direct` exception affects only that provider and all its protocols; legacy
+sibling names alone cannot opt individual protocols out. Unknown names fail.
+Complete custom chat `url` mappings fail closed: migrate to a compatible
+`base_url` or leave that provider direct. Provider/doctor output describes the
+configuration, not connectivity. The proxy token resolves at config load;
+replacing it requires a worker restart because each proxy root has one caller
+identity per process.
+
+`claude-bin` is the term-llm provider name; `/claude-code/` is its canonical
+proxy route. With `claude-bin` in the top-level `proxy.providers` list, term-llm
+adds `/claude-code/` to `proxy.url` and uses the top-level `proxy.token`. That
+client must have a route grant **and** its own Claude sign-in. If you signed in
+using a different launcher token or proxy URL, use that exact URL and token in
+`providers.claude-bin.proxy` instead, and remove `claude-bin` from the top-level
+list. Alternatively, run `term-llm proxy run claude` without flags to sign in
+with the binding already in your config.
+
+## Usage and spending
+
+Home charts **Cost/Tokens** over **Today/7/30 days**, grouped by total, client,
+provider, or model. Hover, tap, or use the keyboard for values. The chart uses
+your browser timezone: Today starts at local midnight, and longer ranges use
+local calendar days. Currencies remain separate.
+
+Only traffic through this proxy is counted. Missing evidence is not zero.
+Provider token semantics are normalized without counting caches/reasoning twice;
+legacy token history is recoverable only while original evidence remains.
+The chart timezone does not change plan summaries or monthly alerts. Set their
+timezone and the optional monthly alert under **Money settings**. Alerts warn;
+they never stop requests.
+
+Pricing uses the shared **models.dev** catalog, with exact provider/model matches
+and published context tiers. Explicit operator rate cards override the catalog;
+bundled first-party prices are an offline fallback. The proxy loads its snapshot
+from `<state-dir>/pricing`, refreshes in the background (12-hour catalog TTL), and
+keeps the last good snapshot if refresh fails. Request handling never fetches
+prices. `TERM_LLM_OFFLINE` disables background refresh. Price details show the
+source and retrieval date. Missing rates/counts stay unknown; no fuzzy matching,
+automatic FX or invented invoice charges.
+
+For Venice chat completions, the proxy uses `usage.cost` from the response,
+including the final usage chunk of a stream. It adds `usd` and `diem` at
+**1 DIEM = US$1** and rounds the sum once to the nearest millionth of a dollar.
+For example, `{"usd":0,"diem":0.0002498}` records **US$0.000250**. This is a
+provider-reported cost, not a token-price estimate. Raw payload capture is not
+required, and previously recorded requests are not repriced.
+
+Subscription activity is valued at the API rate when a stored **API-equivalent
+estimate** is available. The Home Cost graph includes these estimates and shows
+the plan portion in each bar's breakdown. They do not count as actual spending
+or budget usage. Cache writes use the catalog's published default rate;
+TTL-specific prices may differ, as noted in Price details. Unsupported service
+tiers remain unpriced. Expand **Plan estimates at API rates** on Home for today
+and month-to-date totals, coverage, and **Price details**.
+Historic estimates keep their original price; old unpriced history is not
+automatically repriced. Subscription fees and savings are not inferred; estimates
+exclude taxes, discounts, credits and fees.
+
+The request ledger shows model, client, normalized total input/output, cache-read
+share, duration and price. If no model was reported, the row shows the method and
+path. If token usage is unavailable, it shows bytes in and out when recorded.
+Byte sizes are abbreviated; hover for exact counts. Dates and times use the
+browser timezone. Expand a row for reported token counters and technical details.
+Missing values are not zero. Total input includes
+cached tokens exactly once across provider conventions. Repeated unmeasured HTTP
+errors collapse within each page; expand ×N to inspect individual requests.
+Measurement requires `usage: auto` and supported response evidence; arbitrary
+protocols and responses without usage cannot supply exact counts.
+
+In **Requests**, edit the fields under **Filters**, then choose **Apply filters**.
+The count beside **Filters** describes the results on screen, not pending edits.
+**Refresh** reloads the current page with the applied filters; **Clear** returns
+to the first page of all requests. Visible Requests page 1 checks for changes
+once a second using the applied filters. Unchanged results stay in place, and
+changes wait while you inspect a request. Older pages and hidden tabs do not poll.
+JSON export uses the applied query and includes
+up to 1,000 matching metadata records, never bodies, query strings, arbitrary
+headers or secret values. Admission commits before dispatch; incomplete outcomes
+remain unknown. Requests default to 30-day retention; financial history is separate.
+Path redaction cannot detect arbitrary secrets: avoid sensitive path identifiers.
 
 ## Configuration
 
-A route grants access to **all ordinary methods and relative paths under its
-upstream base URL**, potentially including management or billing APIs. Use
-narrowly scoped keys and base paths. There are no per-path/method policies or
-automatic direct-provider fallbacks.
+UI-managed routes/secrets are editable. Secrets bind to one origin; referenced
+secrets cannot be deleted. YAML import/export contains definitions/references,
+not credentials, client tokens, passkeys or history. Only operator-authored files
+may introduce private regular secret files (maximum 16 KiB, trailing newlines removed).
 
-### UI-managed (default)
-
-Routes and secrets are editable in the browser. Secrets are write-only: replace
-them to rotate a key; they cannot be read back. Each secret is bound to one
-upstream origin (scheme, host and effective port). Use a new name for a different
-origin. Referenced secrets cannot be deleted, even when the route is disabled.
-
-Route names are immutable access-control identities. Changes affect grants as
-follows:
-
-| Change | Existing route grants |
-| --- | --- |
-| Upstream origin/base path or outbound header rules | Removed; review and regrant in **Clients** |
-| Delete a route, including delete-and-recreate | Removed permanently |
-| Disable a route | Kept for re-enabling |
-| Local prefix, client authentication format or request-ID setting | Kept |
-| Rotate a secret's value under the same name and origin | Kept |
-
-A replacement key may have wider privileges; the proxy cannot infer that from
-its value. Revoking clients, removing grants or disabling/deleting routes blocks
-**new requests only**. Already dispatched work can continue until completion,
-cancellation or timeout. Grant edits do not reissue client tokens.
-
-Under **Routes → Configuration file**, **Download routes.yaml** exports route
-definitions and secret references. To replace routes, choose a YAML file (up to
-1 MiB) or **Paste YAML instead**, then **Replace routes from YAML**. This is not
-a backup: it excludes secret values, client tokens, passkeys and history.
-Concurrent edits are revision-checked; refresh after a conflict.
-
-### Operator-managed (`--config`)
-
-After enrolling the administrator, start with an authoritative route file:
-
-```sh
-term-llm serve proxy --state-dir ./proxy-state \
-  --public-url https://proxy.example.test --config ./proxy.yaml
-```
-
-The route UI becomes read-only; Clients, Requests and stored-secret rotation
-remain available. **Reload file** validates the whole file, reads its secret
-files, then activates it atomically. Invalid reloads keep the previous valid
-configuration. Files are not watched or rewritten automatically.
-
-Switching modes or reloading removes grants for missing routes or changed
-upstream authority. Returning to an older configuration does not restore those
-grants; review **Clients** and regrant explicitly.
-
-Only operator-authored files may introduce file-based secrets. Sources must be
-private regular files, at most 16 KiB, with an explicit matching upstream
-`origin`. They are read at activation, not per request; trailing CR/LF is removed.
-Admin tokens, enrollment/recovery secrets and passkey state—including hardlink
-aliases—cannot be used as upstream secrets.
-
-### Configuration example
+With `--config ./proxy.yaml`, routes are read-only; explicit reload validates and
+activates atomically, retaining the old configuration on failure. Files are not
+watched. Example:
 
 ```yaml
 routes:
-  - name: service-a
-    enabled: true
-    local_prefix: /service-a/
-    upstream: https://api.service-a.example/
-    caller_auth:
-      header: Authorization
-      prefix: "Bearer "
+  - name: service
+    local_prefix: /service/
+    upstream: https://api.example.com/v1
+    caller_auth: {header: Authorization, prefix: "Bearer "}
     set_headers:
-      Authorization:
-        secret: service-a-key
-        prefix: "Bearer "
-    request_id_header: X-Request-ID
-
-  - name: service-b
-    enabled: true
-    local_prefix: /service-b/
-    upstream: https://api.service-b.example/unrelated/base/
-    caller_auth:
-      header: X-API-Key
-    set_headers:
-      X-Other-Credential:
-        secret: service-b-key
-      X-Client-Label:
-        value: local-proxy
-
+      Authorization: {secret: service-key, prefix: "Bearer "}
+    usage: auto
+    billing: pay_as_you_go
+    redirects: refuse
 secrets:
-  service-a-key:
-    origin: https://api.service-a.example
-    file: /run/secrets/service_a
-  service-b-key:
-    stored: service-b-key
+  service-key:
+    origin: https://api.example.com
+    file: /run/secrets/service-key
 ```
 
-These hosts are examples. Create `service-b-key` in the UI before switching to a
-file that references it. A `stored` reference must use the stored secret's own
-name; an optional declared `origin` must match its binding. Missing credentials
-for enabled routes reject startup or reload. Export never includes secret values;
-import through the UI cannot introduce file sources.
+Enabled defaults true. `stored: <name>` references an existing same-name secret.
+HTTP upstreams need explicit `allow_insecure_http: true`. Prefixes must be canonical,
+non-overlapping, non-root and end with `/`; admin/asset/health paths are reserved.
+There is no interpolation, command execution or body rewriting.
 
-`enabled` defaults to true. The existing `caller_auth` field configures **client**
-authentication and defaults to `Authorization` with prefix `Bearer `. Each header
-substitution accepts either `secret` with an optional `prefix`, or a nonsecret
-literal `value`. There is no interpolation, command execution or body rewriting.
+Routes otherwise grant all methods/relative paths beneath their base, potentially
+including management APIs. Use narrow credentials and optional `allow` entries
+such as `POST /responses`. Account routes always enforce integration restrictions.
+`redirects` is `passthrough` or `refuse`; WebSockets/usage default off. Billing defaults
+unspecified; choices are `pay_as_you_go`, `plan`, `local`, `unspecified`.
 
-Upstream URLs must use HTTPS unless `allow_insecure_http: true` is explicitly
-set for trusted private/test traffic. URLs cannot include userinfo, queries or
-fragments. Local prefixes must be canonical, non-root, non-overlapping paths
-ending in `/`; admin, asset and health paths are reserved. Limits are 128 routes,
-256 secrets, 32 substitutions per route and 1 MiB of configuration. Host, framing,
-hop-by-hop and proxy diagnostic headers cannot be substitution targets.
+Changing upstream authority/base, credential rules, account or access policy removes
+existing grants; review/regrant explicitly. Delete/recreate never restores grants.
+Disabling retains grants; rotating a same-origin secret retains them. A replacement
+credential may have broader vendor privileges: the proxy cannot infer those.
 
 ## Explicit setup and production administration
 
-`--auth passkey` is the default. Loopback listeners (`127.0.0.1`, `::1` or
-`localhost`) infer `http://localhost:<port>` when `--public-url` is omitted.
-Non-loopback listeners require `--public-url`. Remote administration requires a
-stable HTTPS domain origin and an explicit bootstrap file, even if the backend
-listener is loopback. IP origins and public URLs with mount paths are rejected.
-
-To manage the initial bootstrap file yourself:
+Passkey administration is default. For controlled enrollment:
 
 ```sh
 install -d -m 0700 ./proxy-state ./proxy-secrets
@@ -229,79 +491,36 @@ term-llm serve proxy --state-dir ./proxy-state \
   --passkey-bootstrap-token-file ./proxy-secrets/bootstrap
 ```
 
-Open **http://localhost:8082/_proxy/**, paste the file's contents into **Bootstrap
-token**, name the passkey and choose **Create first passkey**. For remote use,
-replace the public URL with your HTTPS origin and configure the terminator
-[below](#https-termination-and-hostname-routing).
-
-Bootstrap and recovery secrets can each be exchanged **once within 10 minutes
-of startup** for a **five-minute enrollment grant**. Retry a cancelled browser
-prompt while the grant is valid. If it expires or its cookie is lost, restart:
-automatic local setup generates a new token; explicit setup needs a fresh secret
-file. Old explicit files are rearmed on restart, so do not reuse them.
-
-Automatic local bootstrap files are removed on clean shutdown. Explicit files
-are operator-managed: after enrollment or recovery, remove the flag and securely
-remove the file. Normal startup needs neither. A bootstrap flag cannot enroll
-another key once credentials exist. Enrollment secrets are not admin passwords
-or client tokens; keep them out of URLs, browser storage and source control.
+A bootstrap/recovery secret exchanges once within ten minutes of startup for a
+five-minute enrollment grant. Remove explicit flags/files after enrollment;
+automatic local bootstrap files are cleaned up. Enrollment is not a machine token
+or permanent admin password. Do not reuse secrets on restart.
 
 ### Passkeys, sessions and recovery
 
-In **Passkeys**, add a spare key and name devices clearly. Adding or revoking a
-key, or choosing **Sign out other browsers**, requires a fresh passkey assertion.
-The final key cannot be deleted. Revoking a key invalidates its sessions;
-**Sign out other browsers** keeps the current browser signed in.
+Keep a spare passkey. Adding/revoking keys or signing out other browsers needs fresh
+authentication; the final key cannot be removed. Sessions expire after 12 idle hours
+or seven days overall and survive restart via private token hashes. Restart clears
+pending ceremonies/grants, not keys or clients. Logout revokes its session.
 
-Passkey sessions expire after **12 idle hours** or **seven days** overall. Logout
-revokes the server session immediately. Like Hub, browser sessions survive
-restarts using a private `admin-auth/sessions.json` file containing only session
-token hashes, not raw tokens. Restart clears pending enrollment grants, passkey
-ceremonies and fresh-auth approvals, but not passkeys, client tokens or route
-grants.
-
-If all enrolled devices are unavailable:
-
-1. Create `./proxy-secrets/recovery` with a fresh private 256-bit random secret.
-2. Restart the same state directory with
-   `--passkey-recovery-token-file ./proxy-secrets/recovery` instead of the
-   bootstrap flag.
-3. Choose **Recover access**, enter the **Recovery token** and a **Passkey name**,
-   then choose **Recover with new passkey**.
-4. Sign in with the new key. Recovery invalidates every session but leaves old
-   keys enrolled; review **Passkeys** and revoke lost keys. Remove the recovery
-   flag/file after use.
-
-Recovery requires an already enrolled store and does not change routes,
-upstream credentials or client tokens.
+If keys are lost, restart the same store with a fresh private
+`--passkey-recovery-token-file`, choose **Recover access**, enroll and sign in.
+Recovery invalidates sessions but retains old keys: explicitly revoke lost keys,
+then remove the recovery flag/file. Routes and upstream credentials are unchanged.
 
 ### Explicit token compatibility mode
 
-For intentional local/legacy administration without passkeys:
-
-```sh
-install -d -m 0700 ./proxy-state ./proxy-secrets
-(umask 077; openssl rand -hex 32 > ./proxy-secrets/admin)
-term-llm serve proxy --auth token --state-dir ./proxy-state \
-  --admin-token-file ./proxy-secrets/admin
-```
-
-Open **http://127.0.0.1:8082/_proxy/** and enter the **Administrator token**.
-Sessions expire after eight hours or on restart. To rotate the token, replace its
-private file and restart. Passkey mode rejects `--admin-token-file`; token mode
-rejects passkey enrollment/recovery flags. There is no silent fallback, and admin
-credentials never authorize forwarding.
+Legacy/local administration may use `--auth token --admin-token-file <private-file>`.
+Rotate by replacing the file and restarting; eight-hour sessions also end on restart.
+Passkey mode has no admin-token bypass, and incompatible auth flags are rejected.
 
 ### HTTPS termination and hostname routing
 
-The proxy has **no built-in TLS**. Put an externally managed TLS terminator in
-front of the private listener and set `--public-url https://proxy.example.test`.
-Route the **whole hostname at its root**, preserve the public Host header, and
-pass paths unchanged: admin `/_proxy/`, client routes and readiness `/healthz`.
-Subpath mounting is unsupported. Keep the backend inaccessible to untrusted
-clients and restrict public access to readiness as appropriate.
-
-A minimal separately managed Caddy configuration:
+The listener has no built-in TLS. Remote deployments require a stable domain,
+`--public-url https://proxy.example.test`, explicit enrollment and a trusted external
+terminator. Route the whole hostname at its root; preserve Host and paths including
+`/_proxy/`, client routes and `/healthz`. Mount paths/IP passkey origins are unsupported.
+Keep the backend private; do not trust arbitrary forwarded headers.
 
 ```caddyfile
 proxy.example.test {
@@ -311,97 +530,135 @@ proxy.example.test {
 }
 ```
 
-Use a real domain with valid DNS and a trusted certificate for deployment;
-`.test` is only an example. For isolated private-CA tests, configure trust in the
-test browser rather than disabling HTTPS verification.
-
-Host and browser Origin must match the configured public origin, including its
-port. `Forwarded` and `X-Forwarded-*` are not trusted. Passkey sessions use
-non-Secure cookies only for the configured localhost HTTP development origin.
-In token mode without a public
-URL, loopback browser Hosts are accepted, including SSH-forwarded ports. Host
-checks are not authentication; protect client routes with TLS too.
-
-Disable response buffering for SSE, preserve cancellation, and allow timeouts
-long enough for `--request-timeout`. Do not add automatic retries at the
-terminator. Apply network/rate limits: login throttling does not prevent denial
-of service. Browser admin sessions use HttpOnly, SameSite=Strict cookies, Secure
-on HTTPS; mutations also require Origin and CSRF checks.
+Use real DNS/trusted certificates; `.test` is illustrative. Never disable TLS
+verification. Preserve streaming/cancellation, allow request timeouts, and do not
+add retries. Secure/HttpOnly/SameSite cookies, exact Origin/Host and CSRF protect
+administration; network/rate limits still matter. Protect machine traffic with TLS.
 
 ## Forwarding behavior
 
-```text
-/service-a/v1/anything  → https://api.service-a.example/v1/anything
-/service-b/jobs/123     → https://api.service-b.example/unrelated/base/jobs/123
-```
+Headers replace rather than append. Duplicate credentials are rejected. Client
+auth, cookies, forwarding/rewrite/proxy and hop-by-hop headers are stripped;
+upstream Host is fixed and Set-Cookie removed. Opaque bodies, escaped identifiers
+and raw queries pass through. Usage-enabled routes request identity encoding;
+unexpected encodings/extensions remain unmeasured. Redirects are never followed.
+Traversal, controls, absolute targets, CONNECT and unsupported upgrades are refused
+by ordinary forwarding; the constrained Claude tunnel above is the separate CONNECT
+path.
 
-- Header substitutions **replace**, never append. Client authentication requires
-  one header value with the exact configured prefix and a nonempty token.
-  Duplicate authentication/credential fields are rejected.
-- The client authentication header, Authorization, Proxy-Authorization, Cookie,
-  forwarding headers, rewrite headers, proxy diagnostics and hop-by-hop headers
-  are stripped before substitutions. Outbound Host is fixed to the upstream;
-  response Set-Cookie is removed.
-- Other end-to-end headers and opaque JSON, SSE, binary or media bodies pass
-  through. Responses are not transparently decompressed or inspected. Redirects
-  are returned unchanged, not followed.
-- Escaped path identifiers such as `%2F` and raw query bytes are preserved.
-  Traversal/dot segments, backslashes, control characters, absolute-form targets,
-  CONNECT and Upgrade/WebSocket requests are rejected. This is not a general
-  forward proxy or MITM service.
-
-Only use trusted upstreams: an upstream can echo its own credentials in a
-response, and opaque forwarding cannot prevent that. OS administrators are also
-trusted; a proxy does not isolate clients with host/root access or prevent them
-from making direct outbound connections.
+This is not a general forward proxy or MITM; the Claude tunnel is the only TLS
+intercept, and only for its two fixed Anthropic hosts. A trusted upstream can echo
+its own credential. Credential custody also requires separate worker
+filesystems/identities and egress policy: routing settings alone are not an OS
+sandbox.
 
 ## Storage and operations
 
-State defaults to `os.UserConfigDir()/term-llm/proxy`, separate from agent/Hub
-state. On Linux this is `$XDG_CONFIG_HOME/term-llm/proxy`, or
-`~/.config/term-llm/proxy`. Override it with `--state-dir`. Run only one proxy
-process per state directory.
+State defaults to the user config directory's `term-llm/proxy`; override with
+`--state-dir`. Run one process per store. `proxy.db` holds plaintext credentials,
+client hashes/grants and history; `admin-auth/` holds passkeys/sessions. Native
+Claude vault rows are authenticated ciphertext keyed to proxy-owned material, but
+the database is not a general encrypted vault. Use 0700 directories and 0600 files
+and owner-only Windows ACLs. No credentials are stored in browser storage. Protect
+backups like credentials; use consistent SQLite backup or stop the process, not a
+live DB-only copy. Include `claude-forward-ca-v2.pem`: its private key is also
+needed to decrypt native Claude custody. Losing it requires new native sign-ins.
+General ledger writes use WAL/NORMAL; credential custody uses FULL-synchronous
+commits before returning tokens or dispatching refreshes.
 
-Routes, **plaintext write-only secrets**, client token hashes/grants and history
-live in `proxy.db`; passkey registrations live under `admin-auth/`. This is private server
-storage, not an encrypted vault. The UI does not persist secret values or tokens
-in browser storage. Keep the directory 0700 and credential/secret files private
-regular files (0600 or stricter); bootstrap/recovery files cannot be symlinks.
-Provision at least 256 random bits for host secrets. On Windows, configure
-owner-only ACLs explicitly; Go file modes do not enforce them.
-
-SQLite uses WAL with `synchronous=NORMAL`: process crashes are supported, but
-recent writes may be lost on host power loss. Stop the service or use a consistent
-SQLite backup; copying a live `.db` without its WAL is unsafe. Protect backups
-like credentials. Downgrading requires a compatible protected backup.
+Schema v5 replaced browser pairing with the native Claude vault. Schema v6 adds
+admin API key hashes and provisioning metadata; existing clients stay browser-managed. The v5 binary rejects v6 for read-write use: stop
+older writers before upgrading, and restore a protected backup to downgrade.
+The proxy allows up to 1,024 active clients and keeps up to 4,096 client rows;
+new clients can evict the oldest revoked rows without removing history.
 
 ```sh
 term-llm serve proxy health --host 127.0.0.1 --port 8082
 ```
 
-Health checks only the local listener/store, not upstream availability. The
-command rejects raw-debug and profiling options and bypasses normal provider
-configuration and update initialization.
+Health checks local readiness, not vendors. General `--debug-raw` and profiling
+are refused; payload capture has a separate explicit opt-in below.
+Defaults: 64 concurrent requests, 64 MiB body, 15-minute request deadline, 30-day request
+history. CLI flags override these. Retention is batched; monitor disk. Shutdown
+stops admission, drains for 20 seconds, then cancels remaining work.
 
-| Default limit | Value | Override |
-| --- | --- | --- |
-| Active requests (no queue) | 64 | `--max-concurrent` |
-| Request body | 64 MiB | `--max-body-bytes` |
-| Total request time, including streaming | 15 minutes | `--request-timeout` |
-| Request history | 30 days | `--retention-days` |
+### Debug payload capture
 
-Incoming headers are limited to 64 KiB; dial/TLS/header-read bounds are 15 seconds.
-There is no short upstream response-header timeout. Body limits also apply to
-chunked uploads. Retention deletes in batches, so monitor disk capacity under
-heavy traffic. Shutdown stops admission and drains for 20 seconds before
-cancelling unfinished work.
+Capture is **off by default**. Open **Debug** in the signed-in proxy UI to enable
+or disable it without restarting, and inspect captured request/response payloads.
+Enabling requires confirmation that raw data may contain secrets. Disabling stops
+capture, including active streams, without interrupting forwarding. Toggle changes
+apply only until restart; startup follows the CLI options.
 
-For container deployment, see
-[the deployment example](https://github.com/term-llm/term-llm/tree/main/examples/proxy).
-No image is published by this feature. Keep proxy state and real upstream keys
-out of client containers; a private network alone is not an egress firewall.
+Without a directory flag, captures use `<state-dir>/debug-payloads`. To choose
+another private archive and start with capture enabled, keep your other startup
+options and add:
 
-For a provider-free local demo, run `python3 examples/proxy/mock_upstreams.py`.
-It starts two synthetic upstreams and prints their fixture credentials. For
-contributor browser acceptance, see `scripts/proxy_passkey_smoke.sh --help`; use
-only disposable test credentials and state.
+```sh
+term-llm serve proxy --debug-payload-dir ./tmp/proxy-payloads
+```
+
+**Sensitive:** payloads contain unredacted prompts, replies, tool data and any
+body-embedded secrets. A trusted upstream may echo credentials into its body.
+Keep this directory out of source control, shared/synced folders and ordinary
+backups. Capture uses private directories/files (0700/0600, owner-only Windows
+ACLs), rejects symlinks and requires exclusive archive ownership. Do not enable
+it routinely in production. Startup prints a warning; file I/O can affect latency.
+
+Each dispatched request gets a directory named for its proxy request ID (also
+returned in `X-Term-LLM-Proxy-Request-ID`), containing:
+
+- `request.body` and `response.body`: binary-safe bytes consumed on the forwarding
+  path; empty or unread streams may have no file.
+- For upgraded WebSockets, `websocket-client.frames` and
+  `websocket-server.frames`: raw wire frames, **not decoded JSON messages**.
+- `manifest.json`: bounded metadata, response format, reported model/usage when
+  available, and per-stream bytes seen/stored, EOF, truncation and error flags.
+  While active, files may grow and the manifest is preliminary. `finished` means
+  capture finalization, **not** proof of a complete payload; inspect those flags.
+
+No authorization/cookie headers, arbitrary headers or query strings are archived.
+Only bounded Content-Type/response Content-Encoding metadata is retained; bodies
+are not redacted, decompressed, replayed or pre-read. Captures describe consumed
+transport bytes, not proof that all upstream work reached the client. Capture
+failures do not fail forwarding. Local pre-dispatch denials are not captured.
+To inspect one request, expand its row in **Requests** and choose **View raw
+payload**. The button appears when that request has stored body or frame data,
+even if capture has since been turned off. Expanding the row checks availability;
+it does not fetch payload bytes or turn capture on. Close the row to return to the
+same filtered list. The signed-in **Debug** view also lists captures and shows
+bounded previews, including manifests, HTTP bodies, and WebSocket frames. Frame
+files open in **Decoded** view: client masking is removed, text and JSON are
+readable, and frame headers show their wire offsets. Use **Raw bytes** to see
+the original capture. Binary, compressed, and incomplete data are identified
+rather than guessed at. Decoding is on demand; it does not change the archive.
+Payloads are displayed as text, not HTML, and never saved in browser storage.
+Only this fixed archive and allowlisted capture files can be inspected; this is
+not a general log-file browser. Normal request exports still exclude bodies.
+Debug inspection requires the same authenticated administrator session and
+same-origin protections as other administration; capture changes require CSRF.
+
+Defaults are **4 MiB per body/WebSocket direction**, **2,560 MiB (2.5 GiB) archive bytes** and
+**1,000 request captures**. Override byte limits with
+`--debug-payload-max-bytes` (1 byte–64 MiB) and
+`--debug-payload-max-total-bytes` (32 KiB–4 GiB). The archive rolls: when a byte
+or count limit would be exceeded, the proxy removes the oldest inactive captures
+first, including captures kept across restarts. In-flight captures are never
+removed. If there is still not enough room, capture can be skipped or truncated
+without interrupting proxy traffic. The request ledger is unaffected. Disable
+capture after debugging. Restart without `--debug-payload-dir` to leave startup
+capture off.
+
+### What is and is not verified
+
+Synthetic upstreams, native-binary fixtures and client/browser fixtures cover scoped
+routing, the launcher environment, CA handling, vault placeholders, token exchange
+and refresh, cancellation, consent and charts. They do not prove live vendor
+issuance, subscription acceptance, native Claude live sign-in, billing or
+non-Linux compatibility. Do not treat this flow as live-accepted until an isolated
+real-account test establishes it. Cursor/Vibe/Antigravity and exact custom-URL
+mappings remain gated. No invoice/refund, FX, plan-quota or hard financial-limit
+support is claimed.
+
+See the [deployment example](https://github.com/term-llm/term-llm/tree/main/examples/proxy)
+for containers; state and upstream keys must stay off workers.

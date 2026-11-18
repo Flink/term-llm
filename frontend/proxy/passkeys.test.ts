@@ -37,6 +37,7 @@ const snapshot: ProxyState = {
   csrf: 'session',
   routes: [],
   callers: [],
+  admin_keys: [],
   secrets: [],
 };
 const credential = { id: 'private-credential' } as SerializedPublicKeyCredential;

@@ -711,7 +711,7 @@ func (p *ClaudeBinProvider) prepareClaudeCommand(ctx context.Context, args []str
 	}
 	cmd.WaitDelay = claudeCommandWaitDelay
 	cmd.Env = p.buildCommandEnv(effort)
-	auditedEnv, wireAudit, err := startCLIWireAudit("claude-bin", cmd.Env)
+	auditedEnv, wireAudit, err := startCLIWireAuditContext(ctx, "claude-bin", cmd.Env)
 	if err != nil {
 		return nil, nil, nil, err
 	}

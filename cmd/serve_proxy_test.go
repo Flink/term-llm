@@ -82,3 +82,32 @@ func TestProxyPasskeyFlagsAndExplicitTokenMode(t *testing.T) {
 		}
 	}
 }
+
+func TestProxyPayloadDebugFlagDefaults(t *testing.T) {
+	c := newServeProxyCommand()
+	for name, want := range map[string]string{
+		"debug-payload-dir":             "",
+		"debug-payload-max-bytes":       "4194304",
+		"debug-payload-max-total-bytes": "2684354560",
+	} {
+		flag := c.Flags().Lookup(name)
+		if flag == nil {
+			t.Fatalf("missing flag %s", name)
+		}
+		if flag.DefValue != want {
+			t.Errorf("%s default=%q, want %q", name, flag.DefValue, want)
+		}
+	}
+	if err := c.ParseFlags([]string{"--debug-payload-dir", "./tmp/captures", "--debug-payload-max-bytes", "1024", "--debug-payload-max-total-bytes", "65536"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := c.Flags().GetString("debug-payload-dir"); got != "./tmp/captures" {
+		t.Fatal(got)
+	}
+	if got, _ := c.Flags().GetInt64("debug-payload-max-bytes"); got != 1024 {
+		t.Fatal(got)
+	}
+	if got, _ := c.Flags().GetInt64("debug-payload-max-total-bytes"); got != 65536 {
+		t.Fatal(got)
+	}
+}

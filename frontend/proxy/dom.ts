@@ -14,6 +14,12 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   node.append(...children);
   return node;
 }
+export function titledValue(value: { text: string; title: string }): HTMLSpanElement {
+  const node = el('span', value.text);
+  node.title = value.title;
+  node.setAttribute('aria-label', value.title);
+  return node;
+}
 export function button(text: string, action?: () => void): HTMLButtonElement {
   const node = el('button', text);
   node.type = 'button';
@@ -59,6 +65,20 @@ export function check(label: string, checked: boolean): [HTMLLabelElement, HTMLI
   node.className = 'check';
   return [node, control];
 }
+export function badge(text: string, kind = ''): HTMLSpanElement {
+  const node = el('span', text);
+  node.className = `badge ${kind}`;
+  return node;
+}
+export function routeBadges(enabled: boolean, ...badges: HTMLSpanElement[]): HTMLDivElement {
+  const node = el(
+    'div',
+    badge(enabled ? 'Enabled' : 'Disabled', enabled ? 'enabled' : 'muted'),
+    ...badges,
+  );
+  node.className = 'route-badges';
+  return node;
+}
 export function actions(...children: Child[]): HTMLElement {
   const node = el('div', ...children);
   node.className = 'actions';
@@ -81,15 +101,19 @@ export interface UIContext {
   run: (action: () => Promise<unknown>, source?: HTMLElement) => Promise<boolean>;
   refresh: (focusKey?: string, preserveView?: boolean) => Promise<ProxyState | undefined>;
   announce: (message: string) => void;
-  navigate: (tab: 'Routes' | 'Secrets' | 'Clients' | 'Requests' | 'Passkeys') => void;
+  navigate: (
+    tab: 'Home' | 'Routes' | 'Secrets' | 'Clients' | 'Requests' | 'Debug' | 'Passkeys' | 'Admin',
+  ) => void;
   protectToken: (shown: boolean, pending?: boolean) => void;
+  /** A one-time client token is being issued or is still on screen. */
+  hasProtectedToken?: () => boolean;
 }
 export function submit(
   form: HTMLFormElement,
   context: UIContext,
   action: () => Promise<void>,
   label = 'Save',
-): void {
+): HTMLButtonElement {
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     void context.run(action, form);
@@ -98,6 +122,7 @@ export function submit(
   save.type = 'submit';
   save.className = 'primary';
   form.append(save);
+  return save;
 }
 export function confirmAction(
   text: string,
@@ -139,6 +164,9 @@ export function keyedCard(key: string, title: string, ...children: Child[]): HTM
   const node = card(title, ...children);
   node.dataset.focus = key;
   return node;
+}
+export function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 export function sameOrigin(a: string, b: string): boolean {
   try {

@@ -91,7 +91,7 @@ func TestAutomaticLocalBootstrapLifecycle(t *testing.T) {
 	var out bytes.Buffer
 	s.printStartup(&out, "127.0.0.1:8082")
 	text := out.String()
-	for _, want := range []string{"Open:  http://localhost:8082\n", opts.StateDir, "Create first passkey", "cat '", "10 minutes", "restart", "'\"'\"'"} {
+	for _, want := range []string{"Proxy ready · http://localhost:8082\n", strings.ReplaceAll(path, "'", "'\"'\"'"), "Create first passkey", "cat '", "10 minutes", "Restart", "'\"'\"'"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in startup instructions: %s", want, text)
 		}
@@ -154,7 +154,7 @@ func TestAutomaticBootstrapDoesNotReplaceOperatorProvisioning(t *testing.T) {
 	}
 	var out bytes.Buffer
 	restarted.printStartup(&out, "127.0.0.1:8082")
-	if !strings.Contains(out.String(), "Sign in with your passkey") || strings.Contains(out.String(), "cat ") {
+	if out.String() != "Proxy ready · "+opts.PublicURL+"\n" {
 		t.Fatal(out.String())
 	}
 }
@@ -255,5 +255,29 @@ func TestLocalExplicitBootstrapFileRemainsOperatorOwned(t *testing.T) {
 	contents, err := os.ReadFile(path)
 	if err != nil || string(contents) != hostSecret {
 		t.Fatalf("operator secret changed: %v", err)
+	}
+}
+
+func TestProxyStartupIsConcise(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		debug bool
+		want  string
+	}{
+		{"normal", false, "Proxy ready · http://localhost:8082\n"},
+		{"capture", true, "Proxy ready · http://localhost:8082\nDebug capture on · raw payloads may contain secrets.\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := testService(t)
+			s.opts.PublicURL = "http://localhost:8082"
+			if test.debug {
+				s.opts.DebugPayloadDir = filepath.Join(t.TempDir(), strings.Repeat("long-path-", 30))
+			}
+			var out bytes.Buffer
+			s.printStartup(&out, "127.0.0.1:8082")
+			if out.String() != test.want {
+				t.Fatalf("startup output: %q", out.String())
+			}
+		})
 	}
 }

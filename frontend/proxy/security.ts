@@ -1,17 +1,35 @@
+import { claudeConnectionDetails, isClaudeRoute } from './claude';
+import {
+  clientLabel,
+  clientListHeader,
+  clientRow,
+  duplicateSuffixes,
+  grantChips,
+  setRowExpanded,
+  sortCallers,
+} from './client-list';
 import type { ProxyCaller, ProxyClient, ProxyRoute, ProxyState } from '../src/api/proxy-client';
+import {
+  authLabel,
+  joinLocalPrefix,
+  routeRules,
+  routeSecretNames,
+  routeUpstreams,
+} from './route-rules';
 import {
   actions,
   button,
   card,
-  check,
   confirmAction,
   dateTime,
+  disclosure,
   el,
   field,
   input,
   keyedCard,
   requireOrigin,
   select,
+  shellQuote,
   submit,
   type UIContext,
 } from './dom';
@@ -50,7 +68,19 @@ export function secretForm(
     field('New secret value', value, 'Write-only: replace it any time, never view it.'),
   );
   if (!existing && !options.stored && state.routes.length) {
-    const origins = [...new Set(state.routes.map((route) => new URL(route.upstream).origin))];
+    const origins = [
+      ...new Set(
+        state.routes.flatMap((route) =>
+          routeUpstreams(route).flatMap((upstream) => {
+            try {
+              return [new URL(upstream).origin];
+            } catch {
+              return [];
+            }
+          }),
+        ),
+      ),
+    ];
     const suggested = select([
       ['', 'Choose a route origin'],
       ...origins.map((url) => [url, url] as [string, string]),
@@ -130,9 +160,7 @@ export function secretsView(state: ProxyState, api: ProxyClient, context: UICont
     editor,
   );
   for (const secret of state.secrets) {
-    const used = state.routes.some((r) =>
-      Object.values(r.set_headers).some((h) => h.secret === secret.name),
-    );
+    const used = state.routes.some((route) => routeSecretNames(route).includes(secret.name));
     const row = keyedCard(
       `secret:${secret.name}`,
       secret.name,
@@ -169,9 +197,6 @@ export function secretsView(state: ProxyState, api: ProxyClient, context: UICont
   return view;
 }
 
-export function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
 export function callerCurl(route: ProxyRoute, origin: string): string {
   return `curl -H ${shellQuote(`${route.caller_auth.header}: ${route.caller_auth.prefix}`)}"$TOKEN" -- ${shellQuote(origin + route.local_prefix)}`;
 }
@@ -181,34 +206,23 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
     'Clients',
     el(
       'p',
-      'Separate tokens with explicit route grants. Each grant delegates that route’s upstream base authority.',
+      'Each client gets its own token and can only use the routes you grant. A grant delegates that route’s upstream access.',
     ),
   );
   intro.classList.add('page-intro');
   const view = el('div', intro);
-  function grantControls(selected: string[]) {
-    const choices = state.routes.map((route) => ({
-      route,
-      check: check(
-        route.name + (route.enabled ? '' : ' (disabled)'),
-        selected.includes(route.name),
-      ),
-    }));
-    const fields = el(
-      'fieldset',
-      el('legend', selected.length ? 'Route grants' : 'Route grants (none selected by default)'),
-      ...choices.map((g) => g.check[0]),
-    );
-    return {
-      fields,
-      selected: () => choices.filter((g) => g.check[1].checked).map((g) => g.route.name),
-    };
-  }
+  const active = sortCallers(state.callers.filter((caller) => !caller.revoked));
+  const revoked = sortCallers(state.callers.filter((caller) => caller.revoked));
+  const suffixes = duplicateSuffixes(state.callers);
+  const keyNames = new Map(state.admin_keys.map(({ id, name }) => [id, name]));
   const name = input();
   name.required = true;
   name.maxLength = 80;
-  const grants = grantControls([]);
-  const form = el('form', el('h2', 'Create client'), field('Client name', name), grants.fields);
+  const grants = grantChips(state.routes, [], 'Routes');
+  const form = el('form', field('Client name', name));
+  if (state.routes.length) form.append(grants.fields);
+  form.className = 'client-composer';
+  form.id = 'client-composer';
   submit(
     form,
     context,
@@ -258,21 +272,67 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
           copy,
           el(
             'p',
-            'Set TOKEN in your shell to this token. Examples below use $TOKEN, not the administrator token.',
+            'For curl examples, set TOKEN in your shell to this client token, not the administrator token.',
           ),
         );
-        for (const route of state.routes.filter((r) => selected.includes(r.name)))
-          panel.append(
-            el('h3', route.name),
-            el(
-              'p',
-              `Base URL: ${location.origin}${route.local_prefix} · Header: ${route.caller_auth.header}: ${JSON.stringify(route.caller_auth.prefix)} + <token>`,
-            ),
-            el('pre', callerCurl(route, location.origin)),
-          );
+        for (const route of state.routes.filter((r) => selected.includes(r.name))) {
+          if (isClaudeRoute(route, state)) {
+            panel.append(
+              el('h3', route.name),
+              claudeConnectionDetails(
+                { url: location.origin + route.local_prefix, token: result.token },
+                context,
+              ),
+            );
+            continue;
+          }
+          const rules = routeRules(route);
+          panel.append(el('h3', route.name));
+          if (rules.length) {
+            // A unified route has no parent client auth; each subpath declares
+            // which header carries the same client token.
+            const base = rules.find((rule) => rule.path_prefix === '/') ?? rules[0];
+            panel.append(
+              el(
+                'p',
+                `Base URL: ${location.origin}${route.local_prefix} · one client token and one grant cover every subpath.`,
+              ),
+              el(
+                'ul',
+                ...rules.map((rule) =>
+                  el(
+                    'li',
+                    `${joinLocalPrefix(route.local_prefix, rule.path_prefix)} · client ${authLabel(rule.caller_auth)}`,
+                  ),
+                ),
+              ),
+              el(
+                'pre',
+                callerCurl(
+                  {
+                    ...route,
+                    caller_auth: base.caller_auth,
+                    local_prefix: joinLocalPrefix(route.local_prefix, base.path_prefix),
+                  },
+                  location.origin,
+                ),
+              ),
+            );
+          } else
+            panel.append(
+              el(
+                'p',
+                `Base URL: ${location.origin}${route.local_prefix} · Header: ${route.caller_auth.header}: ${JSON.stringify(route.caller_auth.prefix)} + <token>`,
+              ),
+              el('pre', callerCurl(route, location.origin)),
+            );
+        }
         panel.append(
           button('I saved it — dismiss', () => {
             token.value = '';
+            panel.querySelectorAll('textarea').forEach((text) => {
+              text.value = '';
+            });
             context.protectToken(false);
             panel.remove();
             void context.run(async () => {
@@ -296,21 +356,50 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
     },
     'Create client',
   );
-  if (!state.routes.length)
-    form.append(
-      el('p', 'Add a route before creating a client.'),
+  form.append(button('Cancel', () => setComposer(false, true)));
+  if (!state.routes.length) {
+    const note = el(
+      'p',
+      'Add a route before creating a client. ',
       button('Go to routes', () => context.navigate('Routes')),
     );
-  view.append(form);
-  function editCaller(caller: ProxyCaller, row: HTMLElement) {
-    const chosen = grantControls(caller.grants);
+    note.className = 'client-composer-note';
+    form.prepend(note);
+  }
+  const newClient = button('New client', () =>
+    setComposer(newClient.getAttribute('aria-expanded') !== 'true', true),
+  );
+  newClient.className = 'primary';
+  newClient.setAttribute('aria-controls', form.id);
+  const counts = el(
+    'span',
+    `${active.length} active${revoked.length ? ` · ${revoked.length} revoked` : ''}`,
+  );
+  counts.className = 'client-counts';
+  const toolbar = el('div', newClient, counts);
+  toolbar.className = 'route-cmd-bar';
+  function setComposer(open: boolean, moveFocus: boolean) {
+    form.hidden = !open;
+    newClient.setAttribute('aria-expanded', String(open));
+    if (!open) {
+      name.value = '';
+      grants.reset();
+    }
+    if (moveFocus) (open ? name : newClient).focus();
+  }
+  // With nothing to manage yet, creating a client is the only useful action.
+  setComposer(!active.length, false);
+  view.append(toolbar, form);
+
+  // The editor is built on expand so collapsed rows hold no form controls.
+  function grantEditor(caller: ProxyCaller, label: string, collapse: () => void): HTMLElement[] {
+    const chosen = grantChips(state.routes, caller.grants, 'Route grants');
     const editor = el(
       'form',
-      el('h3', `Edit grants for ${caller.name}`),
       chosen.fields,
       el(
         'p',
-        'The existing token stays valid. Removed grants block new requests only; dispatched requests may continue.',
+        'The token stays valid when grants change. Removed grants block new requests; dispatched requests may continue.',
       ),
     );
     submit(
@@ -322,56 +411,71 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
         if (
           removed.length &&
           !window.confirm(
-            `Remove ${caller.name}’s grants for ${removed.join(', ')}? New requests to those routes will be blocked; dispatched requests may continue. The token is not reissued.`,
+            `Remove ${label}’s grants for ${removed.join(', ')}? New requests to those routes will be blocked; dispatched requests may continue. The token is not reissued.`,
           )
         )
           return;
         await api.updateCaller(caller.id, selected, state.revision);
         await context.refresh(`caller:${caller.id}`);
-        context.announce(`Saved grants for ${caller.name}. The token was not changed.`);
+        context.announce(`Saved grants for ${label}. The token was not changed.`);
       },
       'Save grants',
     );
-    editor.append(
-      button('Cancel', () => {
-        editor.remove();
-        row.querySelector('h2')?.focus();
-      }),
+    const revoke = confirmAction(
+      'Revoke…',
+      async () => {
+        await api.revokeCaller(caller.id);
+        await context.refresh();
+        context.announce(
+          `Revoked ${label}. New requests are blocked; dispatched requests may continue.`,
+        );
+      },
+      context,
+      `Revoke ${label}? This token can never make new requests again. Dispatched requests may continue until finish or deadline. Create a new client to restore access.`,
     );
-    row.querySelector('form')?.remove();
-    row.append(editor);
-    editor.querySelector('input')?.focus();
+    revoke.setAttribute('aria-label', `Revoke ${label}`);
+    revoke.classList.add('client-revoke');
+    editor.append(button('Cancel', collapse), revoke);
+    const meta = el(
+      'p',
+      `Created ${dateTime(caller.created, 'Unknown')} · Last used ${dateTime(caller.last_used)} · ID ${caller.id}`,
+    );
+    meta.className = 'client-meta';
+    return [meta, editor];
   }
-  for (const caller of state.callers) {
-    const row = keyedCard(
-      `caller:${caller.id}`,
-      caller.name,
-      el(
-        'p',
-        `${caller.revoked ? 'Revoked' : 'Active'} · Created ${dateTime(caller.created, 'Unknown')} · Last used ${dateTime(caller.last_used)}`,
-      ),
-      el('p', `Grants: ${caller.grants.join(', ') || 'none'}`),
-    );
-    if (caller.revoked) row.classList.add('revoked');
-    else
-      row.append(
-        actions(
-          button(`Edit grants for ${caller.name}`, () => editCaller(caller, row)),
-          confirmAction(
-            `Revoke ${caller.name}`,
-            async () => {
-              await api.revokeCaller(caller.id);
-              await context.refresh(`caller:${caller.id}`);
-              context.announce(
-                `Revoked ${caller.name}. New requests are blocked; dispatched requests may continue.`,
-              );
-            },
-            context,
-            `Revoke ${caller.name}? This token can never make new requests again. Dispatched requests may continue until finish or deadline. Create a new client to restore access.`,
-          ),
-        ),
+  let closeOpen: (() => void) | undefined;
+  function activeRow(caller: ProxyCaller): HTMLElement {
+    const label = clientLabel(caller, suffixes);
+    const panel = el('div');
+    panel.className = 'client-detail';
+    const row = clientRow(caller, suffixes, keyNames, { panel, toggle: (open) => setOpen(open) });
+    const toggle = () => row.querySelector<HTMLElement>('.client-toggle');
+    function setOpen(open: boolean) {
+      if (open && closeOpen) closeOpen();
+      panel.replaceChildren(
+        ...(open
+          ? grantEditor(caller, label, () => {
+              setOpen(false);
+              toggle()?.focus();
+            })
+          : []),
       );
-    view.append(row);
+      setRowExpanded(row, open);
+      closeOpen = open ? () => setOpen(false) : undefined;
+    }
+    return row;
+  }
+  if (active.length) {
+    const list = el('div', clientListHeader(), ...active.map(activeRow));
+    list.className = 'client-list';
+    view.append(list);
+  }
+  if (revoked.length) {
+    const list = el('div', ...revoked.map((caller) => clientRow(caller, suffixes, keyNames)));
+    list.className = 'client-list revoked-list';
+    const group = disclosure(`Revoked (${revoked.length})`, list);
+    group.className = 'client-revoked';
+    view.append(group);
   }
   return view;
 }

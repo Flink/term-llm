@@ -2,16 +2,15 @@ package usage
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"github.com/term-llm/term-llm/internal/providerhttp"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/term-llm/term-llm/internal/modelsdev"
 )
 
 // modelsDevURL is the OpenCode model directory: a community-maintained catalog
@@ -20,70 +19,39 @@ import (
 // stays as the offline answer.
 var modelsDevURL = "https://models.dev/api.json"
 
-const (
-	// The published catalog is several megabytes, so it is fetched rarely and
-	// only the price fields are kept.
-	modelsDevTTL       = 12 * time.Hour
-	modelsDevCacheFile = "models-dev-pricing.json"
-	// modelsDevCacheVersion invalidates projections written by an older build.
-	// A projection is a derived artifact: if the rules that built it change, the
-	// file is garbage rather than merely stale.
-	modelsDevCacheVersion = 2
-)
-
-// modelsDevCost is one model's rates in USD per million tokens.
-type modelsDevCost struct {
-	Input      float64 `json:"input"`
-	Output     float64 `json:"output"`
-	CacheRead  float64 `json:"cache_read"`
-	CacheWrite float64 `json:"cache_write"`
-	// Tiers reprice a whole request once its context reaches the tier size.
-	Tiers []struct {
-		Input      float64 `json:"input"`
-		Output     float64 `json:"output"`
-		CacheRead  float64 `json:"cache_read"`
-		CacheWrite float64 `json:"cache_write"`
-		Tier       struct {
-			Size int    `json:"size"`
-			Type string `json:"type"`
-		} `json:"tier"`
-	} `json:"tiers"`
+// modelsDevRate projects optional catalog rates onto usage's established numeric
+// pricing representation. Usage keeps its bundled fallback rules; exact consumers
+// should use modelsdev.Client.Lookup to retain missing versus explicit zero.
+func modelsDevRate(rate *float64) float64 {
+	if rate == nil {
+		return 0
+	}
+	return *rate
 }
 
-// modelsDevCacheFileFormat is the derived projection as stored on disk.
-type modelsDevCacheFileFormat struct {
-	Version int                     `json:"version"`
-	Entries map[string]ModelPricing `json:"entries"`
-}
-
-type modelsDevCatalog struct {
-	Models map[string]struct {
-		Cost *modelsDevCost `json:"cost"`
-	} `json:"models"`
-}
-
-// pricing converts a catalog entry, reporting whether it carries any rate at
-// all. A model listed with no cost (free tiers, subscription-only entries) must
-// not be reported as costing zero.
-func (c modelsDevCost) pricing() (ModelPricing, bool) {
+func modelsDevModelPricing(c modelsdev.Cost) (ModelPricing, bool) {
 	const perMillion = 1_000_000
-	if c.Input == 0 && c.Output == 0 && c.CacheRead == 0 && c.CacheWrite == 0 {
+	input, output := modelsDevRate(c.Input), modelsDevRate(c.Output)
+	read, write := modelsDevRate(c.CacheRead), modelsDevRate(c.CacheWrite)
+	// Preserve usage's behavior: completely free entries do not replace the
+	// bundled card with an apparent zero-cost model.
+	if input == 0 && output == 0 && read == 0 && write == 0 {
 		return ModelPricing{}, false
 	}
 	pricing := ModelPricing{
-		InputCostPerToken:           c.Input / perMillion,
-		OutputCostPerToken:          c.Output / perMillion,
-		CacheReadInputTokenCost:     c.CacheRead / perMillion,
-		CacheCreationInputTokenCost: c.CacheWrite / perMillion,
+		InputCostPerToken:           input / perMillion,
+		OutputCostPerToken:          output / perMillion,
+		CacheReadInputTokenCost:     read / perMillion,
+		CacheCreationInputTokenCost: write / perMillion,
 	}
 	for _, tier := range c.Tiers {
 		if tier.Tier.Type != "context" || tier.Tier.Size <= 0 {
 			continue
 		}
-		pricing.InputCostPerTokenAbove200k = tier.Input / perMillion
-		pricing.OutputCostPerTokenAbove200k = tier.Output / perMillion
-		pricing.CacheReadCostAbove200k = tier.CacheRead / perMillion
-		pricing.CacheCreationCostAbove200k = tier.CacheWrite / perMillion
+		pricing.InputCostPerTokenAbove200k = modelsDevRate(tier.Input) / perMillion
+		pricing.OutputCostPerTokenAbove200k = modelsDevRate(tier.Output) / perMillion
+		pricing.CacheReadCostAbove200k = modelsDevRate(tier.CacheRead) / perMillion
+		pricing.CacheCreationCostAbove200k = modelsDevRate(tier.CacheWrite) / perMillion
 		pricing.TieredThreshold = tier.Tier.Size
 		pricing.WholeRequestTier = true
 		break
@@ -92,8 +60,8 @@ func (c modelsDevCost) pricing() (ModelPricing, bool) {
 }
 
 // modelsDevPricing is the derived catalog: model name to rates, keyed both bare
-// and provider-qualified. Only this projection is cached on disk, so a refresh
-// costs one parse and every later lookup reads kilobytes rather than megabytes.
+// and provider-qualified. The shared catalog is cached on disk; this small
+// projection stays in memory so usage rendering does not repeatedly parse it.
 type modelsDevPricing struct {
 	mu sync.RWMutex
 	// dir records which cache the entries came from. Two fetchers may point at
@@ -140,15 +108,12 @@ func (s *modelsDevPricing) ensureLoaded(cacheDir string) bool {
 		return len(s.entries) > 0
 	}
 	s.loaded, s.dir, s.entries = true, cacheDir, nil
-	data, err := os.ReadFile(filepath.Join(cacheDir, modelsDevCacheFile))
-	if err != nil {
+	client := modelsdev.NewClient(cacheDir, nil)
+	if err := client.Load(); err != nil {
 		return false
 	}
-	var cached modelsDevCacheFileFormat
-	if json.Unmarshal(data, &cached) != nil || cached.Version != modelsDevCacheVersion {
-		return false
-	}
-	s.entries = cached.Entries
+	catalog, _ := client.Snapshot()
+	s.entries = projectModelsDevPricing(catalog)
 	return len(s.entries) > 0
 }
 
@@ -183,56 +148,35 @@ func (p *PricingFetcher) RefreshModelsDevPricing(ctx context.Context) error {
 	if p == nil || p.httpClient == nil {
 		return nil
 	}
-	cacheFile := filepath.Join(p.cacheDir, modelsDevCacheFile)
-	if info, err := os.Stat(cacheFile); err == nil && time.Since(info.ModTime()) < modelsDevTTL {
-		return nil
+	client := modelsdev.NewClient(p.cacheDir, p.httpClient)
+	client.Endpoint = modelsDevEndpoint()
+	err := client.Refresh(ctx)
+	catalog, _ := client.Snapshot()
+	entries := projectModelsDevPricing(catalog)
+	if len(entries) > 0 {
+		modelsDevStore.replace(p.cacheDir, entries)
 	}
-	entries, err := fetchModelsDevPricing(ctx, p.httpClient)
 	if err != nil {
 		return err
 	}
 	if len(entries) == 0 {
 		return fmt.Errorf("models.dev catalog carried no priced models")
 	}
-	modelsDevStore.replace(p.cacheDir, entries)
-	data, err := json.Marshal(modelsDevCacheFileFormat{Version: modelsDevCacheVersion, Entries: entries})
-	if err != nil {
-		return err
-	}
-	// Write through a temp file: a reader that catches a truncated write would
-	// otherwise see the catalog as unavailable. A failed write only costs the
-	// next process a refresh.
-	temp := cacheFile + ".tmp"
-	if os.WriteFile(temp, data, 0o644) == nil && os.Rename(temp, cacheFile) != nil {
-		_ = os.Remove(temp)
-	}
 	return nil
 }
 
-func fetchModelsDevPricing(ctx context.Context, client *http.Client) (map[string]ModelPricing, error) {
-	endpoint := modelsDevURL
+// Keep the historical URL test hook without another HTTP or schema path.
+func modelsDevEndpoint() string {
 	if os.Getenv("MODELS_DEV_BASE_URL") != "" {
-		base, err := providerhttp.EnvBaseURL("MODELS_DEV_BASE_URL", "https://models.dev")
-		if err != nil {
-			return nil, err
-		}
-		endpoint = base + "/api.json"
+		return modelsdev.DefaultURL
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return modelsDevURL
+}
+
+func fetchModelsDevPricing(ctx context.Context, client *http.Client) (map[string]ModelPricing, error) {
+	catalog, err := modelsdev.Fetch(ctx, client, modelsDevEndpoint())
 	if err != nil {
 		return nil, err
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("fetch models.dev catalog: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("models.dev catalog: unexpected status %d", response.StatusCode)
-	}
-	var catalog map[string]modelsDevCatalog
-	if err := json.NewDecoder(response.Body).Decode(&catalog); err != nil {
-		return nil, fmt.Errorf("decode models.dev catalog: %w", err)
 	}
 	return projectModelsDevPricing(catalog), nil
 }
@@ -259,7 +203,7 @@ func providerRank(provider string) int {
 // projectModelsDevPricing flattens the catalog. A bare model name is claimed by
 // the highest-ranked provider that lists it; the qualified "provider/model" key
 // always resolves exactly.
-func projectModelsDevPricing(catalog map[string]modelsDevCatalog) map[string]ModelPricing {
+func projectModelsDevPricing(catalog modelsdev.Catalog) map[string]ModelPricing {
 	entries := make(map[string]ModelPricing, 512)
 	providers := make([]string, 0, len(catalog))
 	for provider := range catalog {
@@ -272,7 +216,7 @@ func projectModelsDevPricing(catalog map[string]modelsDevCatalog) map[string]Mod
 			if entry.Cost == nil {
 				continue
 			}
-			pricing, ok := entry.Cost.pricing()
+			pricing, ok := modelsDevModelPricing(*entry.Cost)
 			if !ok {
 				continue
 			}

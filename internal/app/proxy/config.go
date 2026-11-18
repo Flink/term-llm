@@ -33,7 +33,25 @@ type HeaderRule struct {
 	Prefix string  `json:"prefix,omitempty" yaml:"prefix,omitempty"`
 	Value  *string `json:"value,omitempty" yaml:"value,omitempty"`
 }
+
+// RouteRule maps a canonical subpath of the parent mount to one fixed upstream.
+// Caller authentication and allow policies apply only to the selected rule.
+type RouteRule struct {
+	PathPrefix string                `json:"path_prefix" yaml:"path_prefix"`
+	Upstream   string                `json:"upstream" yaml:"upstream"`
+	CallerAuth Auth                  `json:"caller_auth" yaml:"caller_auth"`
+	SetHeaders map[string]HeaderRule `json:"set_headers" yaml:"set_headers"`
+	Allow      []string              `json:"allow,omitempty" yaml:"allow,omitempty"`
+}
+
 type Route struct {
+	Rules           []RouteRule           `json:"rules,omitempty" yaml:"rules,omitempty"`
+	Billing         string                `json:"billing,omitempty" yaml:"billing,omitempty"`
+	Account         string                `json:"account,omitempty" yaml:"account,omitempty"`
+	WebSocket       bool                  `json:"websocket,omitempty" yaml:"websocket,omitempty"`
+	Allow           []string              `json:"allow,omitempty" yaml:"allow,omitempty"`
+	Redirects       string                `json:"redirects,omitempty" yaml:"redirects,omitempty"`
+	Usage           string                `json:"usage,omitempty" yaml:"usage,omitempty"`
 	Name            string                `json:"name" yaml:"name"`
 	LocalPrefix     string                `json:"local_prefix" yaml:"local_prefix"`
 	Upstream        string                `json:"upstream" yaml:"upstream"`
@@ -49,16 +67,21 @@ type SecretRef struct {
 	Stored string `json:"stored,omitempty" yaml:"stored,omitempty"`
 }
 type Config struct {
-	Routes  []Route              `json:"routes" yaml:"routes"`
-	Secrets map[string]SecretRef `json:"secrets" yaml:"secrets,omitempty"`
+	Accounts map[string]AccountRef `json:"accounts,omitempty" yaml:"accounts,omitempty"`
+	Money    MoneySettings         `json:"money,omitempty" yaml:"money,omitempty"`
+	Routes   []Route               `json:"routes" yaml:"routes"`
+	Secrets  map[string]SecretRef  `json:"secrets" yaml:"secrets,omitempty"`
 }
 type material struct{ Origin, Value string }
 type activeRoute struct {
 	Route
-	target    *url.URL
-	origin    string
-	authority string
-	headers   http.Header
+	target            *url.URL
+	origin            string
+	authority         string
+	headers           http.Header
+	rules             []activeRoute // Private destinations; every copy shares the parent authority.
+	pathPrefix        string
+	credentialHeaders []string
 }
 type snapshot struct {
 	config   Config
@@ -262,6 +285,16 @@ func resolveSecrets(c Config, stored map[string]material, adminFile string, file
 	return out, nil
 }
 func compile(c Config, revision int64, secrets map[string]material) (*snapshot, error) {
+	if err := ValidateMoneySettings(c.Money); err != nil {
+		return nil, err
+	}
+	for _, r := range c.Routes {
+		switch r.Billing {
+		case "", "unspecified", "pay_as_you_go", "plan", "local":
+		default:
+			return nil, fmt.Errorf("invalid route billing")
+		}
+	}
 	if len(c.Routes) > 128 || len(c.Secrets) > 256 {
 		return nil, fmt.Errorf("at most 128 routes and 256 secret references")
 	}
@@ -279,31 +312,11 @@ func compile(c Config, revision int64, secrets map[string]material) (*snapshot, 
 		if err := validatePrefix(*r, s.routes); err != nil {
 			return nil, err
 		}
-		origin, err := Origin(r.Upstream)
+		ar, err := compileRoute(r, secrets)
 		if err != nil {
 			return nil, err
 		}
-		u, _ := url.Parse(r.Upstream)
-		if u.Scheme == "http" && !r.AllowHTTP {
-			return nil, fmt.Errorf("HTTP upstream requires allow_insecure_http")
-		}
-		if !safePath("/" + strings.TrimPrefix(u.EscapedPath(), "/")) {
-			return nil, fmt.Errorf("upstream base path is not canonical")
-		}
-		if r.CallerAuth.Header == "" {
-			r.CallerAuth = Auth{Header: "Authorization", Prefix: "Bearer "}
-		}
-		if !validHeader(r.CallerAuth.Header) || !httpguts.ValidHeaderFieldValue(r.CallerAuth.Prefix) {
-			return nil, fmt.Errorf("invalid local authentication header")
-		}
-		if r.RequestIDHeader != "" && !validHeader(r.RequestIDHeader) {
-			return nil, fmt.Errorf("invalid request ID header")
-		}
-		headers, err := compileHeaders(*r, origin, secrets)
-		if err != nil {
-			return nil, err
-		}
-		s.routes = append(s.routes, activeRoute{Route: *r, target: u, origin: origin, authority: routeAuthority(*r, origin, u), headers: headers})
+		s.routes = append(s.routes, ar)
 	}
 	return s, nil
 }
@@ -397,7 +410,10 @@ func routeAuthority(r Route, origin string, u *url.URL) string {
 	b, _ := json.Marshal(struct {
 		Origin, Base string
 		Rules        []rule
-	}{origin, string(encoded), rules})
+		Account      string   `json:",omitempty"`
+		WebSocket    bool     `json:",omitempty"`
+		Allow        []string `json:",omitempty"`
+	}{origin, string(encoded), rules, r.Account, r.WebSocket, r.Allow})
 	return hashToken(string(b))
 }
 func upperHex(b byte) byte {

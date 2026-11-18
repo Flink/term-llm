@@ -26,13 +26,14 @@ const schema = `
 CREATE TABLE configuration (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, data TEXT NOT NULL);
 INSERT INTO configuration VALUES(1,0,'{"routes":[]}');
 CREATE TABLE secrets (name TEXT PRIMARY KEY, origin TEXT NOT NULL, value TEXT NOT NULL);
-CREATE TABLE callers (id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT UNIQUE NOT NULL, created INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE callers (id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT UNIQUE NOT NULL, created INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL DEFAULT '', external_id TEXT NOT NULL DEFAULT '');
 CREATE TABLE grants (caller TEXT NOT NULL, route TEXT NOT NULL, authority TEXT NOT NULL, PRIMARY KEY(caller,route));
 CREATE TABLE requests (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, started INTEGER NOT NULL, caller TEXT NOT NULL, route TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL, outcome TEXT NOT NULL, data TEXT NOT NULL);
 CREATE INDEX requests_time ON requests(started,seq);
 CREATE INDEX requests_caller ON requests(caller,seq);
 CREATE INDEX requests_route ON requests(route,seq);
-PRAGMA user_version=2;`
+` + accountSchema + moneySchema + claudeVaultSchema + adminKeySchemaV6 + `
+PRAGMA user_version=6;`
 
 func openStore(dir string) (*store, error) {
 	if err := fileprivacy.MkdirAll(dir); err != nil {
@@ -144,6 +145,9 @@ func reconcileGrants(tx *sql.Tx, snap *snapshot) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
+		if _, err := tx.Exec("DELETE FROM claude_vault WHERE route=? AND authority=?", p.name, p.authority); err != nil {
+			return 0, err
+		}
 		dropped += n
 	}
 	return dropped, nil
@@ -180,79 +184,27 @@ func (s *store) saveConfig(snap *snapshot, fileMode bool) error {
 }
 
 type Caller struct {
-	ID       string   `json:"id"`
-	Name     string   `json:"name"`
-	Created  int64    `json:"created"`
-	LastUsed int64    `json:"last_used"`
-	Revoked  bool     `json:"revoked"`
-	Grants   []string `json:"grants"`
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Created    int64    `json:"created"`
+	LastUsed   int64    `json:"last_used"`
+	Revoked    bool     `json:"revoked"`
+	Grants     []string `json:"grants"`
+	CreatedBy  string   `json:"created_by"`
+	ExternalID string   `json:"external_id"`
 }
 
 // The latest admission is an indexed tail lookup, not an aggregate over retained history.
-const callersQuery = "SELECT c.id,c.name,c.created,c.revoked,COALESCE((SELECT r.started FROM requests r WHERE r.caller=c.id ORDER BY r.seq DESC LIMIT 1),0) FROM callers c ORDER BY c.created,c.id"
+const callerSelect = "SELECT c.id,c.name,c.created,c.revoked,COALESCE((SELECT r.started FROM requests r WHERE r.caller=c.id ORDER BY r.seq DESC LIMIT 1),0),c.created_by,c.external_id FROM callers c"
+const callerOrder = " ORDER BY c.created,c.id"
+const callersQuery = callerSelect + callerOrder
 
 func (s *store) callers() ([]Caller, error) {
-	rows, err := s.db.Query(callersQuery)
-	if err != nil {
-		return nil, err
-	}
-	out := []Caller{}
-	for rows.Next() {
-		c := Caller{Grants: []string{}}
-		if err := rows.Scan(&c.ID, &c.Name, &c.Created, &c.Revoked, &c.LastUsed); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
-	}
-	rows, err = s.db.Query("SELECT caller,route FROM grants ORDER BY route")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id, route string
-		if err := rows.Scan(&id, &route); err != nil {
-			return nil, err
-		}
-		for i := range out {
-			if out[i].ID == id {
-				out[i].Grants = append(out[i].Grants, route)
-			}
-		}
-	}
-	return out, rows.Err()
+	return listCallers(context.Background(), s.db, "")
 }
+
 func (s *store) createCaller(name string, grants []string, snap *snapshot) (Caller, string, error) {
-	c := Caller{ID: randomToken("c_")[:26], Name: name, Created: time.Now().UnixMilli(), Grants: grants}
-	token := randomToken("sk-tlp-")
-	tx, err := s.db.Begin()
-	if err != nil {
-		return c, "", err
-	}
-	defer tx.Rollback()
-	var n int
-	if err = tx.QueryRow("SELECT count(*) FROM callers").Scan(&n); err != nil {
-		return c, "", err
-	}
-	if n >= 1024 {
-		return c, "", inputError("Client limit reached (1024); revoke unused clients or use a separate proxy state directory")
-	}
-	if _, err = tx.Exec("INSERT INTO callers(id,name,hash,created) VALUES(?,?,?,?)", c.ID, c.Name, hashToken(token), c.Created); err != nil {
-		return c, "", err
-	}
-	if err = writeGrants(tx, c.ID, grants, snap); err != nil {
-		return c, "", err
-	}
-	if err = tx.Commit(); err != nil {
-		return c, "", err
-	}
-	return c, token, nil
+	return s.insertCaller(context.Background(), name, grants, snap, "", "")
 }
 func (s *store) authorize(token string, r activeRoute) (Caller, error) {
 	var c Caller
@@ -261,49 +213,56 @@ func (s *store) authorize(token string, r activeRoute) (Caller, error) {
 }
 
 type Record struct {
-	ID          string `json:"id"`
-	Seq         int64  `json:"seq"`
-	Started     int64  `json:"started"`
-	Ended       int64  `json:"ended"`
-	CallerID    string `json:"caller_id"`
-	CallerName  string `json:"caller_name"`
-	Route       string `json:"route"`
-	Revision    int64  `json:"revision"`
-	Method      string `json:"method"`
-	Path        string `json:"path"`
-	LocalPrefix string `json:"local_prefix"`
-	Peer        string `json:"peer"`
-	Status      int    `json:"status"`
-	Outcome     string `json:"outcome"`
-	Sent        int64  `json:"sent"`
-	Received    int64  `json:"received"`
-	HeaderMS    int64  `json:"header_ms"`
-	FirstByteMS int64  `json:"first_byte_ms"`
-	TotalMS     int64  `json:"total_ms"`
-	UpstreamID  string `json:"upstream_id"`
+	Usage                 *ObservedUsage `json:"usage,omitempty"`
+	Money                 *Money         `json:"money,omitempty"`
+	Provider              string         `json:"provider,omitempty"`
+	App                   string         `json:"app,omitempty"`
+	ID                    string         `json:"id"`
+	Seq                   int64          `json:"seq"`
+	Started               int64          `json:"started"`
+	Ended                 int64          `json:"ended"`
+	CallerID              string         `json:"caller_id"`
+	CallerName            string         `json:"caller_name"`
+	Route                 string         `json:"route"`
+	Revision              int64          `json:"revision"`
+	Method                string         `json:"method"`
+	Path                  string         `json:"path"`
+	LocalPrefix           string         `json:"local_prefix"`
+	Peer                  string         `json:"peer"`
+	Status                int            `json:"status"`
+	Outcome               string         `json:"outcome"`
+	Sent                  int64          `json:"sent"`
+	Received              int64          `json:"received"`
+	HeaderMS              int64          `json:"header_ms"`
+	FirstByteMS           int64          `json:"first_byte_ms"`
+	TotalMS               int64          `json:"total_ms"`
+	UpstreamID            string         `json:"upstream_id"`
+	WebSocketConnectionID string         `json:"websocket_connection_id,omitempty"`
 }
 
 func (s *store) start(ctx context.Context, r *Record) error {
+	r.Provider, r.App = boundedAttribution(r.Provider), boundedAttribution(r.App)
+	billing := "unspecified"
+	if r.Money != nil {
+		billing = r.Money.Billing
+	}
+	r.Money = pendingRequestMoney(billing)
 	b, err := json.Marshal(r)
 	if err != nil {
 		return err
 	}
-	result, err := s.startStmt.ExecContext(ctx, r.ID, r.Started, r.CallerID, r.Route, r.Method, r.Path, "unknown", string(b))
-	if err != nil {
-		return err
-	}
-	r.Seq, err = result.LastInsertId()
-	return err
+	return s.startRequestAndMoney(ctx, r, b)
 }
+
 func (s *store) finish(r Record) error {
+	r.Provider, r.App = boundedAttribution(r.Provider), boundedAttribution(r.App)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	b, err := json.Marshal(r)
 	if err != nil {
 		return err
 	}
-	_, err = s.finishStmt.ExecContext(ctx, r.Outcome, string(b), r.ID)
-	return err
+	return s.finishRequestAndMoney(ctx, r, b)
 }
 func (s *store) records(q url.Values, limit int) ([]Record, int64, error) {
 	where, args, err := requestWhere(q)
@@ -346,7 +305,10 @@ func readRequestRecords(rows *sql.Rows, limit int) ([]Record, int64, error) {
 }
 func (s *store) retain(ctx context.Context, days int) error {
 	_, err := s.db.ExecContext(ctx, "DELETE FROM requests WHERE seq IN (SELECT seq FROM requests WHERE started<? ORDER BY seq LIMIT 500)", time.Now().Add(-time.Duration(days)*24*time.Hour).UnixMilli())
-	return err
+	if err != nil {
+		return err
+	}
+	return s.retainMoney(ctx)
 }
 
 func requestWhere(q url.Values) (string, []any, error) {

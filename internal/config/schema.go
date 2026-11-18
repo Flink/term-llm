@@ -217,6 +217,10 @@ func DefaultLinkedDevicesICEServers() []LinkedDevicesICEServerConfig {
 }
 
 var keySpecs = []KeySpec{
+	optional("proxy.url"),
+	optional("proxy.token", sensitive()),
+	optional("proxy.direct", withPlaceholder([]string{})),
+	optional("proxy.providers", withPlaceholder([]string{}), described("Only proxy the listed providers and integrations; [] proxies none; omit for legacy proxy-all behavior"), withoutResetTemplate()),
 	def("default_provider", DefaultConfigProvider),
 	{Path: "credentials_dir", Default: "", HasDefault: true, Description: "Native ChatGPT/Grok/Copilot OAuth directory; TERM_LLM_CREDENTIALS_DIR overrides; empty uses the config directory", ShowInConfig: true, ResetTemplate: true},
 	def("provider_discovery", ProviderDiscoveryAuto),
@@ -620,7 +624,12 @@ func ConfigKeySpecs() []KeySpec {
 }
 
 // ProviderKeySpecs returns valid provider field specs in display order.
-func ProviderKeySpecs() []ProviderFieldSpec { return providerspec.Fields() }
+func ProviderKeySpecs() []ProviderFieldSpec {
+	return append(providerspec.Fields(),
+		ProviderFieldSpec{Path: "proxy.url", Description: "Native claude-bin proxy route root"},
+		ProviderFieldSpec{Path: "proxy.token", Description: "Scoped proxy client token credential reference", Sensitive: true},
+	)
+}
 
 // DefaultProviderSpecs returns canonical built-in provider defaults.
 func DefaultProviderSpecs() []ProviderSpec { return providerspec.All() }
@@ -765,7 +774,7 @@ func buildKnownKeys() map[string]bool {
 
 func buildKnownProviderKeys() map[string]bool {
 	known := make(map[string]bool)
-	for _, spec := range providerspec.Fields() {
+	for _, spec := range ProviderKeySpecs() {
 		addPathAndParents(known, spec.Path)
 	}
 	return known

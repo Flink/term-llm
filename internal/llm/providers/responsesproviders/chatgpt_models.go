@@ -16,6 +16,7 @@ import (
 	"github.com/term-llm/term-llm/internal/buildinfo"
 	"github.com/term-llm/term-llm/internal/config"
 	"github.com/term-llm/term-llm/internal/credentials"
+	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 const (
@@ -111,8 +112,10 @@ func CachedChatGPTModels() (models []ModelInfo, fresh bool, err error) {
 
 func cachedChatGPTModelFacts() (models []ModelInfo, fresh bool, err error) {
 	accountID := ""
-	if creds, credErr := credentials.GetChatGPTCredentials(); credErr == nil {
-		accountID = creds.AccountID
+	if !proxyclient.KindActive("chatgpt") {
+		if creds, credErr := credentials.GetChatGPTCredentials(); credErr == nil {
+			accountID = creds.AccountID
+		}
 	}
 	cache, err := loadChatGPTModelsCacheForAccount(chatGPTModelsClientVersion, accountID)
 	if err != nil {
@@ -158,7 +161,11 @@ func (p *ChatGPTProvider) ListModelsForProvider(ctx context.Context, provider st
 // RefreshModelsForProvider bypasses the cache and reports fetch failures instead
 // of returning stale or bundled models. A successful response updates the cache.
 func (p *ChatGPTProvider) RefreshModelsForProvider(ctx context.Context, provider string) ([]ModelInfo, error) {
-	models, err := p.refreshChatGPTModelFacts(ctx)
+	refresh := p.refreshChatGPTModelFacts
+	if p.baseURL != "" && p.creds.Delegated() {
+		refresh = func(ctx context.Context) ([]ModelInfo, error) { return p.proxyChatGPTModelFacts(ctx, true) }
+	}
+	models, err := refresh(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +194,11 @@ func (p *ChatGPTProvider) refreshChatGPTModelFacts(ctx context.Context) ([]Model
 
 func (p *ChatGPTProvider) chatGPTModelFacts(ctx context.Context) ([]ModelInfo, bool, error) {
 	if p.baseURL != "" {
-		models, err := p.refreshChatGPTModelFacts(ctx)
+		refresh := p.refreshChatGPTModelFacts
+		if p.creds.Delegated() {
+			refresh = func(ctx context.Context) ([]ModelInfo, error) { return p.proxyChatGPTModelFacts(ctx, false) }
+		}
+		models, err := refresh(ctx)
 		return models, err == nil, err
 	}
 	if cache, err := loadChatGPTModelsCacheForAccount(chatGPTModelsClientVersion, p.creds.AccountID); err == nil && time.Since(cache.FetchedAt) <= chatGPTModelsCacheTTL {
@@ -243,7 +254,7 @@ func (p *ChatGPTProvider) fetchChatGPTModels(ctx context.Context) ([]ModelInfo, 
 	if client == nil {
 		client = http.DefaultClient
 	}
-	resp, err := client.Do(req)
+	resp, err := proxyclient.Do(client, req)
 	if err != nil {
 		return nil, "", err
 	}

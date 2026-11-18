@@ -1207,6 +1207,32 @@ List available LLM providers
 | `--configured` | bool | Show only configured providers |
 | `--json` | bool | Output as JSON |
 
+### `term-llm proxy`
+
+Run native clients with credentials held by a proxy
+
+### `term-llm proxy disconnect`
+
+Undo a legacy connector's Claude-only gateway settings
+
+### `term-llm proxy disconnect claude`
+
+Restore legacy connector-owned Claude settings without overwriting unrelated settings
+
+### `term-llm proxy run`
+
+Run a native client with process-local proxy settings
+
+### `term-llm proxy run claude`
+
+Run Claude Code behind the credential proxy
+
+| Flag | Type | Description |
+|---|---|---|
+| `--claude-command` | string | Claude Code executable to launch |
+| `--token` | string | Scoped proxy client token for --url (never a Claude vendor credential) |
+| `--url` | string | Exact scoped Claude proxy binding root (default: configured claude-bin binding) |
+
 ### `term-llm serve`
 
 Run the agent as a server (web, api, jobs, Telegram, or any combination)
@@ -1326,6 +1352,9 @@ Run a standalone configuration-driven credential proxy
 | `--admin-token-file` | string | Private administrator token file (only with --auth token) |
 | `--auth` | string | Browser admin authentication: passkey or token (explicit legacy/local mode) |
 | `--config` | string | Operator-owned route YAML; omit for editable UI-managed routes |
+| `--debug-payload-dir` | string | Start raw payload capture in this private directory (also controllable in the Debug UI) |
+| `--debug-payload-max-bytes` | int64 | Maximum bytes per captured body or WebSocket direction |
+| `--debug-payload-max-total-bytes` | int64 | Maximum retained capture-file bytes in the debug directory (also limited to 1,000 requests) |
 | `--host` | string | Listen host |
 | `--max-body-bytes` | int64 | Maximum streamed request body bytes |
 | `--max-concurrent` | int | Maximum active forwarding requests (no queue) |

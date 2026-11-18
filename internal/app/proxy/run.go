@@ -45,6 +45,8 @@ func Run(ctx context.Context, opts Options, out io.Writer) error {
 	defer s.Close()
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	stopPricing := s.startPricingRefresh(ctx)
+	defer stopPricing()
 	serving, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	server := &http.Server{Handler: s, ReadHeaderTimeout: 15 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10, BaseContext: func(net.Listener) context.Context { return serving }}
@@ -65,6 +67,7 @@ func Run(ctx context.Context, opts Options, out io.Writer) error {
 			_ = s.store.retain(cleanup, s.opts.RetentionDays)
 			c()
 		case <-ctx.Done():
+			s.closeSockets()
 			drain, c := context.WithTimeout(context.Background(), 20*time.Second)
 			err := server.Shutdown(drain)
 			c()

@@ -7,7 +7,7 @@ import (
 )
 
 func (s *Service) resolveSecrets(c Config, stored map[string]material, fileMode bool) (map[string]material, error) {
-	protected := []string{s.opts.PasskeyBootstrapTokenFile, s.opts.PasskeyRecoveryTokenFile}
+	protected := []string{s.opts.PasskeyBootstrapTokenFile, s.opts.PasskeyRecoveryTokenFile, s.payloadDebugDirectory(), filepath.Join(s.opts.StateDir, "debug-payloads")}
 	if s.passkey != nil {
 		dir := filepath.Join(s.opts.StateDir, "admin-auth")
 		protected = append(protected, dir, filepath.Join(dir, "credentials.json"), filepath.Join(dir, "auth.lock"))
@@ -25,7 +25,7 @@ func forbiddenSecretFile(path string, info os.FileInfo, protected []string) bool
 			continue
 		}
 		other, _ := filepath.Abs(candidate)
-		if abs == other {
+		if abs == other || strings.HasPrefix(abs, other+string(filepath.Separator)) {
 			return true
 		}
 		st, err := os.Stat(candidate)

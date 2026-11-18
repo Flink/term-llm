@@ -65,3 +65,14 @@ Unknown unversioned schemas fail closed with a structural description and recove
   ignores the additional columns and table. Stop older writers before upgrading,
   and downgrade by restoring a backup. Older binaries also drop pairing approver
   snapshots when rewriting grants; affected devices must be paired again.
+
+- Proxy v5 replaces the browser-pairing tables (`connect_requests`,
+  `connect_managed`) with the native Claude token vault (`claude_vault`). The
+  previous v4 binary rejects the v5 marker for read-write use. Stop older writers
+  before upgrading, and downgrade by restoring a backup rather than opening the
+  newer database with an older binary.
+
+- Proxy v6 adds admin API key hashes and caller provisioning metadata, with a
+  unique external ID for active clients. Existing callers stay browser-managed.
+  The v5 binary rejects v6 for read-write use. Stop older writers before
+  upgrading and restore a protected v5 backup to downgrade.

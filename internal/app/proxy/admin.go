@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -223,7 +224,23 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	jsonReply(w, 200, map[string]string{"csrf": sess.csrf})
 }
 func (s *Service) adminAPI(w http.ResponseWriter, r *http.Request, path string, sess session) {
+	if s.payloadDebugAPI(w, r, path) {
+		return
+	}
+	if s.moneyAPI(w, r, path) {
+		return
+	}
 	switch {
+	case path == "chatgpt/setup" && (r.Method == http.MethodPost || r.Method == http.MethodGet || r.Method == http.MethodDelete):
+		s.chatgptSetupAPI(w, r, sess)
+	case path == "claude/setup" && (r.Method == http.MethodPost || r.Method == http.MethodDelete):
+		s.claudeSetupAPI(w, r, sess)
+	case path == "accounts" && (r.Method == "GET" || r.Method == "POST" || r.Method == "PUT" || r.Method == "DELETE"):
+		s.accountsAPI(w, r, sess)
+	case path == "admin-keys" && r.Method == http.MethodPost:
+		s.createAdminKey(w, r, sess)
+	case path == "admin-keys" && r.Method == http.MethodDelete:
+		s.revokeAdminKey(w, r, sess)
 	case path == "state" && r.Method == "GET":
 		s.state(w, sess)
 	case path == "config" && r.Method == "PUT":
@@ -231,9 +248,18 @@ func (s *Service) adminAPI(w http.ResponseWriter, r *http.Request, path string, 
 			Revision int64                `json:"revision"`
 			Routes   []Route              `json:"routes"`
 			Secrets  map[string]SecretRef `json:"secrets"`
+			Money    *MoneySettings       `json:"money,omitempty"`
 		}
 		if readJSON(w, r, &in) {
-			s.updateConfig(w, Config{Routes: in.Routes, Secrets: in.Secrets}, in.Revision)
+			money, err := s.currentMoneySettings(r.Context())
+			if err != nil {
+				fail(w, 503, "Money settings unavailable; configuration unchanged")
+				return
+			}
+			if in.Money != nil {
+				money = *in.Money
+			}
+			s.updateConfig(w, Config{Routes: in.Routes, Secrets: in.Secrets, Money: money}, in.Revision)
 		}
 	case path == "import" && r.Method == "POST":
 		var in struct {
@@ -251,7 +277,16 @@ func (s *Service) adminAPI(w http.ResponseWriter, r *http.Request, path string, 
 		s.updateConfig(w, c, in.Revision)
 	case path == "export" && r.Method == "GET":
 		s.mu.RLock()
-		b, err := yaml.Marshal(s.snap.config)
+		exported := s.snap.config
+		money, err := s.currentMoneySettingsLocked(r.Context())
+		if err != nil {
+			s.mu.RUnlock()
+			fail(w, 503, "Money settings unavailable; export unavailable")
+			return
+		}
+		exported.Money = money
+		exported.Accounts = nil // bootstrap paths/overrides are host-only, never portable UI configuration
+		b, err := yaml.Marshal(exported)
 		s.mu.RUnlock()
 		if err != nil {
 			fail(w, 500, "Export unavailable")
@@ -274,7 +309,10 @@ func (s *Service) adminAPI(w http.ResponseWriter, r *http.Request, path string, 
 			return
 		}
 		s.mu.Lock()
-		_, err := s.store.db.Exec("UPDATE callers SET revoked=1 WHERE id=?", in.ID)
+		err := s.store.revokeCaller(r.Context(), in.ID)
+		if err == nil {
+			s.cancelCallerSockets(in.ID)
+		}
 		s.mu.Unlock()
 		if err != nil {
 			fail(w, 503, "Could not revoke client")
@@ -302,9 +340,19 @@ func (s *Service) adminAPI(w http.ResponseWriter, r *http.Request, path string, 
 func (s *Service) state(w http.ResponseWriter, sess session) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	hasRequests, err := s.store.hasRequests(context.Background())
+	if err != nil {
+		fail(w, 503, "Could not read request completion state")
+		return
+	}
 	callers, err := s.store.callers()
 	if err != nil {
 		fail(w, 503, "Could not read client state")
+		return
+	}
+	adminKeys, err := s.store.adminKeys()
+	if err != nil {
+		fail(w, 503, "Could not read admin API key metadata")
 		return
 	}
 	type secretInfo struct {
@@ -337,9 +385,23 @@ func (s *Service) state(w http.ResponseWriter, sess session) {
 	if s.opts.ConfigFile != "" {
 		mode = "file"
 	}
-	jsonReply(w, 200, map[string]any{"mode": mode, "auth": s.opts.Auth, "revision": s.snap.revision, "routes": s.snap.config.Routes, "secrets": secrets, "callers": callers, "csrf": sess.csrf, "retention_days": s.opts.RetentionDays, "presets": routePresets})
+	accounts, err := s.store.accountInfos()
+	if err != nil {
+		fail(w, 503, "Could not read account metadata")
+		return
+	}
+	money, err := s.currentMoneySettingsLocked(context.Background())
+	if err != nil {
+		fail(w, 503, "Money settings unavailable")
+		return
+	}
+	jsonReply(w, 200, map[string]any{"has_requests": hasRequests, "accounts": accounts, "money": money, "mode": mode, "auth": s.opts.Auth, "revision": s.snap.revision, "routes": s.snap.config.Routes, "secrets": secrets, "callers": callers, "admin_keys": adminKeys, "csrf": sess.csrf, "retention_days": s.opts.RetentionDays, "presets": routePresets})
 }
 func (s *Service) updateConfig(w http.ResponseWriter, c Config, revision int64) {
+	if len(c.Accounts) > 0 {
+		fail(w, 400, "Account bootstrap references are operator-file-only")
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.opts.ConfigFile != "" {
@@ -365,10 +427,15 @@ func (s *Service) updateConfig(w http.ResponseWriter, c Config, revision int64) 
 		fail(w, 400, err.Error())
 		return
 	}
-	if err = s.store.saveConfig(next, false); err != nil {
+	if err = s.validateAccounts(next); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	if err = s.store.saveConfigAndMoney(next); err != nil {
 		fail(w, 503, "Could not commit configuration; active routes unchanged")
 		return
 	}
+	s.reconcileSockets(next)
 	s.snap = next
 	jsonReply(w, 200, map[string]int64{"revision": next.revision})
 }
@@ -389,6 +456,10 @@ func (s *Service) reload(w http.ResponseWriter) {
 		fail(w, 503, "Could not read secret store")
 		return
 	}
+	if err = s.bootstrapAccounts(context.Background(), c); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
 	secrets, err := s.resolveSecrets(c, stored, true)
 	if err != nil {
 		fail(w, 400, err.Error())
@@ -399,10 +470,15 @@ func (s *Service) reload(w http.ResponseWriter) {
 		fail(w, 400, err.Error())
 		return
 	}
+	if err = s.validateAccounts(next); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
 	if err = s.store.saveConfig(next, true); err != nil {
 		fail(w, 503, "Could not commit reload; active routes unchanged")
 		return
 	}
+	s.reconcileSockets(next)
 	s.snap = next
 	jsonReply(w, 200, map[string]int64{"revision": next.revision})
 }
@@ -432,6 +508,7 @@ func (s *Service) changeCaller(w http.ResponseWriter, r *http.Request) {
 			callerFailure(w, err)
 			return
 		}
+		s.cancelCallerSockets(in.ID)
 		jsonReply(w, 200, map[string]bool{"ok": true})
 		return
 	}
@@ -554,17 +631,20 @@ func (s *Service) changeSecret(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "Could not commit secret update; active credentials unchanged")
 		return
 	}
+	s.reconcileSockets(next)
 	s.snap = next
 	jsonReply(w, 200, map[string]int64{"revision": next.revision})
 }
 
 func (s *Service) prepareSecretChange(in secretInput, deleting bool, stored map[string]material) (int, error) {
 	if deleting {
-		for _, route := range s.snap.routes {
-			for _, rule := range route.SetHeaders {
-				ref := s.snap.config.Secrets[rule.Secret]
-				if rule.Secret == in.Name || ref.Stored == in.Name {
-					return 409, inputError("Secret is referenced by a route; remove its header rule first")
+		for _, parent := range s.snap.routes {
+			for _, route := range parent.destinations() {
+				for _, rule := range route.SetHeaders {
+					ref := s.snap.config.Secrets[rule.Secret]
+					if rule.Secret == in.Name || ref.Stored == in.Name {
+						return 409, inputError("Secret is referenced by a route; remove its header rule first")
+					}
 				}
 			}
 		}

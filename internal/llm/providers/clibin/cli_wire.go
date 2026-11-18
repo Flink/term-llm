@@ -12,6 +12,17 @@ import (
 const cliWireStopTimeout = 5 * time.Second
 
 func startCLIWireAudit(provider string, env []string) ([]string, *cliwire.Server, error) {
+	return startCLIWireAuditContext(context.Background(), provider, env)
+}
+
+// startCLIWireAuditContext lets provider launches cancel a proxy bootstrap
+// along with the child process. Callers without a launch context use the
+// background wrapper above.
+func startCLIWireAuditContext(ctx context.Context, provider string, env []string) ([]string, *cliwire.Server, error) {
+	env, err := prepareCLIProxyEnvironment(ctx, provider, env)
+	if err != nil {
+		return nil, nil, err
+	}
 	server, err := startCLIWireServer(provider, env)
 	if err != nil || server == nil {
 		return env, server, err

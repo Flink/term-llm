@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fireEvent,
   getByLabelText,
@@ -33,10 +33,13 @@ function state(overrides: Partial<ProxyState> = {}): ProxyState {
     routes: [],
     secrets: [],
     callers: [],
+    admin_keys: [],
     csrf: 'csrf-token',
     ...overrides,
   };
 }
+// Route-editor tests opt into the preserved legacy link; Home has its own suite.
+beforeEach(() => window.history.replaceState(null, '', '/?tab=routes'));
 const disposals: (() => void)[] = [];
 function setup(snapshot = state()) {
   const api = new ProxyClient(vi.fn());
@@ -51,6 +54,14 @@ function setup(snapshot = state()) {
     origin: 'https://proxy.example',
   });
   vi.spyOn(api, 'state').mockResolvedValue(snapshot);
+  vi.spyOn(api, 'timeline').mockResolvedValue({
+    timezone: 'UTC',
+    range: '30d',
+    start: '2026-10-18T00:00:00Z',
+    end: '2026-11-17T00:00:00Z',
+    currencies: [],
+    buckets: [],
+  });
   const root = document.createElement('div');
   document.body.append(root);
   const dispose = mountProxy(root, api);
@@ -76,28 +87,79 @@ afterEach(() => {
 });
 
 describe('proxy navigation', () => {
+  it('lands on Home by default and preserves the explicit Routes bookmark', async () => {
+    window.history.replaceState(null, '', '/_proxy/');
+    const { root, api } = setup();
+    await waitFor(() =>
+      expect(getByRole(root, 'button', { name: 'Home' })).toHaveAttribute('aria-current', 'page'),
+    );
+    await waitFor(() => expect(api.timeline).toHaveBeenCalledOnce());
+    await click(root, 'Refresh state');
+    await waitFor(() => expect(api.timeline).toHaveBeenCalledTimes(2));
+    await click(root, 'Routes');
+    expect(window.location.search).toBe('?tab=routes');
+    await click(root, 'Home');
+    expect(window.location.search).toBe('');
+  });
+
   function activeTab(root: HTMLElement, name: string) {
     expect(getByRole(root, 'button', { name })).toHaveAttribute('aria-current', 'page');
   }
   it('keeps Requests selected across refresh and remount without changing the mount path', async () => {
     window.history.replaceState(null, '', '/_proxy/?other=value#anchor');
     const { root, api, dispose } = setup();
-    vi.spyOn(api, 'requests').mockResolvedValue({ requests: [], next: 0 });
+    const requests = vi.spyOn(api, 'requests').mockResolvedValue({ requests: [], next: 0 });
     await click(root, 'Requests');
     expect(window.location.pathname).toBe('/_proxy/');
     expect(window.location.search).toBe('?other=value&tab=requests');
     expect(window.location.hash).toBe('#anchor');
-    await click(root, 'Refresh state');
-    await waitFor(() => activeTab(root, 'Requests'));
+    expect(queryByRole(root, 'button', { name: 'Refresh state' })).toBeNull();
+    await waitFor(() => expect(getByRole(root, 'button', { name: 'Refresh' })).toBeEnabled());
+    await click(root, 'Refresh');
+    await waitFor(() => expect(requests).toHaveBeenCalledTimes(2));
+    expect(api.state).toHaveBeenCalledOnce();
+    activeTab(root, 'Requests');
     const historyState = window.history.state;
     dispose();
     disposals.push(mountProxy(root, api));
     await waitFor(() => activeTab(root, 'Requests'));
     expect(window.history.state).toEqual(historyState);
     window.history.back();
-    await waitFor(() => activeTab(root, 'Routes'));
+    await waitFor(() => activeTab(root, 'Home'));
     window.history.forward();
     await waitFor(() => activeTab(root, 'Requests'));
+  });
+  it('preserves Debug bookmarks and clears capture previews when navigating or signing out', async () => {
+    window.history.replaceState(null, '', '/_proxy/?tab=debug');
+    const { root, api, dispose } = setup();
+    vi.spyOn(api, 'debug').mockResolvedValue({ enabled: false, directory: '/captures' });
+    vi.spyOn(api, 'debugCaptures').mockResolvedValue({ captures: [] });
+    vi.spyOn(api, 'logout').mockResolvedValue();
+    await waitFor(() => activeTab(root, 'Debug'));
+    await waitFor(() => expect(api.debugCaptures).toHaveBeenCalledOnce());
+    await click(root, 'Routes');
+    window.history.back();
+    await waitFor(() => activeTab(root, 'Debug'));
+    await waitFor(() => expect(api.debugCaptures).toHaveBeenCalledTimes(2));
+    const preview = root.querySelector('pre')!;
+    preview.textContent = 'private capture';
+    await click(root, 'Sign out');
+    await waitFor(() => getByRole(root, 'heading', { name: 'Sign in' }));
+    expect(preview.textContent).toBe('');
+    expect(root).not.toHaveTextContent('private capture');
+    dispose();
+    disposals.push(mountProxy(root, api));
+    await waitFor(() => activeTab(root, 'Debug'));
+    expect(window.location.search).toBe('?tab=debug');
+  });
+  it('returns expired debug sessions to sign-in without rendering capture payloads', async () => {
+    window.history.replaceState(null, '', '/_proxy/?tab=debug');
+    const { root, api } = setup();
+    vi.spyOn(api, 'debug').mockRejectedValue(new ProxyAPIError(401, 'Please sign in.'));
+    const list = vi.spyOn(api, 'debugCaptures');
+    await waitFor(() => getByRole(root, 'heading', { name: 'Sign in' }));
+    expect(root.querySelector('pre')).toBeNull();
+    expect(list).not.toHaveBeenCalled();
   });
   it('uses Back and Forward without adding duplicate entries for the selected tab', async () => {
     const { root } = setup();
@@ -117,7 +179,15 @@ describe('proxy navigation', () => {
     const { root, api } = setup(state({ routes: [route] }));
     vi.spyOn(api, 'createCaller').mockResolvedValue({
       token: 'private-once',
-      caller: { id: 'new', name: 'New', created: 1, revoked: false, grants: ['Example'] },
+      caller: {
+        id: 'new',
+        name: 'New',
+        created: 1,
+        revoked: false,
+        grants: ['Example'],
+        created_by: '',
+        external_id: '',
+      },
     });
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     await click(root, 'Clients');
@@ -147,10 +217,25 @@ describe('proxy navigation', () => {
     expect(window.location.search).toBe('?tab=clients');
     expect(queryByRole(root, 'button', { name: 'Callers' })).toBeNull();
   });
+  it('ignores retired pairing links and keeps Clients limited to scoped tokens', async () => {
+    window.history.replaceState(null, '', '/_proxy/?tab=clients&connect=retired&code=old');
+    const { root } = setup(state({ routes: [route], accounts: [] }));
+    await waitFor(() => activeTab(root, 'Clients'));
+    expect(getByLabelText(root, 'Client name')).toBeVisible();
+    expect(getByLabelText(root, 'Example')).not.toBeChecked();
+    expect(queryByRole(root, 'button', { name: 'Connect Claude' })).toBeNull();
+    expect(queryByRole(root, 'button', { name: 'Sign in with Claude' })).toBeNull();
+    expect(root.querySelector('input[type=password]')).toBeNull();
+    await click(root, 'Routes');
+    // No page-level account list; accounts live on the routes that use them.
+    await waitFor(() => expect(root.querySelector('.route-card')).not.toBeNull());
+    expect(root.querySelector('details.route-management')).toBeNull();
+    expect(root.textContent).not.toContain('Other provider accounts');
+  });
   it.each(['unknown', 'passkeys'])('falls back safely from unavailable tab %s', async (tab) => {
     window.history.replaceState(null, '', `/_proxy/?tab=${tab}`);
     const { root } = setup();
-    await waitFor(() => activeTab(root, 'Routes'));
+    await waitFor(() => activeTab(root, 'Home'));
     expect(window.location.search).toBe('');
   });
   it('preserves the requested tab through sign in', async () => {
@@ -257,7 +342,7 @@ describe('provider presets', () => {
       );
       const save = vi.spyOn(api, 'config').mockResolvedValue();
       await click(root, 'Add route');
-      fireEvent.change(getByLabelText(root, 'Provider'), { target: { value: id } });
+      await click(root, preset.label.replace(/ API$/, ''));
       expect(getByLabelText(root, 'Name')).toHaveValue(id);
       expect(getByLabelText(root, 'Local prefix')).toHaveValue(`/${id}/`);
       expect(getByLabelText(root, 'Upstream base URL')).toHaveValue(preset.upstream);
@@ -294,9 +379,9 @@ describe('provider presets', () => {
       }),
     );
     await click(root, 'Add route');
-    fireEvent.change(getByLabelText(root, 'Provider'), { target: { value: 'openai' } });
+    await click(root, 'OpenAI');
     expect((getByLabelText(root, 'Secret name') as HTMLSelectElement).options).toHaveLength(1);
-    expect(root.textContent).toContain('No secret is bound to https://api.openai.com');
+    expect(root.textContent).toContain('Choose or add an API key for this provider.');
   });
   it('avoids colliding names and overlapping prefixes without changing saved routes', async () => {
     const { root } = setup(
@@ -309,30 +394,26 @@ describe('provider presets', () => {
       }),
     );
     await click(root, 'Add route');
-    fireEvent.change(getByLabelText(root, 'Provider'), { target: { value: 'openai' } });
+    await click(root, 'OpenAI');
     expect(getByLabelText(root, 'Name')).toHaveValue('openai-3');
     expect(getByLabelText(root, 'Local prefix')).toHaveValue('/openai-3/');
   });
-  it('confirms before replacing an edited draft and supports returning to Custom HTTP', async () => {
-    const { root } = setup(state({ presets }));
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  it('lets you cancel an unsaved draft and choose a different preset', async () => {
+    const { root, api } = setup(state({ presets }));
+    const save = vi.spyOn(api, 'config');
     await click(root, 'Add route');
+    await click(root, 'Custom endpoint');
     fireEvent.input(getByLabelText(root, 'Name'), { target: { value: 'my-route' } });
-    fireEvent.change(getByLabelText(root, 'Provider'), { target: { value: 'anthropic' } });
-    expect(confirm).toHaveBeenCalledOnce();
-    expect(getByLabelText(root, 'Provider')).toHaveValue('');
-    expect(getByLabelText(root, 'Name')).toHaveValue('my-route');
-    confirm.mockReturnValue(true);
-    fireEvent.change(getByLabelText(root, 'Provider'), { target: { value: 'anthropic' } });
-    fireEvent.change(getByLabelText(root, 'Provider'), { target: { value: '' } });
-    expect(getByLabelText(root, 'Upstream base URL')).toHaveValue('');
-    expect(getByLabelText(root, 'Local client authentication header')).toHaveValue('Authorization');
-    expect(queryByRole(root, 'textbox', { name: 'Header name' })).toBeNull();
+    await click(root, 'Cancel');
+    await click(root, 'Add route');
+    await click(root, 'Anthropic');
+    expect(getByLabelText(root, 'Name')).toHaveValue('anthropic');
+    expect(save).not.toHaveBeenCalled();
   });
   it('does not offer presets when editing an existing route', async () => {
     const { root } = setup(state({ presets, routes: [route] }));
     await click(root, 'Edit Example');
-    expect(root.querySelector('label')?.textContent).toBe('Name');
+    expect(root.querySelector('.route-form label')?.textContent).toBe('Name');
     expect(root.querySelector('.route-form')?.textContent).not.toContain(
       'Editable API-key defaults',
     );
@@ -341,7 +422,7 @@ describe('provider presets', () => {
     const { root, api } = setup(state({ presets }));
     const save = vi.spyOn(api, 'config');
     await click(root, 'Add route');
-    fireEvent.change(getByLabelText(root, 'Provider'), { target: { value: 'ollama' } });
+    await click(root, 'Ollama');
     expect(getByLabelText(root, 'Upstream base URL')).toHaveValue('http://127.0.0.1:11434');
     expect(
       getByLabelText(root, 'Allow insecure HTTP upstream (credentials may travel unencrypted)'),
@@ -349,8 +430,9 @@ describe('provider presets', () => {
     expect(root.querySelector('.header-substitution')).toBeNull();
     await click(root, 'Save route');
     expect(save).not.toHaveBeenCalled();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    fireEvent.change(getByLabelText(root, 'Provider'), { target: { value: 'vllm' } });
+    await click(root, 'Cancel');
+    await click(root, 'Add route');
+    await click(root, 'vLLM');
     expect(getByLabelText(root, 'Upstream base URL')).toHaveValue('');
   });
 });
@@ -361,6 +443,7 @@ describe('proxy admin DOM', () => {
     const save = vi.spyOn(api, 'config').mockResolvedValue();
     await waitFor(() => expect(root.textContent).toContain('Start with one route'));
     await click(root, 'Add route');
+    await click(root, 'Custom endpoint');
     fireEvent.input(getByLabelText(root, 'Name'), { target: { value: 'Example' } });
     fireEvent.input(getByLabelText(root, 'Upstream base URL', { exact: false }), {
       target: { value: 'https://example.com/api/' },
@@ -385,7 +468,7 @@ describe('proxy admin DOM', () => {
     await click(root, 'Reload file');
     await waitFor(() => expect(reload).toHaveBeenCalledOnce());
     expect(queryByRole(root, 'button', { name: 'Add route' })).toBeNull();
-    openDetails(root, 'Configuration file');
+    await click(root, 'Admin');
     expect(queryByRole(root, 'button', { name: 'Download routes.yaml' })).not.toBeNull();
     expect(queryByRole(root, 'button', { name: 'Replace routes from YAML' })).toBeNull();
     expect(root.textContent).toContain('Edit that file and use Reload file');
@@ -411,7 +494,15 @@ describe('proxy admin DOM', () => {
     const { root, api } = setup(state({ routes: [route] }));
     const create = vi.spyOn(api, 'createCaller').mockResolvedValue({
       token: 'once-only',
-      caller: { id: 'c', name: 'Client', created: '', revoked: false, grants: [route.name] },
+      caller: {
+        id: 'c',
+        name: 'Client',
+        created: '',
+        revoked: false,
+        grants: [route.name],
+        created_by: '',
+        external_id: '',
+      },
     });
     await click(root, 'Clients');
     expect((getByLabelText(root, 'Example') as HTMLInputElement).checked).toBe(false);
@@ -442,7 +533,7 @@ describe('proxy admin DOM', () => {
     await waitFor(() => expect(root.textContent).toContain('upstream-key → X-Api-Key'));
     expect(root.textContent).toContain('HTTP · unencrypted');
     expect(root.textContent).toContain('Disabled');
-    expect(root.textContent).toContain('0 clients');
+    expect(root.textContent).toContain('No client can use this route yet.');
     expect(root.querySelector('.disabled-route')).not.toBeNull();
     expect(getByRole(root, 'button', { name: 'Add route' }).classList.contains('primary')).toBe(
       true,
@@ -453,7 +544,7 @@ describe('proxy admin DOM', () => {
     await waitFor(() => expect(root.textContent).toContain('<img src=x'));
     expect(root.querySelector('img')).toBeNull();
   });
-  it('filters requests, pages with before and displays metadata details', async () => {
+  it('applies request filters from page one and keeps metadata details available', async () => {
     const { root, api } = setup();
     const requests = vi.spyOn(api, 'requests').mockResolvedValue({
       requests: [
@@ -489,11 +580,11 @@ describe('proxy admin DOM', () => {
     await waitFor(() =>
       expect(requests).toHaveBeenLastCalledWith(expect.objectContaining({ page: '2' })),
     );
+    openDetails(root, 'Filters');
     fireEvent.input(getByLabelText(root, 'Path'), { target: { value: '/other' } });
-    openDetails(root, 'Filters (1)');
-    await click(root, 'Refresh results');
+    await click(root, 'Apply filters');
     await waitFor(() =>
-      expect(requests).toHaveBeenLastCalledWith(expect.objectContaining({ path: '/other' })),
+      expect(requests).toHaveBeenLastCalledWith({ path: '/other', page: '1', page_size: '25' }),
     );
   });
   it('shell-quotes curl examples and uses only the client token', () => {
@@ -504,6 +595,48 @@ describe('proxy admin DOM', () => {
 });
 
 describe('proxy configuration and credential operations', () => {
+  it.each(['pay_as_you_go', 'plan', 'local', 'unspecified'] as const)(
+    'edits billing to %s without dropping hidden route security policy',
+    async (billing) => {
+      const original: ProxyRoute = {
+        ...route,
+        account: 'trusted',
+        websocket: true,
+        allow: ['POST /responses'],
+        redirects: 'refuse',
+        usage: 'auto',
+        billing: 'plan',
+      };
+      const { root, api } = setup(state({ routes: [original] }));
+      const config = vi.spyOn(api, 'config').mockResolvedValue();
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      await click(root, 'Edit Example');
+      fireEvent.change(getByLabelText(root, 'Billing'), {
+        target: { value: billing },
+      });
+      await click(root, 'Save route');
+      await waitFor(() =>
+        expect(config).toHaveBeenCalledWith(7, [expect.objectContaining({ ...original, billing })]),
+      );
+      expect(confirm).not.toHaveBeenCalled();
+    },
+  );
+  it('defaults new routes to unspecified billing, not an assumed API price', async () => {
+    const { root, api } = setup();
+    const config = vi.spyOn(api, 'config').mockResolvedValue();
+    await click(root, 'Add route');
+    await click(root, 'Custom endpoint');
+    expect((getByLabelText(root, 'Billing') as HTMLSelectElement).value).toBe('unspecified');
+    fireEvent.input(getByLabelText(root, 'Name'), { target: { value: 'new-api' } });
+    fireEvent.input(getByLabelText(root, 'Upstream base URL'), {
+      target: { value: 'https://example.com/' },
+    });
+    await click(root, 'Save route');
+    await waitFor(() =>
+      expect(config).toHaveBeenCalledWith(7, [expect.objectContaining({ billing: 'unspecified' })]),
+    );
+  });
+
   it('handles null empty-install collections from Go', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
@@ -512,6 +645,7 @@ describe('proxy configuration and credential operations', () => {
           routes: null,
           secrets: null,
           callers: null,
+          admin_keys: null,
         }),
       ),
     );
@@ -519,6 +653,7 @@ describe('proxy configuration and credential operations', () => {
       routes: [],
       secrets: [],
       callers: [],
+      admin_keys: [],
     });
   });
   it('disables and deletes routes using the loaded revision', async () => {
@@ -605,13 +740,35 @@ describe('proxy configuration and credential operations', () => {
     );
     expect(root.textContent).not.toContain('opaque-credential-123');
   });
+  it('keeps configuration transfer on Admin, not Routes, with no nested disclosures', async () => {
+    const { root } = setup();
+    await click(root, 'Add route');
+    expect(queryByRole(root, 'button', { name: 'Download routes.yaml' })).toBeNull();
+    expect(queryByRole(root, 'button', { name: 'Replace routes from YAML' })).toBeNull();
+    expect(root.querySelector('input[type=file], textarea')).toBeNull();
+    await click(root, 'Admin');
+    expect(getByRole(root, 'heading', { name: 'Admin' })).toBeVisible();
+    expect(getByRole(root, 'button', { name: 'Download routes.yaml' })).toBeVisible();
+    expect(getByRole(root, 'button', { name: 'Replace routes from YAML' })).toBeVisible();
+    expect(root.querySelector('main details')).toBeNull();
+    const source = getByLabelText(root, 'Import source') as HTMLSelectElement;
+    expect([...source.options].map((option) => option.text)).toEqual(['File', 'Paste YAML']);
+    expect(getByLabelText(root, 'YAML file')).toBeVisible();
+    expect(getByLabelText(root, 'Route configuration YAML')).not.toBeVisible();
+    fireEvent.change(source, { target: { value: 'paste' } });
+    expect(getByLabelText(root, 'YAML file')).not.toBeVisible();
+    expect(getByLabelText(root, 'Route configuration YAML')).toBeVisible();
+    fireEvent.change(source, { target: { value: 'file' } });
+    expect(getByLabelText(root, 'YAML file')).toBeVisible();
+    expect(getByLabelText(root, 'Route configuration YAML')).not.toBeVisible();
+  });
   it('imports secret-free YAML with revision and explicit confirmation', async () => {
     const { root, api } = setup();
     const importYAML = vi.spyOn(api, 'importYAML').mockResolvedValue();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     await waitFor(() => expect(root.textContent).toContain('Start with one route'));
-    openDetails(root, 'Configuration file');
-    openDetails(root, 'Paste YAML instead');
+    await click(root, 'Admin');
+    fireEvent.change(getByLabelText(root, 'Import source'), { target: { value: 'paste' } });
     fireEvent.input(getByLabelText(root, 'Route configuration YAML'), {
       target: { value: 'routes: []' },
     });
@@ -623,9 +780,9 @@ describe('proxy configuration and credential operations', () => {
     const importYAML = vi.spyOn(api, 'importYAML').mockResolvedValue();
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     await waitFor(() => expect(root.textContent).toContain('Start with one route'));
-    openDetails(root, 'Configuration file');
+    await click(root, 'Admin');
     expect(root.textContent).toContain('This is not a full backup');
-    expect(getByLabelText(root, 'Route configuration YAML').closest('details')?.open).toBe(false);
+    expect(getByLabelText(root, 'Route configuration YAML')).not.toBeVisible();
     const file = new File(['routes: []'], 'routes.yaml', { type: 'text/yaml' });
     Object.defineProperty(file, 'text', { value: vi.fn().mockResolvedValue('routes: []') });
     fireEvent.change(getByLabelText(root, 'YAML file'), { target: { files: [file] } });
@@ -638,8 +795,8 @@ describe('proxy configuration and credential operations', () => {
     const importYAML = vi.spyOn(api, 'importYAML');
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     await waitFor(() => expect(root.textContent).toContain('Start with one route'));
-    openDetails(root, 'Configuration file');
-    openDetails(root, 'Paste YAML instead');
+    await click(root, 'Admin');
+    fireEvent.change(getByLabelText(root, 'Import source'), { target: { value: 'paste' } });
     fireEvent.input(getByLabelText(root, 'Route configuration YAML'), {
       target: { value: 'routes: []' },
     });
@@ -654,7 +811,7 @@ describe('proxy configuration and credential operations', () => {
       const importYAML = vi.spyOn(api, 'importYAML');
       const confirm = vi.spyOn(window, 'confirm');
       await waitFor(() => expect(root.textContent).toContain('Start with one route'));
-      openDetails(root, 'Configuration file');
+      await click(root, 'Admin');
       const read =
         kind === 'unreadable'
           ? vi.fn().mockRejectedValue(new Error('private file error'))
@@ -681,15 +838,53 @@ describe('proxy configuration and credential operations', () => {
       expect(root.textContent).not.toContain('private file error');
     },
   );
+  it.each(['paste', 'file'] as const)(
+    'bounds decoded %s YAML by UTF-8 bytes before confirmation',
+    async (source) => {
+      const { root, api } = setup();
+      const importYAML = vi.spyOn(api, 'importYAML');
+      const confirm = vi.spyOn(window, 'confirm');
+      await click(root, 'Admin');
+      const contents = 'é'.repeat((1 << 19) + 1);
+      if (source === 'paste') {
+        fireEvent.change(getByLabelText(root, 'Import source'), { target: { value: 'paste' } });
+        fireEvent.input(getByLabelText(root, 'Route configuration YAML'), {
+          target: { value: contents },
+        });
+      } else {
+        const file = new File(['small'], 'routes.yaml');
+        Object.defineProperty(file, 'text', { value: vi.fn().mockResolvedValue(contents) });
+        fireEvent.change(getByLabelText(root, 'YAML file'), { target: { files: [file] } });
+      }
+      await click(root, 'Replace routes from YAML');
+      await waitFor(() =>
+        expect(root.querySelector('[role=status]')).toHaveTextContent('1 MiB or smaller'),
+      );
+      expect(confirm).not.toHaveBeenCalled();
+      expect(importYAML).not.toHaveBeenCalled();
+    },
+  );
   it('revokes a caller only after confirmation', async () => {
     const { root, api } = setup(
       state({
-        callers: [{ id: 'c1', name: 'Client', created: 1700000000000, revoked: false, grants: [] }],
+        callers: [
+          {
+            id: 'c1',
+            name: 'Client',
+            created: 1700000000000,
+            revoked: false,
+            grants: [],
+            created_by: '',
+            external_id: '',
+          },
+        ],
       }),
     );
     const revoke = vi.spyOn(api, 'revokeCaller').mockResolvedValue();
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     await click(root, 'Clients');
+    expect(queryByRole(root, 'button', { name: 'Revoke Client' })).toBeNull();
+    await click(root, 'Client');
     await click(root, 'Revoke Client');
     expect(revoke).not.toHaveBeenCalled();
     confirm.mockReturnValue(true);
@@ -763,7 +958,15 @@ describe('acceptance refinements', () => {
     const { root, api } = setup(state({ routes: [route] }));
     vi.spyOn(api, 'createCaller').mockResolvedValue({
       token: 'private-once',
-      caller: { id: 'new', name: 'New', created: 1, revoked: false, grants: ['Example'] },
+      caller: {
+        id: 'new',
+        name: 'New',
+        created: 1,
+        revoked: false,
+        grants: ['Example'],
+        created_by: '',
+        external_id: '',
+      },
     });
     const logout = vi.spyOn(api, 'logout').mockResolvedValue();
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
@@ -814,7 +1017,15 @@ describe('acceptance refinements', () => {
     const { root, api } = setup(state({ routes: [route] }));
     vi.spyOn(api, 'createCaller').mockResolvedValue({
       token: 'private-once',
-      caller: { id: 'new', name: 'New', created: 1, revoked: false, grants: ['Example'] },
+      caller: {
+        id: 'new',
+        name: 'New',
+        created: 1,
+        revoked: false,
+        grants: ['Example'],
+        created_by: '',
+        external_id: '',
+      },
     });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     await click(root, 'Clients');
@@ -827,9 +1038,10 @@ describe('acceptance refinements', () => {
     expect(root.querySelector(':scope > [role=status]')?.textContent).toBe('');
     expect(document.activeElement).toBe(root.querySelector('main h2'));
   });
-  it('suggests an editable prefix from the name, folds Advanced/YAML, and defaults substitutions to secrets', async () => {
+  it('suggests an editable prefix from the name, folds Advanced, and defaults substitutions to secrets', async () => {
     const { root } = setup();
     await click(root, 'Add route');
+    await click(root, 'Custom endpoint');
     const local = getByLabelText(root, 'Local prefix') as HTMLInputElement;
     expect(local.value).toBe('');
     fireEvent.input(getByLabelText(root, 'Name'), { target: { value: 'alpha' } });
@@ -840,7 +1052,7 @@ describe('acceptance refinements', () => {
     expect(
       getByLabelText(root, 'Local client authentication header').closest('details')?.open,
     ).toBe(false);
-    expect(getByLabelText(root, 'Route configuration YAML').closest('details')?.open).toBe(false);
+    expect(queryByRole(root, 'button', { name: 'Download routes.yaml' })).toBeNull();
     await click(root, 'Add substitution');
     expect((getByLabelText(root, 'Source') as HTMLSelectElement).value).toBe('secret');
     fireEvent.input(getByLabelText(root, 'Header name'), { target: { value: 'X-API-Key' } });
@@ -871,7 +1083,7 @@ describe('acceptance refinements', () => {
     const write = vi.spyOn(api, 'secret').mockResolvedValue();
     const save = vi.spyOn(api, 'config').mockResolvedValue();
     await click(root, 'Add route');
-    fireEvent.change(getByLabelText(root, 'Provider'), { target: { value: 'openai' } });
+    await click(root, 'OpenAI');
     fireEvent.input(getByLabelText(root, 'Name'), { target: { value: 'my-openai' } });
     fireEvent.input(getByLabelText(root, 'Local prefix'), {
       target: { value: '/my-custom-prefix/' },
@@ -900,7 +1112,7 @@ describe('acceptance refinements', () => {
       false,
     );
     expect(root.querySelector('.route-form')).toBe(routeForm);
-    expect(getByLabelText(root, 'Provider')).toHaveValue('openai');
+    expect(getByRole(root, 'heading', { name: 'Set up OpenAI API' })).toBeVisible();
     expect(getByLabelText(root, 'Name')).toHaveValue('my-openai');
     expect(getByLabelText(root, 'Local prefix')).toHaveValue('/my-custom-prefix/');
     expect(getByLabelText(root, 'Secret name')).toHaveValue('my-openai-key');
@@ -918,7 +1130,7 @@ describe('acceptance refinements', () => {
     const { root, api } = setup(state({ presets }));
     vi.spyOn(api, 'secret').mockResolvedValue();
     await click(root, 'Add route');
-    fireEvent.change(getByLabelText(root, 'Provider'), { target: { value: 'openai' } });
+    await click(root, 'OpenAI');
     await click(root, 'Add API key');
     const dialog = getByRole(root, 'dialog', { name: 'Add API key' });
     fireEvent.input(getByLabelText(dialog, 'New secret value'), {
@@ -941,7 +1153,7 @@ describe('acceptance refinements', () => {
     const { root, api } = setup(state({ presets }));
     const write = vi.spyOn(api, 'secret');
     await click(root, 'Add route');
-    fireEvent.change(getByLabelText(root, 'Provider'), { target: { value: 'openai' } });
+    await click(root, 'OpenAI');
     await click(root, 'Add API key');
     const dialog = getByRole(root, 'dialog', { name: 'Add API key' });
     const key = getByLabelText(dialog, 'New secret value') as HTMLInputElement;
@@ -959,7 +1171,7 @@ describe('acceptance refinements', () => {
     );
     const save = vi.spyOn(api, 'config');
     await click(root, 'Add route');
-    fireEvent.change(getByLabelText(root, 'Provider'), { target: { value: 'openai' } });
+    await click(root, 'OpenAI');
     await click(root, 'Add API key');
     const dialog = getByRole(root, 'dialog', { name: 'Add API key' });
     fireEvent.input(getByLabelText(dialog, 'New secret value'), {
@@ -982,7 +1194,7 @@ describe('acceptance refinements', () => {
       .spyOn(api, 'config')
       .mockRejectedValue(new ProxyAPIError(409, 'Configuration changed; refresh before saving.'));
     await click(root, 'Add route');
-    fireEvent.change(getByLabelText(root, 'Provider'), { target: { value: 'openai' } });
+    await click(root, 'OpenAI');
     await click(root, 'Add API key');
     const dialog = getByRole(root, 'dialog', { name: 'Add API key' });
     fireEvent.input(getByLabelText(dialog, 'New secret value'), {
@@ -1009,7 +1221,7 @@ describe('acceptance refinements', () => {
     const { root, api } = setup(state({ presets }));
     vi.spyOn(api, 'secret').mockResolvedValue();
     await click(root, 'Add route');
-    fireEvent.change(getByLabelText(root, 'Provider'), { target: { value: 'openai' } });
+    await click(root, 'OpenAI');
     await click(root, 'Add API key');
     const dialog = getByRole(root, 'dialog', { name: 'Add API key' });
     fireEvent.input(getByLabelText(dialog, 'New secret value'), {
@@ -1025,7 +1237,7 @@ describe('acceptance refinements', () => {
     const { root, api } = setup(state({ presets }));
     vi.spyOn(api, 'secret').mockResolvedValue();
     await click(root, 'Add route');
-    fireEvent.change(getByLabelText(root, 'Provider'), { target: { value: 'openai' } });
+    await click(root, 'OpenAI');
     await click(root, 'Add API key');
     const dialog = getByRole(root, 'dialog', { name: 'Add API key' });
     fireEvent.input(getByLabelText(dialog, 'New secret value'), {
@@ -1066,6 +1278,8 @@ describe('acceptance refinements', () => {
             last_used: 1700000001000,
             revoked: false,
             grants: ['Example'],
+            created_by: '',
+            external_id: '',
           },
         ],
       }),
@@ -1074,12 +1288,14 @@ describe('acceptance refinements', () => {
     const create = vi.spyOn(api, 'createCaller');
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     await click(root, 'Clients');
+    expect(getByLabelText(root, 'Client name')).not.toBeVisible();
+    const toggle = getByRole(root, 'button', { name: 'Workstation' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(root.textContent).toContain(new Date(1700000001000).toLocaleString());
     expect(root.textContent).not.toContain('1700000000000');
-    await click(root, 'Edit grants for Workstation');
-    const editor = [...root.querySelectorAll('form')].find((form) =>
-      form.textContent?.includes('Edit grants for Workstation'),
-    )!;
+    const editor = root.querySelector<HTMLFormElement>('.client-detail form')!;
     fireEvent.click(getByLabelText(editor, 'Example'));
     await click(root, 'Save grants');
     expect(edit).not.toHaveBeenCalled();
@@ -1184,7 +1400,15 @@ describe('pending issuance guard', () => {
     expect(root.textContent).toContain('Wait for its one-time token before leaving.');
     complete({
       token: 'pending-token',
-      caller: { id: 'new', name: 'Pending', created: 1, revoked: false, grants: ['Example'] },
+      caller: {
+        id: 'new',
+        name: 'Pending',
+        created: 1,
+        revoked: false,
+        grants: ['Example'],
+        created_by: '',
+        external_id: '',
+      },
     });
     await waitFor(() => expect(getByLabelText(root, 'Client token')).toBeTruthy());
     expect(document.activeElement).toBe(getByLabelText(root, 'Client token'));
@@ -1226,4 +1450,15 @@ describe('route pagination', () => {
     expect(root.querySelectorAll('.route-accordion-item')).toHaveLength(5);
     expect(getByRole(root, 'button', { name: 'Next' })).toHaveProperty('disabled', true);
   });
+});
+
+it('keeps reload off Home while security and operator controls remain accessible', async () => {
+  window.history.replaceState(null, '', '/_proxy/');
+  const { root } = setup(state({ mode: 'file', routes: [route] }));
+  await waitFor(() => expect(getByRole(root, 'heading', { name: 'Cost' })).toBeVisible());
+  expect(queryByRole(root, 'button', { name: 'Reload file' })).toBeNull();
+  expect(getByRole(root, 'button', { name: 'Sign out' })).toBeTruthy();
+  expect(getByRole(root, 'button', { name: 'Secrets' })).toBeTruthy();
+  await click(root, 'Routes');
+  expect(getByRole(root, 'button', { name: 'Reload file' })).toBeTruthy();
 });

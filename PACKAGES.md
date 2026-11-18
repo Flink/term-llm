@@ -30,6 +30,9 @@ One line per root-module package, generated from package doc comments by `make d
 - `internal/app/process` — owns the execution and progress rendering of the `term-llm process` commands; cmd keeps only the Cobra definitions.
 - `internal/app/providers` — implements the providers command.
 - `internal/app/proxy` — runs a standalone configuration-driven credential proxy and private administration UI.
+- `internal/app/proxy/usagetap` — observes bounded provider response events without I/O or retaining response bodies.
+- `internal/app/proxyconnect` — provides local-only undo of legacy Claude Code settings enrollment, preserving unrelated edits and native credentials.
+- `internal/app/proxyrun` — launches a native client with a process-local credential-proxy binding.
 - `internal/app/reload` — owns private successor state and process replacement.
 - `internal/app/runtime` — holds run plumbing shared by the CLI and serve: model selection and child ownership.
 - `internal/app/runtime/approval` — resolves command and session approval policy without depending on cmd.
@@ -149,6 +152,7 @@ One line per root-module package, generated from package doc comments by `make d
 - `internal/mentions` — indexes workspace files and parses @mentions from prompts and composers.
 - `internal/mitmca` — provides the ephemeral certificate authority shared by term-llm's loopback TLS proxies.
 - `internal/modelpolicy` — enforces the ordered intersection of agent model rules.
+- `internal/modelsdev` — fetches and caches the shared models.dev catalog, preserving provider namespaces, metadata, and the distinction between missing and free rates.
 - `internal/music` — generates music through the ElevenLabs and Venice providers and saves it.
 - `internal/notification` — defines the shared Web Push wire envelope, completion display text and event identity helpers.
 - `internal/oauth` — implements ChatGPT, Copilot and Grok OAuth login and refresh flows.
@@ -166,6 +170,8 @@ One line per root-module package, generated from package doc comments by `make d
 - `internal/prompt` — builds system and user prompts for ask, edit, suggest, help and goal flows.
 - `internal/providerhttp` — owns shared provider HTTP requests, status errors and Retry-After parsing.
 - `internal/providerspec` — owns declarative metadata for inference provider types.
+- `internal/proxyclient` — tracks explicit, endpoint-bound delegated proxy credentials for native clients.
+- `internal/proxyprofile` — describes credential-proxy routes and client bindings without performing I/O.
 - `internal/qrcode` — implements a QR Code encoder.
 - `internal/qrcode/bitset` — implements an append only bit array.
 - `internal/qrcode/reedsolomon` — provides error correction encoding for QR Code 2005.

@@ -94,6 +94,9 @@ func (p *VeniceProvider) Stream(ctx context.Context, req Request) (Stream, error
 		// Routing hint: requests with the same key are more likely to reach a server with a warm cache.
 		PromptCacheKey: req.SessionID,
 	}
+	if !p.noStreamOptions {
+		chatReq.StreamOptions = &oaiStreamOptions{IncludeUsage: true}
+	}
 
 	if req.ToolChoice.Mode != "" {
 		chatReq.ToolChoice = buildCompatToolChoice(req.ToolChoice)

@@ -8,16 +8,28 @@ import {
 } from '../src/api/proxy-client';
 import { actions, button, card, el, field, input, submit, type UIContext } from './dom';
 import { routesView } from './routes';
+import { adminView } from './admin';
 import { callersView, secretsView } from './security';
 import { requestsView } from './requests';
+import { homeView } from './home';
+import { debugView } from './debug';
 
-type Tab = 'Routes' | 'Secrets' | 'Clients' | 'Requests' | 'Passkeys';
-const tabs: Tab[] = ['Routes', 'Secrets', 'Clients', 'Requests', 'Passkeys'];
+type Tab = 'Home' | 'Routes' | 'Secrets' | 'Clients' | 'Requests' | 'Debug' | 'Passkeys' | 'Admin';
+const tabs: Tab[] = [
+  'Home',
+  'Routes',
+  'Secrets',
+  'Clients',
+  'Requests',
+  'Debug',
+  'Passkeys',
+  'Admin',
+];
 function tabFromURL(): Tab {
   const value = new URL(window.location.href).searchParams.get('tab');
   // Preserve bookmarks from before the user-facing Clients rename.
   if (value === 'callers') return 'Clients';
-  return tabs.find((name) => name.toLowerCase() === value) ?? 'Routes';
+  return tabs.find((name) => name.toLowerCase() === value) ?? 'Home';
 }
 export function mountProxy(
   root: HTMLElement,
@@ -27,12 +39,20 @@ export function mountProxy(
   let state: ProxyState | undefined;
   let authStatus: ProxyAuthStatus | undefined;
   let tab = tabFromURL();
+  let debug: ReturnType<typeof debugView> | undefined;
+  let requests: ReturnType<typeof requestsView> | undefined;
+  function closeView() {
+    requests?.dispose();
+    requests = undefined;
+    debug?.dispose();
+    debug = undefined;
+  }
   const savedIndex: unknown = window.history.state?.proxyNavigationIndex;
   let historyIndex = typeof savedIndex === 'number' ? savedIndex : 0;
   let currentURL = window.location.href;
   function writeTab(push = false) {
     const url = new URL(window.location.href);
-    if (tab === 'Routes') url.searchParams.delete('tab');
+    if (tab === 'Home') url.searchParams.delete('tab');
     else url.searchParams.set('tab', tab.toLowerCase());
     if (push) historyIndex++;
     window.history[push ? 'pushState' : 'replaceState'](
@@ -51,6 +71,10 @@ export function mountProxy(
   status.role = 'status';
   status.tabIndex = -1;
   status.setAttribute('aria-live', 'polite');
+  function showStatus(message = '', tone: '' | 'quiet' | 'error' = '') {
+    status.dataset.tone = tone;
+    status.textContent = message;
+  }
   const content = el('main');
   const tools = actions();
   const brandName = el('span', 'Proxy');
@@ -61,13 +85,13 @@ export function mountProxy(
   root.replaceChildren(header, status, content);
   function confirmLeave(): boolean {
     if (tokenPending) {
-      status.textContent = 'Creating a client. Wait for its one-time token before leaving.';
+      showStatus('Creating a credential. Wait for its one-time token before leaving.');
       return false;
     }
     return (
       !tokenProtected ||
       window.confirm(
-        'This client token is shown once. Leave without saving it? You cannot retrieve it later.',
+        'This token is shown once. Leave without saving it? You cannot retrieve it later.',
       )
     );
   }
@@ -98,7 +122,7 @@ export function mountProxy(
     tab = tabFromURL();
     currentURL = window.location.href;
     tokenProtected = false;
-    status.textContent = '';
+    showStatus();
     render();
     focus();
   };
@@ -106,7 +130,10 @@ export function mountProxy(
   const pending = new WeakSet<HTMLElement>();
   const context: UIContext = {
     announce(message) {
-      status.textContent = message;
+      showStatus(message, message === 'Signed in.' ? 'quiet' : '');
+    },
+    hasProtectedToken() {
+      return tokenProtected;
     },
     protectToken(shown, pending = false) {
       tokenProtected = shown;
@@ -117,16 +144,18 @@ export function mountProxy(
       tokenProtected = false;
       tab = next;
       writeTab(true);
-      status.textContent = '';
+      showStatus();
       render();
       focus();
     },
     async refresh(key, preserveView = false) {
       const current = ++epoch;
+      const canDiscardToken = tokenProtected && !tokenPending;
       const snapshot = await api.state();
       if (disposed || current !== epoch) return;
       state = snapshot;
-      if (!preserveView) {
+      // A read started before issuance is not permission to discard a new token.
+      if (!preserveView && !tokenPending && (!tokenProtected || canDiscardToken)) {
         tokenProtected = false;
         tokenPending = false;
         render();
@@ -136,7 +165,7 @@ export function mountProxy(
     },
     async run(action, source) {
       if (source && pending.has(source)) return false;
-      status.textContent = '';
+      showStatus();
       const controls = source
         ? [
             ...source.querySelectorAll<
@@ -160,6 +189,7 @@ export function mountProxy(
       } catch (error) {
         if (disposed) return false;
         if (error instanceof ProxyAPIError && error.status === 401) {
+          closeView();
           ++epoch;
           state = undefined;
           tokenProtected = false;
@@ -174,8 +204,10 @@ export function mountProxy(
           }
           login();
         }
-        status.textContent =
-          error instanceof Error ? error.message : 'The action failed. Please try again.';
+        showStatus(
+          error instanceof Error ? error.message : 'The action failed. Please try again.',
+          'error',
+        );
         if (!(error instanceof ProxyAPIError && error.status === 401)) status.focus();
         return false;
       } finally {
@@ -206,6 +238,7 @@ export function mountProxy(
   }
   function login() {
     if (disposed) return;
+    closeView();
     tools.replaceChildren();
     if (authStatus?.auth === 'passkey') {
       content.replaceChildren(
@@ -265,12 +298,14 @@ export function mountProxy(
   }
   function render() {
     if (!state || disposed) return;
+    closeView();
     const snapshot = state;
     const nav = el('nav');
     nav.setAttribute('aria-label', 'Proxy administration');
-    const tabs: Tab[] = ['Routes', 'Secrets', 'Clients', 'Requests'];
+    const tabs: Tab[] = ['Home', 'Routes', 'Secrets', 'Clients', 'Requests', 'Debug'];
     if (snapshot.auth === 'passkey') tabs.push('Passkeys');
-    if (!tabs.includes(tab)) tab = 'Routes';
+    tabs.push('Admin');
+    if (!tabs.includes(tab)) tab = 'Home';
     writeTab();
     for (const name of tabs) {
       const item = button(name, () => context.navigate(name));
@@ -287,6 +322,7 @@ export function mountProxy(
       if (!confirmLeave()) return;
       void context.run(async () => {
         await api.logout();
+        closeView();
         ++epoch;
         state = undefined;
         tokenProtected = false;
@@ -300,8 +336,9 @@ export function mountProxy(
         context.announce('Signed out.');
       }, logout);
     });
-    tools.replaceChildren(refresh, logout);
-    if (snapshot.mode === 'file') {
+    tools.replaceChildren(logout);
+    if (tab !== 'Requests') tools.prepend(refresh);
+    if (snapshot.mode === 'file' && tab !== 'Home') {
       const reload = button('Reload file', () => {
         if (
           !confirmLeave() ||
@@ -321,11 +358,20 @@ export function mountProxy(
       tools.append(reload);
     }
     const views: Record<Tab, () => HTMLElement> = {
-      Routes: () => routesView(snapshot, api, context),
+      Home: () => homeView(snapshot, api, context),
+      Routes: () => routesView(snapshot, api, context, platform),
       Secrets: () => secretsView(snapshot, api, context),
       Clients: () => callersView(snapshot, api, context),
-      Requests: () => requestsView(snapshot, api, context),
+      Requests: () => {
+        requests = requestsView(snapshot, api, context);
+        return requests.element;
+      },
+      Debug: () => {
+        debug = debugView(api, context);
+        return debug.element;
+      },
       Passkeys: () => passkeysView(api, context, platform),
+      Admin: () => adminView(snapshot, api, context, platform),
     };
     content.replaceChildren(nav, views[tab]());
   }
@@ -343,6 +389,7 @@ export function mountProxy(
   void context.run(start);
   return () => {
     disposed = true;
+    closeView();
     ++epoch;
     state = undefined;
     tokenProtected = false;

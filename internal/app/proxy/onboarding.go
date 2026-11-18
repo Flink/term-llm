@@ -82,12 +82,11 @@ func (s *Service) printStartup(out io.Writer, address string) {
 	if adminURL == "" {
 		adminURL = "http://" + address
 	}
-	fmt.Fprintf(out, "\nCredential proxy ready\n\n  Open:  %s\n  State: %s\n  Mode:  %s routes · %s admin\n", adminURL, s.opts.StateDir, map[bool]string{true: "operator-file", false: "UI-managed"}[s.opts.ConfigFile != ""], s.opts.Auth)
-	if s.passkey == nil {
-		return
+	fmt.Fprintf(out, "Proxy ready · %s\n", adminURL)
+	if s.opts.DebugPayloadDir != "" {
+		fmt.Fprintln(out, "Debug capture on · raw payloads may contain secrets.")
 	}
-	if s.passkey.store.CredentialCount() != 0 {
-		fmt.Fprintln(out, "\nSign in with your passkey. Routes and caller tokens are preserved across restarts.")
+	if s.passkey == nil || s.passkey.store.CredentialCount() != 0 {
 		return
 	}
 	path := s.opts.PasskeyBootstrapTokenFile
@@ -96,8 +95,8 @@ func (s *Service) printStartup(out io.Writer, address string) {
 	}
 	// POSIX shell quoting, including paths containing apostrophes or dollar signs.
 	quoted := "'" + strings.ReplaceAll(path, "'", "'\"'\"'") + "'"
-	fmt.Fprintf(out, "\nSet up your first passkey:\n  1. Open the URL above (use localhost, not the IP address, for local setup).\n  2. In another terminal, read your private enrollment secret:\n\n       cat %s\n\n  3. Paste it into Bootstrap token, name your passkey, and choose Create first passkey.\n\nThe secret can be exchanged once, within 10 minutes of startup.\nKeep it private; never put it in a URL or share it with callers.\n", quoted)
+	fmt.Fprintf(out, "\nFirst passkey: paste this secret into Bootstrap token, then choose Create first passkey:\n  cat %s\nExpires in 10 minutes. Keep it private.\n", quoted)
 	if s.passkey.generatedBootstrap != "" {
-		fmt.Fprintln(out, "If setup expires, restart this command for a fresh secret.\nThe temporary secret file is removed when the proxy stops.")
+		fmt.Fprintln(out, "Restart for a new secret.")
 	}
 }

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"database/sql"
 )
 
@@ -50,11 +51,37 @@ func (s *store) updateGrants(id string, grants []string, snap *snapshot) error {
 	if revoked {
 		return inputError("revoked clients cannot receive new grants; create a new client")
 	}
+	if err := replaceGrants(tx, id, grants, snap); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func replaceGrants(tx *sql.Tx, id string, grants []string, snap *snapshot) error {
 	if _, err := tx.Exec("DELETE FROM grants WHERE caller=?", id); err != nil {
 		return err
 	}
 	if err := writeGrants(tx, id, grants, snap); err != nil {
 		return err
 	}
-	return tx.Commit()
+	// Revoking and later regranting an identical route must not resurrect a
+	// native login. Retained grants keep their existing isolated sessions.
+	_, err := tx.Exec("DELETE FROM claude_vault WHERE caller=? AND NOT EXISTS (SELECT 1 FROM grants g WHERE g.caller=claude_vault.caller AND g.route=claude_vault.route AND g.authority=claude_vault.authority)", id)
+	return err
+}
+
+// revokeCaller clears the caller's native custody in the same durable commit as
+// revocation. A late token exchange cannot re-create it after this fence.
+func (s *store) revokeCaller(ctx context.Context, id string) error {
+	return s.accountWrite(ctx, func(tx *sql.Tx) error {
+		return revokeCallerTx(ctx, tx, id)
+	})
+}
+
+func revokeCallerTx(ctx context.Context, tx *sql.Tx, id string) error {
+	if _, err := tx.ExecContext(ctx, "UPDATE callers SET revoked=1 WHERE id=?", id); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, "DELETE FROM claude_vault WHERE caller=?", id)
+	return err
 }

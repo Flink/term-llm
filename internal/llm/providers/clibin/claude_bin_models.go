@@ -216,7 +216,7 @@ func defaultClaudeModelsCommandOutput(ctx context.Context, p *ClaudeBinProvider)
 	// Claude Code answers control requests and exits once stdin closes.
 	cmd.Stdin = strings.NewReader(request + "\n")
 	cmd.Env = p.buildModelListEnv()
-	auditedEnv, wireAudit, err := startCLIWireAudit("claude-bin-models", cmd.Env)
+	auditedEnv, wireAudit, err := startCLIWireAuditContext(ctx, "claude-bin-models", cmd.Env)
 	if err != nil {
 		return nil, err
 	}

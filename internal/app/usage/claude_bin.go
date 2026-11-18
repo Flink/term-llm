@@ -91,15 +91,29 @@ func validateClaudeBinUsageFlags(cmd interface{ Flags() *pflag.FlagSet }) error 
 }
 
 func runClaudeBinUsage(parent context.Context, cmdOut io.Writer, jsonOutput bool) error {
+	connection, proxied, err := configuredClaudeUsageProxy()
+	if err != nil {
+		return err
+	}
 	binary, err := exec.LookPath("claude")
 	if err != nil {
 		return errors.New("claude-bin usage requires the Claude Code CLI in PATH")
 	}
-
 	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
-
-	raw, err := fetchClaudeBinUsage(ctx, binary)
+	var raw json.RawMessage
+	if proxied {
+		env, envErr := prepareClaudeUsageEnvironment(ctx, connection)
+		if envErr != nil {
+			return envErr
+		}
+		raw, err = fetchClaudeBinUsageWithEnv(ctx, binary, env)
+		if err != nil {
+			return claudeProxiedUsageError(ctx)
+		}
+	} else {
+		raw, err = fetchClaudeBinUsage(ctx, binary)
+	}
 	if err != nil {
 		return err
 	}
@@ -116,10 +130,24 @@ func runClaudeBinUsage(parent context.Context, cmdOut io.Writer, jsonOutput bool
 	if err := json.Unmarshal(raw, &report); err != nil {
 		return fmt.Errorf("decode Claude Code usage response: %w", err)
 	}
-	return writeClaudeBinUsageWithOptions(cmdOut, report, time.Now(), providerUsageFormatOptions(cmdOut))
+	source := "Live from Claude Code"
+	if proxied {
+		source = "Live through credential proxy"
+	}
+	return writeClaudeBinUsageWithSource(cmdOut, report, time.Now(), providerUsageFormatOptions(cmdOut), source)
 }
 
-func fetchClaudeBinUsage(ctx context.Context, binary string) (json.RawMessage, error) {
+// fetchClaudeBinUsage is the direct, unproxied native runner seam. It keeps
+// Claude Code's established environment except for ANTHROPIC_API_KEY, whose
+// presence would force API-key auth instead of the user's subscription login.
+var fetchClaudeBinUsage = func(ctx context.Context, binary string) (json.RawMessage, error) {
+	return fetchClaudeBinUsageWithEnv(ctx, binary, withoutEnvironmentVariable(os.Environ(), "ANTHROPIC_API_KEY"))
+}
+
+// fetchClaudeBinUsageWithEnv runs the native get_usage control request with an
+// explicit environment. proxy-bound usage supplies the shared helper's scoped,
+// process-local environment and never merges vendor credentials here.
+func fetchClaudeBinUsageWithEnv(ctx context.Context, binary string, env []string) (json.RawMessage, error) {
 	request := fmt.Sprintf(`{"type":"control_request","request_id":%q,"request":{"subtype":"get_usage"}}`+"\n", claudeBinUsageRequestID)
 	command := exec.CommandContext(ctx, binary,
 		"-p",
@@ -131,7 +159,7 @@ func fetchClaudeBinUsage(ctx context.Context, binary string) (json.RawMessage, e
 		"--no-session-persistence",
 	)
 	command.Stdin = strings.NewReader(request)
-	command.Env = withoutEnvironmentVariable(os.Environ(), "ANTHROPIC_API_KEY")
+	command.Env = env
 
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -151,6 +179,17 @@ func fetchClaudeBinUsage(ctx context.Context, binary string) (json.RawMessage, e
 	}
 
 	return parseClaudeBinUsageOutput(stdout.Bytes())
+}
+
+// claudeProxiedUsageError deliberately discards native stderr, stdout and
+// control-error text: the proxied child environment embeds the scoped token in
+// HTTPS_PROXY, so a CLI that echoes its environment or a remote error payload
+// must never reach the terminal. Context cancellation stays actionable.
+func claudeProxiedUsageError(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("Claude Code proxy usage request canceled or timed out: %w", err)
+	}
+	return errors.New("Claude Code native usage failed through proxy; check Claude version, central account login and route grant")
 }
 
 func parseClaudeBinUsageOutput(output []byte) (json.RawMessage, error) {
@@ -191,13 +230,17 @@ func writeClaudeBinUsage(out io.Writer, report claudeBinUsageReport, now time.Ti
 }
 
 func writeClaudeBinUsageWithOptions(out io.Writer, report claudeBinUsageReport, now time.Time, opts providerusage.FormatOptions) error {
+	return writeClaudeBinUsageWithSource(out, report, now, opts, "Live from Claude Code")
+}
+
+func writeClaudeBinUsageWithSource(out io.Writer, report claudeBinUsageReport, now time.Time, opts providerusage.FormatOptions, source string) error {
 	if !report.RateLimitsAvailable || report.RateLimits == nil {
 		fmt.Fprintln(out, "Claude")
 		if report.SubscriptionType != nil && strings.TrimSpace(*report.SubscriptionType) != "" {
-			fmt.Fprintf(out, "%s plan · Live from Claude Code\n", titleCaseASCII(*report.SubscriptionType))
+			fmt.Fprintf(out, "%s plan · %s\n", titleCaseASCII(*report.SubscriptionType), source)
 			fmt.Fprintln(out)
 		} else {
-			fmt.Fprintln(out, "Live from Claude Code")
+			fmt.Fprintln(out, source)
 			fmt.Fprintln(out)
 		}
 		fmt.Fprintln(out, "Plan usage is unavailable.")
@@ -209,13 +252,13 @@ func writeClaudeBinUsageWithOptions(out io.Writer, report claudeBinUsageReport, 
 	rows := claudeBinUsageRows(*report.RateLimits)
 	if len(rows) == 0 {
 		fmt.Fprintln(out, "Claude")
-		fmt.Fprintln(out, "Live from Claude Code")
+		fmt.Fprintln(out, source)
 		fmt.Fprintln(out)
 		fmt.Fprintln(out, "No active usage windows were returned.")
 		return nil
 	}
 
-	providerReport := &providerusage.Report{Provider: "claude", Source: "Live from Claude Code"}
+	providerReport := &providerusage.Report{Provider: "claude", Source: source}
 	if report.SubscriptionType != nil {
 		providerReport.Plan = strings.TrimSpace(*report.SubscriptionType)
 	}

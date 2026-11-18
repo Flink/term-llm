@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/term-llm/term-llm/internal/proxyclient"
 	"io"
 	"net/http"
 	"sort"
@@ -11,7 +12,7 @@ import (
 	"time"
 
 	"github.com/term-llm/term-llm/internal/config"
-	"github.com/term-llm/term-llm/internal/providerhttp"
+	"github.com/term-llm/term-llm/internal/modelsdev"
 )
 
 const (
@@ -61,22 +62,6 @@ func normalizeZenModel(model string) string {
 func (p *ZenProvider) Stream(ctx context.Context, req Request) (Stream, error) {
 	req.Model = normalizeZenModel(req.Model)
 	return p.OpenAICompatProvider.Stream(ctx, req)
-}
-
-// modelsDevResponse represents the models.dev API response structure.
-type modelsDevResponse struct {
-	OpenCode struct {
-		Models map[string]modelsDevModel `json:"models"`
-	} `json:"opencode"`
-}
-
-type modelsDevModel struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Cost *struct {
-		Input  float64 `json:"input"`
-		Output float64 `json:"output"`
-	} `json:"cost"`
 }
 
 // ListModels returns available models with pricing from models.dev and
@@ -139,8 +124,12 @@ func (p *ZenProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 		if devModel, ok := pricing[m.ID]; ok {
 			info.DisplayName = devModel.Name
 			if devModel.Cost != nil {
-				info.InputPrice = devModel.Cost.Input
-				info.OutputPrice = devModel.Cost.Output
+				if devModel.Cost.Input != nil {
+					info.InputPrice = *devModel.Cost.Input
+				}
+				if devModel.Cost.Output != nil {
+					info.OutputPrice = *devModel.Cost.Output
+				}
 			}
 		}
 
@@ -163,44 +152,14 @@ func (p *ZenProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 }
 
 // fetchModelsDevPricing fetches model metadata from models.dev.
-func fetchModelsDevPricing(ctx context.Context) (map[string]modelsDevModel, error) {
+func fetchModelsDevPricing(ctx context.Context) (map[string]modelsdev.Model, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-
-	endpoint := modelsDevURL
-	if modelsDevURL == "https://models.dev/api.json" {
-		base, err := providerhttp.EnvBaseURL("MODELS_DEV_BASE_URL", "https://models.dev")
-		if err != nil {
-			return nil, err
-		}
-		endpoint = base + "/api.json"
-	}
-	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	catalog, err := modelsdev.Fetch(ctx, defaultHTTPClient, modelsDevURL)
 	if err != nil {
 		return nil, err
 	}
-
-	resp, err := defaultHTTPClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("models.dev returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	var data modelsDevResponse
-	if err := json.Unmarshal(body, &data); err != nil {
-		return nil, err
-	}
-
-	return data.OpenCode.Models, nil
+	return catalog[zenCatalogProviderKey].Models, nil
 }
 
 // fetchZenReasoningEfforts returns per-model reasoning-effort levels from the
@@ -222,7 +181,7 @@ func fetchZenReasoningEfforts(ctx context.Context) map[string][]string {
 		return nil
 	}
 
-	resp, err := defaultHTTPClient.Do(req)
+	resp, err := proxyclient.Do(defaultHTTPClient, req)
 	if err != nil {
 		return nil
 	}

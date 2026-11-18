@@ -1,3 +1,4 @@
+import type { ChartRange, ChartGroup, MoneyTimeline } from './proxy-timeline';
 import type {
   SerializedPublicKeyCredential,
   WebAuthnCreationWireOptions,
@@ -22,15 +23,66 @@ export interface ProxyCredential {
 }
 export type Enrollment = 'bootstrap' | 'recovery' | 'enroll';
 export type Assertion = 'login' | 'reauth';
+export type ProxyBilling = 'pay_as_you_go' | 'plan' | 'local' | 'unspecified';
+/** Local client credential location, or the matching upstream credential shape. */
+export interface ProxyAuth {
+  header: string;
+  prefix: string;
+}
+export interface ProxyHeaderRule {
+  secret?: string;
+  prefix?: string;
+  value?: string;
+}
+/**
+ * One subpath of a unified route. The backend selects a rule by path prefix;
+ * the rule's caller_auth is the client credential location for that subpath.
+ * Parent upstream/set_headers are unused once rules exist.
+ */
+export interface ProxyRouteRule {
+  path_prefix: string;
+  upstream: string;
+  caller_auth: ProxyAuth;
+  set_headers: Record<string, ProxyHeaderRule>;
+  allow?: string[];
+}
 export interface ProxyRoute {
+  billing?: ProxyBilling;
+  account?: string;
+  websocket?: boolean;
+  allow?: string[];
+  redirects?: 'passthrough' | 'refuse';
+  usage?: 'off' | 'auto';
   name: string;
   local_prefix: string;
   upstream: string;
   enabled: boolean;
   allow_insecure_http: boolean;
-  caller_auth: { header: string; prefix: string };
-  set_headers: Record<string, { secret?: string; prefix?: string; value?: string }>;
+  caller_auth: ProxyAuth;
+  set_headers: Record<string, ProxyHeaderRule>;
   request_id_header?: string;
+  rules?: ProxyRouteRule[];
+}
+/** Creation-time defaults for a unified route's subpath rules. */
+export interface ProxyPresetRule {
+  path_prefix: string;
+  upstream: string;
+  auth: ProxyAuth;
+}
+export interface ProxyChatGPTDeviceSignIn {
+  id: string;
+  verification_url: string;
+  user_code: string;
+}
+export type ProxyChatGPTSetupStatus =
+  | { status: 'pending' }
+  | { status: 'connected'; route?: string }
+  | { status: 'failed'; error?: string };
+export interface ProxyClaudeConnection {
+  revision: number;
+  url: string;
+  token: string;
+  caller_id: string;
 }
 export interface ProxySecret {
   name: string;
@@ -44,15 +96,63 @@ export interface ProxyCaller {
   last_used?: number;
   revoked: boolean;
   grants: string[];
+  created_by: string;
+  external_id: string;
+}
+export interface ProxyAdminKey {
+  id: string;
+  name: string;
+  created: number;
+  last_used: number;
 }
 export interface ProxyPreset {
   id: string;
   label: string;
   upstream: string;
-  auth: ProxyRoute['caller_auth'];
+  auth: ProxyAuth;
   note?: string;
+  billing?: ProxyBilling;
+  usage?: 'auto';
+  websocket?: boolean;
+  /** A trusted account of this kind replaces the static key substitution. */
+  account_kind?: ProxyAccount['kind'];
+  /** Subpath rules that make this one route serve several protocol roots. */
+  rules?: ProxyPresetRule[];
+  /** Picker section. */
+  group?: 'plan' | 'api_key' | 'self_hosted' | 'media';
+  /** Sibling presets created alongside this one under their own fixed names. */
+  companions?: string[];
+}
+export interface ProxyAccount {
+  name: string;
+  kind: 'chatgpt' | 'grok' | 'copilot' | 'claude-code' | 'aws-sigv4';
+  state: string;
+  generation: number;
+  auth_mode?: 'token_only' | 'rotating' | 'vault';
+  expires_at?: number;
+  updated: number;
+}
+export interface ProxyAccountInput {
+  name: string;
+  kind: ProxyAccount['kind'];
+  region?: string;
+  replace?: boolean;
+  credentials: {
+    mode?: 'token_only' | 'rotating' | 'vault';
+    access_token?: string;
+    refresh_token?: string;
+    github_token?: string;
+    account_id?: string;
+    expires_at?: number;
+    access_key_id?: string;
+    secret_access_key?: string;
+    session_token?: string;
+    scopes?: string[];
+  };
 }
 export interface ProxyState {
+  accounts?: ProxyAccount[];
+  money?: ProxyMoneySettings;
   presets?: ProxyPreset[];
   auth: 'passkey' | 'token';
   mode: 'ui' | 'file';
@@ -60,11 +160,135 @@ export interface ProxyState {
   routes: ProxyRoute[];
   secrets: ProxySecret[];
   callers: ProxyCaller[];
+  admin_keys: ProxyAdminKey[];
   csrf: string;
   retention_days?: number;
+  has_requests?: boolean;
+}
+export interface ProxyMoneyRate {
+  provider: string;
+  model: string;
+  tier: string;
+  currency: string;
+  source: string;
+  asof: string;
+  input_micros_per_million: number;
+  output_micros_per_million: number;
+  cache_read_micros_per_million?: number;
+  cache_write_micros_per_million?: number;
+}
+export interface ProxyAPIEquivalent {
+  kind: 'estimated' | 'estimated_floor' | 'unpriced' | 'unmeasured';
+  amount_micros?: number;
+  currency?: string;
+  source?: string;
+  asof?: string;
+  reason?: string;
+  rate?: ProxyMoneyRate;
+}
+export interface ProxyMoney {
+  api_equivalent?: ProxyAPIEquivalent;
+  rate?: ProxyMoneyRate;
+  billing: 'pay_as_you_go' | 'plan' | 'local' | 'unspecified';
+  kind:
+    | 'charged'
+    | 'estimated'
+    | 'estimated_floor'
+    | 'unpriced'
+    | 'unmeasured'
+    | 'included'
+    | 'none'
+    | 'no_charge_expected'
+    | 'unspecified';
+  amount_micros?: number;
+  currency?: string;
+  source?: string;
+  asof?: string;
+  reason?: string;
+}
+export interface MoneyTotal {
+  currency: string;
+  charged_micros: number;
+  estimated_micros: number;
+  floor_micros: number;
+  total_micros: number;
+  qualifier: 'charged' | 'about' | 'at_least';
+  sources: { source: string; asof: string; kind: string }[];
+}
+export interface MoneyPeriod {
+  api_equivalent_totals?: MoneyTotal[];
+  api_equivalent_covered?: number;
+  api_equivalent_unpriced?: number;
+  plan_unmeasured: number;
+  totals: MoneyTotal[];
+  requests: number;
+  included: number;
+  local: number;
+  unpriced: number;
+  unmeasured: number;
+  unspecified: number;
+  no_charge_expected: number;
+}
+export interface MoneyBreakdown {
+  name: string;
+  paused: boolean;
+  period: MoneyPeriod;
+}
+export interface MoneySummary {
+  asof: string;
+  timezone: string;
+  month_label: string;
+  month: MoneyPeriod;
+  today: MoneyPeriod;
+  budget?: {
+    currency: string;
+    limit_micros: number;
+    remaining_micros: number;
+    used_percent: number;
+    warning_only: boolean;
+    incomplete: boolean;
+  };
+  devices: MoneyBreakdown[];
+  apps: MoneyBreakdown[];
+  providers: MoneyBreakdown[];
+}
+export interface ProxyMoneySettings {
+  timezone: string;
+  budget?: { currency: string; limit_micros: number };
+  rates?: ProxyMoneyRate[];
+}
+// Response-only evidence. Missing counters and -1 are unknown, not zero;
+// protocol preserves whether cache/reasoning counts overlap other counters.
+export interface ProxyObservedUsage {
+  protocol?:
+    | 'responses'
+    | 'chat_completions'
+    | 'messages'
+    | 'gemini'
+    | 'ollama'
+    | 'bedrock'
+    | 'not_applicable'
+    | '';
+  usage?: {
+    input?: number;
+    cached_input?: number;
+    cache_write?: number;
+    output?: number;
+    reasoning?: number;
+    total?: number;
+    model?: string;
+    tier?: string;
+    ambiguous?: boolean;
+    source?: 'reported' | 'partial' | 'unknown' | 'not_applicable';
+    turns?: number;
+  };
 }
 export interface ProxyRequest {
+  usage?: ProxyObservedUsage;
+  money?: ProxyMoney;
   id: string;
+  // Responses WebSocket turn rows link to the original connection request and capture.
+  websocket_connection_id?: string;
   seq: number;
   started: string | number;
   ended: string | number;
@@ -108,6 +332,50 @@ export type RequestFilters = Partial<
     string
   >
 >;
+
+export interface ProxyDebugState {
+  enabled: boolean;
+  directory: string;
+  preview_limit_bytes?: number;
+  max_bytes_per_stream?: number;
+  max_total_bytes?: number;
+  remaining_bytes?: number;
+  record_count?: number;
+  record_limit?: number;
+}
+export interface ProxyDebugCaptureFiles {
+  id: string;
+  finished: boolean;
+  files: ProxyDebugFile[];
+}
+export interface ProxyDebugCapture extends ProxyDebugCaptureFiles {
+  started: number;
+  ended?: number;
+  route: string;
+  method: string;
+  local_path: string;
+  outcome: string;
+  status?: number;
+  websocket: boolean;
+}
+export type ProxyDebugFile =
+  | 'manifest.json'
+  | 'request.body'
+  | 'response.body'
+  | 'websocket-client.frames'
+  | 'websocket-server.frames';
+export interface ProxyDebugPreview {
+  id: string;
+  file: ProxyDebugFile;
+  bytes_returned: number;
+  content: string;
+  encoding: 'utf8' | 'base64' | 'websocket';
+  offset: number;
+  /** The next frame-aligned offset for a decoded preview, omitted at the end. */
+  next_offset?: number;
+  total_bytes: number;
+  truncated: boolean;
+}
 
 export class ProxyAPIError extends Error {
   constructor(
@@ -157,12 +425,20 @@ export class ProxyClient {
   private csrf = '';
   constructor(private readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis)) {}
 
-  private async request<T>(path: string, method = 'GET', body?: unknown, text = false): Promise<T> {
+  private async request<T>(
+    path: string,
+    method = 'GET',
+    body?: unknown,
+    text = false,
+    clearSession = true,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const response = await this.fetcher(`/_proxy/api/${path}`, {
       method,
       credentials: 'same-origin',
       cache: 'no-store',
       redirect: 'error',
+      ...(signal ? { signal } : {}),
       headers: {
         Accept: text && path === 'export' ? 'text/yaml' : 'application/json',
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
@@ -171,7 +447,7 @@ export class ProxyClient {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     if (!response.ok) {
-      if (response.status === 401) this.csrf = '';
+      if (response.status === 401 && clearSession) this.csrf = '';
       // Never echo arbitrary response bodies: a failed write may contain a credential.
       const messages: Record<number, string> = {
         400: 'Invalid input. Check the fields and try again.',
@@ -231,9 +507,19 @@ export class ProxyClient {
       routes: (state.routes ?? []).map((route) => ({
         ...route,
         set_headers: route.set_headers ?? {},
+        ...(route.rules
+          ? {
+              rules: route.rules.map((rule) => ({
+                ...rule,
+                caller_auth: rule.caller_auth ?? { header: '', prefix: '' },
+                set_headers: rule.set_headers ?? {},
+              })),
+            }
+          : {}),
       })),
       secrets: state.secrets ?? [],
       callers: (state.callers ?? []).map((caller) => ({ ...caller, grants: caller.grants ?? [] })),
+      admin_keys: state.admin_keys ?? [],
     };
   }
   async login(token: string): Promise<void> {
@@ -244,8 +530,56 @@ export class ProxyClient {
     await this.request('logout', 'POST');
     this.csrf = '';
   }
+  startChatGPTSetup(input: { name?: string; account?: string }): Promise<ProxyChatGPTDeviceSignIn> {
+    return this.request('chatgpt/setup', 'POST', input);
+  }
+  chatGPTSetupStatus(id: string): Promise<ProxyChatGPTSetupStatus> {
+    return this.request(`chatgpt/setup?id=${encodeURIComponent(id)}`);
+  }
+  cancelChatGPTSetup(id: string): Promise<void> {
+    return this.request(`chatgpt/setup?id=${encodeURIComponent(id)}`, 'DELETE');
+  }
+  setupClaude(revision: number, route?: string): Promise<ProxyClaudeConnection> {
+    return this.request('claude/setup', 'POST', { revision, ...(route ? { route } : {}) });
+  }
+  clearClaude(revision: number): Promise<void> {
+    return this.request('claude/setup', 'DELETE', { revision });
+  }
   config(revision: number, routes: ProxyRoute[]): Promise<void> {
     return this.request('config', 'PUT', { revision, routes });
+  }
+  debug(): Promise<ProxyDebugState> {
+    return this.request('debug');
+  }
+  setDebug(enabled: boolean): Promise<ProxyDebugState> {
+    return this.request('debug', 'POST', {
+      enabled,
+      ...(enabled ? { acknowledge_sensitive: true } : {}),
+    });
+  }
+  debugCaptures(): Promise<{ captures: ProxyDebugCapture[] | null; limit?: number }> {
+    return this.request('debug/captures?limit=50');
+  }
+  // A late 401 from a closed preview must not change the current session.
+  // The live view still handles authentication errors through UIContext.run.
+  debugCapture(id: string): Promise<ProxyDebugCaptureFiles> {
+    return this.request(`debug/captures/${encodeURIComponent(id)}`, 'GET', undefined, false, false);
+  }
+  debugFile(
+    id: string,
+    file: ProxyDebugFile,
+    offset = 0,
+    limit = 65536,
+    view?: 'decoded',
+  ): Promise<ProxyDebugPreview> {
+    const query = `offset=${offset}&limit=${limit}${view ? `&view=${view}` : ''}`;
+    return this.request(
+      `debug/captures/${encodeURIComponent(id)}/${encodeURIComponent(file)}?${query}`,
+      'GET',
+      undefined,
+      false,
+      false,
+    );
   }
   reload(): Promise<void> {
     return this.request('reload', 'POST');
@@ -255,6 +589,15 @@ export class ProxyClient {
   }
   deleteSecret(name: string): Promise<void> {
     return this.request('secrets', 'DELETE', { name });
+  }
+  createAdminKey(name: string): Promise<{ key: ProxyAdminKey; token: string }> {
+    return this.request('admin-keys', 'POST', { name });
+  }
+  revokeAdminKey(
+    id: string,
+    revokeClients: boolean,
+  ): Promise<{ ok: boolean; revoked_clients: number }> {
+    return this.request('admin-keys', 'DELETE', { id, revoke_clients: revokeClients });
   }
   createCaller(
     name: string,
@@ -269,8 +612,43 @@ export class ProxyClient {
   revokeCaller(id: string): Promise<void> {
     return this.request('callers', 'DELETE', { id });
   }
-  requests(filters: RequestFilters): Promise<RequestPage> {
-    return this.request(`requests?${this.query(filters)}`);
+  async accounts(): Promise<ProxyAccount[]> {
+    const result = await this.request<{ accounts: ProxyAccount[] | null }>('accounts');
+    return result.accounts ?? [];
+  }
+  saveAccount(input: ProxyAccountInput): Promise<{ account: ProxyAccount }> {
+    return this.request('accounts', input.replace ? 'PUT' : 'POST', input);
+  }
+  signOutAccount(name: string): Promise<{ account: ProxyAccount }> {
+    return this.request('accounts', 'DELETE', { name });
+  }
+  timeline(
+    range: ChartRange = '30d',
+    group: ChartGroup = 'total',
+    timezone?: string,
+  ): Promise<MoneyTimeline> {
+    const params = new URLSearchParams({ range, group });
+    if (timezone) params.set('timezone', timezone);
+    return this.request(`timeline?${params.toString()}`);
+  }
+  summary(): Promise<MoneySummary> {
+    return this.request('summary');
+  }
+  moneySettings(): Promise<ProxyMoneySettings> {
+    return this.request('money');
+  }
+  money(settings: ProxyMoneySettings): Promise<void> {
+    return this.request('money', 'PUT', settings);
+  }
+  requests(filters: RequestFilters, signal?: AbortSignal): Promise<RequestPage> {
+    return this.request(
+      `requests?${this.query(filters)}`,
+      'GET',
+      undefined,
+      false,
+      !signal,
+      signal,
+    );
   }
   requestExport(filters: RequestFilters): Promise<string> {
     return this.request(`requests/export?${this.query(filters)}`, 'GET', undefined, true);

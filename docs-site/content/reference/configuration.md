@@ -48,7 +48,8 @@ No automatic migration occurs. Stop sharing processes before moving credentials;
 A typical config has a few major parts:
 
 - `default_provider` for the global LLM default
-- `providers` for model-specific credentials and routing
+- `providers` for model-specific credentials and routing, including the opt-in
+  `providers.claude-bin.proxy` binding for native Claude Code
 - `provider_discovery` (`auto`, `env`, or `config`) to choose whether environment variables and local logins enable providers on their own; see [Restrict providers to config.yaml](/reference/providers-and-models/#restrict-providers-to-configyaml)
 - per-command blocks such as `exec`, `ask`, and `edit`
 - `commit.message_agent` for the native commit workflow's scope/message agent
@@ -62,6 +63,10 @@ The index below follows the canonical config schema. A dash means no default or 
 <!-- BEGIN GENERATED: configuration -->
 | Key | Type | Default | Description |
 |---|---|---|---|
+| `proxy.url` | string | — | — |
+| `proxy.token` | string | — | — |
+| `proxy.direct` | list of string | — | — |
+| `proxy.providers` | list of string | — | Only proxy the listed providers and integrations; [] proxies none; omit for legacy proxy-all behavior |
 | `default_provider` | string | `openrouter` | — |
 | `credentials_dir` | string | `""` | Native ChatGPT/Grok/Copilot OAuth directory; TERM_LLM_CREDENTIALS_DIR overrides; empty uses the config directory |
 | `provider_discovery` | string | `auto` | — |
@@ -1152,14 +1157,21 @@ providers:
     model: opus
     env:
       IS_SANDBOX: "1"
-      # Generate a long-lived token with: claude setup-token
-      # Useful in CI or headless environments where interactive login isn't possible
-      CLAUDE_CODE_OAUTH_TOKEN: "your-oauth-token-here"
     # Optional: re-enable Claude Code hooks for this provider
     # enable_hooks: true
     # Optional: stop requesting Claude's thinking summaries (on by default)
     # thinking_summaries: false
+    # Optional: keep subscription credentials on a credential proxy
+    # proxy:
+    #   url: https://proxy.example.test/claude-code/
+    #   token: file:///run/secrets/claude-proxy-token
 ```
+
+With no local or global proxy binding, term-llm uses the installed Claude Code
+subscription login; sign in with `claude` normally. Do not put a copied vendor
+token in `env` for interactive use. With the proxy block, the launcher replaces
+vendor credentials, cloud auth switches, proxy variables and `CLAUDE_CONFIG_DIR`
+regardless of `env` values, so do not set a vendor token alongside it.
 
 `providers.<name>.env` values support the same resolution rules as other deferred config values:
 
@@ -1170,6 +1182,44 @@ providers:
 - `${VAR}` / `$VAR` → environment variable expansion
 
 This is passed only to the provider subprocess. It does not mutate your parent shell environment.
+
+## Claude Code through a credential proxy
+
+`providers.claude-bin.proxy` opts native Claude Code into a credential proxy while
+leaving ordinary `claude` and your regular `~/.claude` settings untouched:
+
+```yaml
+providers:
+  claude-bin:
+    proxy:
+      url: https://proxy.example.test/claude-code/
+      token: file:///run/secrets/claude-proxy-token
+```
+
+`url` and `token` come from **Routes → Claude Code → Set up Claude**; use its route
+root, not the bare proxy origin. `token` is a scoped client token granted that route; it can be a literal or a
+resolved credential reference such as `file://`, `op://`, `$()`, or `${VAR}`. Keep it
+private. This block redirects only `claude-bin`. It can coexist with a top-level
+`proxy:` block with an explicit `proxy.providers` list that excludes `claude-bin`.
+Use the exact route URL and client token you used to sign in through the launcher;
+granting a different client access does not transfer that sign-in.
+
+Launch native Claude through the same binding:
+
+```sh
+term-llm proxy run claude
+term-llm proxy run claude -- --resume
+```
+
+The child gets a private, term-owned `CLAUDE_CONFIG_DIR`; your normal Claude profile
+stays untouched. The proxy CA is trusted only for that process via
+`NODE_EXTRA_CA_CERTS`, never through the operating-system trust store. Native Claude
+signs in normally; the proxy intercepts token exchange on `platform.claude.com` and
+API traffic on `api.anthropic.com`, keeps the real access and refresh tokens, and
+returns opaque placeholders to the worker. Supply both `--url` and `--token` for
+a one-run binding; arguments after `--` go to Claude. See the
+[credential proxy guide](/guides/credential-proxy/#run-native-claude-code-through-the-proxy)
+for one-click setup and clearing.
 
 ## Responses API continuation
 
