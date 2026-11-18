@@ -591,6 +591,9 @@ for (const width of [1440, 1024, 768, 390, 320]) {
   }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     const started = Date.now();
+    await page.route('http://proxy.test/_proxy/api/debug/captures/request-*', (route) =>
+      route.fulfill({ status: 404, json: { error: 'Capture not found' } }),
+    );
     await page.route('http://proxy.test/_proxy/api/requests?*', (route) => {
       const number = Number(new URL(route.request().url()).searchParams.get('page'));
       return route.fulfill({
@@ -713,6 +716,8 @@ for (const width of [1440, 1024, 768, 390, 320]) {
     await first.locator('.request-open').click();
     await expect(first.locator('.request-detail')).toBeVisible();
     await expect(first.locator('.request-detail')).toContainText('Cache write');
+    await expect(first.locator('.request-detail')).toContainText('No raw payload capture');
+    await expect(first.getByRole('heading', { name: 'Request details' })).toBeFocused();
     await page.keyboard.press('Escape');
     await expect(first.locator('.request-detail')).toHaveCount(0);
     await expect(first.locator('.request-open')).toBeFocused();
@@ -836,7 +841,8 @@ test('Clients stays scoped to generic tokens without a Claude pairing wizard', a
   await expect(page.locator('header')).not.toContainText('Connect Claude');
   await expect(page.getByRole('button', { name: 'Connect Claude', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Clients', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Create client', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Clients', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create client', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Connect Claude', exact: true })).toHaveCount(0);
   await expect(page.locator('header')).not.toContainText('Connect Claude');
   await page.getByRole('button', { name: 'Routes', exact: true }).click();
