@@ -3,7 +3,6 @@ package clibin
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,7 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/term-llm/term-llm/internal/mcphttp"
 	"github.com/term-llm/term-llm/internal/procutil"
 	"github.com/term-llm/term-llm/internal/runtimeoutput"
 )
@@ -49,9 +47,7 @@ type CursorBinProvider struct {
 	messagesSent int
 
 	toolExecutorConfigured bool
-	mcpServer              *mcphttp.Server
-	mcpURL, mcpToken       string
-	mcpToolFingerprint     [sha256.Size]byte
+	mcpBridge              cliMCPBridge
 	cliToolBridgeState
 	tempFileTracker
 
@@ -285,11 +281,18 @@ func (p *CursorBinProvider) Stream(ctx context.Context, req core.Request) (core.
 		if err != nil {
 			return err
 		}
-		exposeBridge, err := p.prepareMCPBridge(ctx, home, req)
+		defer p.mcpBridge.finishTurn(req)
+		endpoint, err := p.prepareMCPBridge(ctx, req)
 		if err != nil {
 			return err
 		}
 
+		if err := p.writeCursorMCPConfig(home, endpoint); err != nil {
+			if endpoint.enabled() {
+				p.mcpBridge.abortTurn(req)
+			}
+			return err
+		}
 		prompt := buildCursorPrompt(messages)
 		if strings.TrimSpace(prompt) == "" {
 			return fmt.Errorf("build cursor-bin prompt: no user-visible content")
@@ -300,7 +303,7 @@ func (p *CursorBinProvider) Stream(ctx context.Context, req core.Request) (core.
 			resumeID = p.sessionID
 		}
 		args := p.buildCursorArgs(req, resumeID, imagePaths, home)
-		state, err := p.runCursorCommand(ctx, args, prompt, home, req.Debug || req.DebugRaw, send, exposeBridge)
+		state, err := p.runCursorCommand(ctx, args, prompt, home, req.Debug || req.DebugRaw, send, endpoint.enabled())
 		if err != nil {
 			return err
 		}
@@ -598,16 +601,16 @@ func (p *CursorBinProvider) cursorCommandError(waitErr error, stderrTail, stdout
 	})
 }
 
-func (p *CursorBinProvider) writeCursorMCPConfig(home string, enabled bool) error {
+func (p *CursorBinProvider) writeCursorMCPConfig(home string, endpoint cliMCPEndpoint) error {
 	dir := filepath.Join(home, "cwd", ".cursor")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create cursor-bin project config: %w", err)
 	}
 	servers := map[string]any{}
-	if enabled && p.mcpURL != "" {
+	if endpoint.enabled() {
 		servers[cursorMCPServerName] = map[string]any{
-			"url":     p.mcpURL,
-			"headers": map[string]string{"Authorization": "Bearer " + p.mcpToken},
+			"url":     endpoint.url,
+			"headers": map[string]string{"Authorization": "Bearer " + endpoint.token},
 		}
 	}
 	data, err := json.Marshal(map[string]any{"mcpServers": servers})
@@ -622,8 +625,7 @@ func (p *CursorBinProvider) writeCursorMCPConfig(home string, enabled bool) erro
 }
 
 func (p *CursorBinProvider) CleanupMCP() {
-	stopMCPBridge(p.mcpServer, "")
-	p.mcpServer, p.mcpURL, p.mcpToken, p.mcpToolFingerprint = nil, "", "", [sha256.Size]byte{}
+	p.mcpBridge.close()
 	p.cleanupTempFiles()
 }
 
@@ -713,8 +715,8 @@ func (p *CursorBinProvider) cursorDiagnosticRedactor() func(string) string {
 	if key := strings.TrimSpace(os.Getenv("CURSOR_API_KEY")); key != "" {
 		secrets = append(secrets, key)
 	}
-	if p.mcpToken != "" {
-		secrets = append(secrets, p.mcpToken)
+	if token := p.mcpBridge.current().token; token != "" {
+		secrets = append(secrets, token)
 	}
 	secrets = append(secrets, p.cursorProxySecrets()...)
 	return func(text string) string {

@@ -53,7 +53,7 @@ type vibeACPProcess struct {
 
 	capabilities acp.AgentCapabilities
 	sessionID    string
-	mcpURL       string
+	mcpEndpoint  cliMCPEndpoint
 	model        string
 	wireAudit    *cliwire.Server
 	stopOnce     sync.Once
@@ -327,14 +327,14 @@ type vibePromptResult struct {
 	err      error
 }
 
-func (p *VibeBinProvider) runVibeACP(ctx context.Context, req core.Request, messages []core.Message, debug bool, send eventSender, exposeToolBridge bool) (vibeTurnResult, error) {
-	process, fresh, temporary, err := p.ensureVibeACPProcess(ctx, req, debug)
+func (p *VibeBinProvider) runVibeACP(ctx context.Context, req core.Request, messages []core.Message, debug bool, send eventSender, endpoint cliMCPEndpoint) (vibeTurnResult, error) {
+	process, fresh, temporary, err := p.ensureVibeACPProcess(ctx, req, debug, endpoint)
 	if errors.Is(err, errVibeResumeUnavailable) && !req.Ephemeral {
 		p.ResetConversation()
 		if err := send.Send(core.Event{Type: core.EventPhase, Text: core.WarningPhasePrefix + "Vibe's session could not be restored; continuing from a condensed excerpt of the conversation."}); err != nil {
 			return vibeTurnResult{}, err
 		}
-		return p.runVibeACP(ctx, req, grokRecoveryMessages(req.Messages), debug, send, exposeToolBridge)
+		return p.runVibeACP(ctx, req, grokRecoveryMessages(req.Messages), debug, send, endpoint)
 	}
 	if err != nil {
 		return vibeTurnResult{}, err
@@ -342,6 +342,7 @@ func (p *VibeBinProvider) runVibeACP(ctx context.Context, req core.Request, mess
 	if temporary {
 		defer process.stop()
 	}
+	exposeToolBridge := endpoint.enabled()
 	blocks, err := vibeTurnBlocks(req, messages, fresh, exposeToolBridge)
 	if err != nil {
 		return vibeTurnResult{}, err
@@ -535,13 +536,10 @@ func vibeStopWarning(stopReason string, unexpectedCancel bool) string {
 // ensureVibeACPProcess returns a process with a live session. fresh reports a
 // newly created session, which needs term-llm's system prompt and full
 // transcript; temporary processes serve ephemeral requests and must be stopped.
-func (p *VibeBinProvider) ensureVibeACPProcess(ctx context.Context, req core.Request, debug bool) (process *vibeACPProcess, fresh, temporary bool, err error) {
+func (p *VibeBinProvider) ensureVibeACPProcess(ctx context.Context, req core.Request, debug bool, endpoint cliMCPEndpoint) (process *vibeACPProcess, fresh, temporary bool, err error) {
 	model := strings.TrimSpace(core.ChooseModel(req.Model, p.model))
-	p.mcpMu.Lock()
-	mcpURL, mcpToken := p.mcpURL, p.mcpToken
-	p.mcpMu.Unlock()
 	if req.Ephemeral {
-		process, err := p.startVibeACPProcess(ctx, debug, model, mcpURL, mcpToken, "")
+		process, err := p.startVibeACPProcess(ctx, debug, model, endpoint, "")
 		return process, true, true, err
 	}
 
@@ -551,14 +549,14 @@ func (p *VibeBinProvider) ensureVibeACPProcess(ctx context.Context, req core.Req
 		select {
 		case <-p.acpProcess.conn.Done():
 		default:
-			if p.acpProcess.mcpURL == mcpURL && p.acpProcess.model == model && p.acpProcess.sessionID == p.sessionID {
+			if p.acpProcess.mcpEndpoint == endpoint && p.acpProcess.model == model && p.acpProcess.sessionID == p.sessionID {
 				return p.acpProcess, false, false, nil
 			}
 		}
 		p.acpProcess.stop()
 		p.acpProcess = nil
 	}
-	process, err = p.startVibeACPProcess(ctx, debug, model, mcpURL, mcpToken, p.sessionID)
+	process, err = p.startVibeACPProcess(ctx, debug, model, endpoint, p.sessionID)
 	if err != nil {
 		return nil, false, false, err
 	}
@@ -566,7 +564,7 @@ func (p *VibeBinProvider) ensureVibeACPProcess(ctx context.Context, req core.Req
 	return process, p.sessionID == "", false, nil
 }
 
-func (p *VibeBinProvider) startVibeACPProcess(ctx context.Context, debug bool, model, mcpURL, mcpToken, resumeID string) (_ *vibeACPProcess, returnErr error) {
+func (p *VibeBinProvider) startVibeACPProcess(ctx context.Context, debug bool, model string, endpoint cliMCPEndpoint, resumeID string) (_ *vibeACPProcess, returnErr error) {
 	cwd, err := vibeNeutralCWD()
 	if err != nil {
 		return nil, err
@@ -630,23 +628,23 @@ func (p *VibeBinProvider) startVibeACPProcess(ctx context.Context, debug bool, m
 	handler := newVibeACPHandler(debug)
 	connection := acp.NewConnection(stdout, stdin, handler, acp.Options{})
 	process := &vibeACPProcess{
-		cmd:        cmd,
-		cancel:     cancel,
-		stdin:      stdin,
-		client:     acp.NewClient(connection),
-		conn:       connection,
-		handler:    handler,
-		waitDone:   make(chan struct{}),
-		stderrDone: make(chan struct{}),
-		mcpURL:     mcpURL,
-		model:      model,
-		wireAudit:  wireAudit,
+		cmd:         cmd,
+		cancel:      cancel,
+		stdin:       stdin,
+		client:      acp.NewClient(connection),
+		conn:        connection,
+		handler:     handler,
+		waitDone:    make(chan struct{}),
+		stderrDone:  make(chan struct{}),
+		mcpEndpoint: endpoint,
+		model:       model,
+		wireAudit:   wireAudit,
 	}
 	go func() {
 		defer close(process.stderrDone)
 		_ = drainCLIDiagnosticLines(stderr, func(line string) {
-			if mcpToken != "" {
-				line = strings.ReplaceAll(line, mcpToken, "[redacted]")
+			if endpoint.token != "" {
+				line = strings.ReplaceAll(line, endpoint.token, "[redacted]")
 			}
 			if debug {
 				runtimeoutput.Printf("[vibe-acp stderr] %s\n", line)
@@ -689,12 +687,12 @@ func (p *VibeBinProvider) startVibeACPProcess(ctx context.Context, debug bool, m
 
 	// Vibe accepts HTTP MCP servers without advertising mcpCapabilities.http.
 	mcpServers := []acp.MCPServer{}
-	if mcpURL != "" {
+	if endpoint.enabled() {
 		mcpServers = append(mcpServers, acp.MCPServer{
 			Type:    "http",
 			Name:    vibeMCPServerName,
-			URL:     mcpURL,
-			Headers: []acp.Header{{Name: "Authorization", Value: "Bearer " + mcpToken}},
+			URL:     endpoint.url,
+			Headers: []acp.Header{{Name: "Authorization", Value: "Bearer " + endpoint.token}},
 		})
 	}
 

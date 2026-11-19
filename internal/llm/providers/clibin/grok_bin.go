@@ -21,7 +21,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/term-llm/term-llm/internal/mcphttp"
 	"github.com/term-llm/term-llm/internal/procutil"
 	"github.com/term-llm/term-llm/internal/runtimeoutput"
 )
@@ -92,12 +91,7 @@ type GrokBinProvider struct {
 	// GROK_HOME. CleanupMCP deliberately leaves this directory in place.
 	grokHome string
 
-	mcpMu                 sync.Mutex
-	mcpServer             *mcphttp.Server
-	mcpURL                string
-	mcpToken              string
-	mcpToolFingerprint    [sha256.Size]byte
-	mcpToolFingerprintSet bool
+	mcpBridge cliMCPBridge
 
 	acpMu      sync.Mutex
 	acpProcess *grokACPProcess
@@ -332,22 +326,18 @@ func (p *GrokBinProvider) Stream(ctx context.Context, req core.Request) (core.St
 		}
 
 		debug := req.Debug || req.DebugRaw
-		exposeToolBridge := false
-		if len(req.Tools) > 0 {
-			if !p.toolExecutorConfigured {
-				runtimeoutput.Warn("grok-bin tools requested but no tool executor configured", "tool_count", len(req.Tools))
-				if err := p.writeConfig("", ""); err != nil {
-					return err
-				}
-			} else if err := p.ensureMCPServer(ctx, req.Tools, debug); err != nil {
-				return err
-			} else {
-				exposeToolBridge = true
+		defer p.mcpBridge.finishTurn(req)
+		endpoint, err := p.prepareMCPBridge(ctx, req)
+		if err != nil {
+			return err
+		}
+		// The durable config is also read on ACP startup. Publish the turn's
+		// endpoint even when the listener is unchanged or retained for later.
+		if err := p.writeConfig(endpoint.url, endpoint.token); err != nil {
+			if endpoint.enabled() {
+				p.mcpBridge.abortTurn(req)
 			}
-		} else if p.mcpServer == nil {
-			if err := p.writeConfig("", ""); err != nil {
-				return err
-			}
+			return err
 		}
 
 		useLegacy := os.Getenv(grokLegacyTransportEnv) == "1" || requestHasImages(messagesToSend)
@@ -372,12 +362,12 @@ func (p *GrokBinProvider) Stream(ctx context.Context, req core.Request) (core.St
 			if err != nil {
 				return err
 			}
-			result, err = p.runGrokCommand(ctx, args, effort, prompt, req.WorkingDir, debug, send, req.Ephemeral, exposeToolBridge)
+			result, err = p.runGrokCommand(ctx, args, effort, prompt, req.WorkingDir, debug, send, req.Ephemeral, endpoint.enabled())
 			if err != nil {
 				return err
 			}
 		} else {
-			result, err = p.executeGrokACP(ctx, req, messagesToSend, debug, send, exposeToolBridge)
+			result, err = p.executeGrokACP(ctx, req, messagesToSend, debug, send, endpoint)
 			if err != nil {
 				return err
 			}
@@ -955,54 +945,12 @@ func (p *GrokBinProvider) userFacingGrokCommandError(err *CLICommandError) error
 	return &UserFacingProviderError{Summary: summary, Detail: detail, Cause: err}
 }
 
-func (p *GrokBinProvider) ensureMCPServer(ctx context.Context, tools []core.ToolSpec, debug bool) error {
-	specs := mcpToolSpecs(tools)
-	encoded, err := json.Marshal(specs)
-	if err != nil {
-		return fmt.Errorf("encode grok-bin MCP tool surface: %w", err)
-	}
-	fingerprint := sha256.Sum256(encoded)
-
-	p.mcpMu.Lock()
-	if p.mcpServer != nil && p.mcpToolFingerprintSet && p.mcpToolFingerprint == fingerprint {
-		p.mcpMu.Unlock()
-		return nil
-	}
-	oldServer := p.mcpServer
-	p.mcpServer = nil
-	p.mcpURL = ""
-	p.mcpToken = ""
-	p.mcpToolFingerprintSet = false
-	p.mcpMu.Unlock()
-	if oldServer != nil {
-		stopCtx, cancel := context.WithTimeout(context.Background(), mcpStopTimeout)
-		oldServer.Stop(stopCtx)
-		cancel()
-	}
-
-	if debug {
-		runtimeoutput.Printf("[grok-bin] starting HTTP MCP server for %d tools\n", len(tools))
-	}
-	server := mcphttp.NewServer(p.cliToolBridgeState.wrappedExecutor(p.formatToolOutput))
-	server.SetDebug(debug)
-	url, token, err := server.Start(ctx, specs)
-	if err != nil {
-		return fmt.Errorf("start grok-bin MCP server: %w", err)
-	}
-	if err := p.writeConfig(url, token); err != nil {
-		stopCtx, cancel := context.WithTimeout(context.Background(), mcpStopTimeout)
-		server.Stop(stopCtx)
-		cancel()
-		return err
-	}
-	p.mcpMu.Lock()
-	p.mcpServer = server
-	p.mcpURL = url
-	p.mcpToken = token
-	p.mcpToolFingerprint = fingerprint
-	p.mcpToolFingerprintSet = true
-	p.mcpMu.Unlock()
-	return nil
+func (p *GrokBinProvider) prepareMCPBridge(ctx context.Context, req core.Request) (cliMCPEndpoint, error) {
+	return p.mcpBridge.prepare(ctx, req, cliMCPBridgeOptions{
+		name:     "grok-bin",
+		enabled:  p.toolExecutorConfigured,
+		executor: p.cliToolBridgeState.wrappedExecutor(p.formatToolOutput),
+	})
 }
 
 // PublishDynamicTools marks the current inline prompt for a controlled provider
@@ -1013,10 +961,7 @@ func (p *GrokBinProvider) PublishDynamicTools(tools []core.ToolSpec) error {
 	if len(tools) == 0 {
 		return nil
 	}
-	p.mcpMu.Lock()
-	running := p.mcpServer != nil
-	p.mcpMu.Unlock()
-	if running {
+	if p.mcpBridge.active.Load() != nil {
 		p.requestInlineFlush()
 	}
 	return nil
@@ -1037,20 +982,8 @@ func (p *GrokBinProvider) CleanupMCP() {
 		p.acpProcess = nil
 	}
 	p.acpMu.Unlock()
-	p.mcpMu.Lock()
-	server := p.mcpServer
-	p.mcpServer = nil
-	p.mcpURL = ""
-	p.mcpToken = ""
-	p.mcpToolFingerprint = [sha256.Size]byte{}
-	p.mcpToolFingerprintSet = false
+	p.mcpBridge.close()
 	p.clearInlineFlush()
-	p.mcpMu.Unlock()
-	if server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), mcpStopTimeout)
-		server.Stop(ctx)
-		cancel()
-	}
 	p.cleanupTempFiles()
 }
 

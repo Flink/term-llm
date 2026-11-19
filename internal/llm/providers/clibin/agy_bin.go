@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/term-llm/term-llm/internal/agyproxy"
@@ -47,13 +46,14 @@ type AgyBinProvider struct {
 	agyBinary              string
 	versionCheckedBinary   string
 	toolExecutorConfigured bool
-	mcpServer              *mcphttp.Server
-	mcpURL, mcpToken       string
+	mcpBridge              cliMCPBridge
 	isolation              agyToolIsolation
 	wireAudit              *cliwire.Server
 	cliToolBridgeState
 	tempFileTracker
-	active atomic.Bool
+	streamMu          sync.Mutex // Serializes stream admission and conversation cleanup.
+	active            bool
+	cleanupMCPPending bool
 }
 
 // agyBinStateFormat versions persisted resume state. Conversations recorded
@@ -274,12 +274,10 @@ func (p *AgyBinProvider) ImportProviderState(data []byte) error {
 
 func (p *AgyBinProvider) Stream(ctx context.Context, req core.Request) (core.Stream, error) {
 	return newEventStream(ctx, func(ctx context.Context, send eventSender) error {
-		p.activeRuns.Add(1)
-		defer p.finishStreamCleanup()
-		if !p.active.CompareAndSwap(false, true) {
+		if !p.beginStream() {
 			return errors.New("agy-bin provider already has an active stream")
 		}
-		defer p.active.Store(false)
+		defer p.endStream()
 		p.stateMu.Lock()
 		defer p.stateMu.Unlock()
 
@@ -310,19 +308,18 @@ func (p *AgyBinProvider) Stream(ctx context.Context, req core.Request) (core.Str
 		if err != nil {
 			return err
 		}
-		exposeBridge := false
-		if len(req.Tools) > 0 {
-			if !p.toolExecutorConfigured {
-				runtimeoutput.Warn("agy-bin tools requested but no tool executor configured", "tool_count", len(req.Tools))
-			} else if err := p.ensureMCPServer(ctx, req.Tools, req.Debug || req.DebugRaw); err != nil {
-				return err
-			} else {
-				exposeBridge = true
-			}
-		}
-		if err := p.writeMCPConfigs(exposeBridge); err != nil {
+		defer p.mcpBridge.finishTurn(req)
+		endpoint, err := p.prepareMCPBridge(ctx, req)
+		if err != nil {
 			return err
 		}
+		if err := p.writeMCPConfigs(endpoint); err != nil {
+			if endpoint.enabled() {
+				p.mcpBridge.abortTurn(req)
+			}
+			return err
+		}
+		exposeBridge := endpoint.enabled()
 		if err := p.writeAgentConfig(); err != nil {
 			return err
 		}
@@ -489,18 +486,11 @@ func (p *AgyBinProvider) commandError(waitErr error, stderrTail, stdoutTail []st
 	})
 }
 
-func (p *AgyBinProvider) ensureMCPServer(ctx context.Context, tools []core.ToolSpec, debug bool) error {
-	if p.mcpServer != nil {
-		return nil
-	}
-	server := mcphttp.NewServer(p.cliToolBridgeState.wrappedExecutor(p.formatToolOutput))
-	server.SetDebug(debug)
-	url, token, err := server.Start(ctx, agyMCPToolSpecs(tools))
-	if err != nil {
-		return fmt.Errorf("start agy-bin MCP server: %w", err)
-	}
-	p.mcpServer, p.mcpURL, p.mcpToken = server, url, token
-	return nil
+func (p *AgyBinProvider) prepareMCPBridge(ctx context.Context, req core.Request) (cliMCPEndpoint, error) {
+	return p.mcpBridge.prepare(ctx, req, cliMCPBridgeOptions{
+		name: "agy-bin", enabled: p.toolExecutorConfigured, specs: agyMCPToolSpecs,
+		executor: p.cliToolBridgeState.wrappedExecutor(p.formatToolOutput),
+	})
 }
 
 // agyMCPToolSpecs registers every bridge tool as a native agy tool with its
@@ -617,10 +607,10 @@ func (p *AgyBinProvider) copyCredentials() error {
 // ~/.gemini/config/mcp_config.json; copies left in the antigravity and
 // antigravity-cli directories by older term-llm releases are removed so a
 // stale bridge URL or token cannot linger in a persisted home.
-func (p *AgyBinProvider) writeMCPConfigs(enabled bool) error {
+func (p *AgyBinProvider) writeMCPConfigs(endpoint cliMCPEndpoint) error {
 	servers := map[string]any{}
-	if enabled {
-		servers[agyMCPServerName] = map[string]any{"url": p.mcpURL, "headers": map[string]string{"Authorization": "Bearer " + p.mcpToken}}
+	if endpoint.enabled() {
+		servers[agyMCPServerName] = map[string]any{"url": endpoint.url, "headers": map[string]string{"Authorization": "Bearer " + endpoint.token}}
 	}
 	data, err := json.Marshal(map[string]any{"mcpServers": servers})
 	if err != nil {
@@ -698,7 +688,7 @@ func (p *AgyBinProvider) buildCommandEnv() []string {
 }
 
 func (p *AgyBinProvider) diagnosticRedactor(prompt string) func(string) string {
-	secrets := []string{prompt, p.mcpToken}
+	secrets := []string{prompt, p.mcpBridge.current().token}
 	for k, v := range p.extraEnv {
 		if v != "" && redactEnvValue(k, v) == "[redacted]" {
 			secrets = append(secrets, v)
@@ -777,12 +767,6 @@ func (p *AgyBinProvider) gcAgyHomes() {
 }
 
 func (p *AgyBinProvider) cleanupRuntime() {
-	if p.mcpServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), mcpStopTimeout)
-		_ = p.mcpServer.Stop(ctx)
-		cancel()
-		p.mcpServer, p.mcpURL, p.mcpToken = nil, "", ""
-	}
 	if p.isolation != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), agyIsolationStopTimeout)
 		_ = p.isolation.Stop(ctx)
@@ -792,13 +776,41 @@ func (p *AgyBinProvider) cleanupRuntime() {
 	p.wireAudit = nil
 }
 
+func (p *AgyBinProvider) beginStream() bool {
+	p.streamMu.Lock()
+	defer p.streamMu.Unlock()
+	if p.active {
+		return false
+	}
+	p.active = true
+	p.activeRuns.Add(1)
+	return true
+}
+
+func (p *AgyBinProvider) endStream() {
+	p.streamMu.Lock()
+	defer p.streamMu.Unlock()
+	p.finishStreamCleanup()
+	if p.cleanupMCPPending {
+		p.mcpBridge.close()
+		p.cleanupMCPPending = false
+	}
+	p.active = false
+}
+
+// CleanupMCP releases conversation resources. EventDone can reach the caller
+// before the stream runs its defers, so hand off active cleanup to endStream.
 func (p *AgyBinProvider) CleanupMCP() {
-	if p.active.Load() {
+	p.streamMu.Lock()
+	defer p.streamMu.Unlock()
+	if p.active {
+		p.cleanupMCPPending = true
 		return
 	}
-	p.cleanupRuntime()
+	p.mcpBridge.close()
 	p.cleanupTempFiles()
 }
+
 func (p *AgyBinProvider) CleanupTurn() { p.cleanupTempFilesIfIdle() }
 
 func AgyBinHasCredentials() bool {

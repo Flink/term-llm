@@ -611,7 +611,7 @@ func cursorProxyExecLegacyTurn(t *testing.T, provider *CursorBinProvider, prompt
 		t.Fatal(err)
 	}
 	defer cleanup()
-	if err := provider.writeCursorMCPConfig(home, false); err != nil {
+	if err := provider.writeCursorMCPConfig(home, cliMCPEndpoint{}); err != nil {
 		t.Fatal(err)
 	}
 	args := provider.buildCursorArgs(core.Request{}, "", nil, home)

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -206,16 +207,11 @@ func TestClaudeBinProvider_CleanupTurn_RemovesTrackedTempFiles(t *testing.T) {
 }
 
 func TestClaudeBinProvider_CleanupTurn_DoesNotStopMCPServer(t *testing.T) {
-	provider := NewClaudeBinProvider("sonnet", nil)
-	// Simulate a mid-conversation state by populating the config path field.
-	// CleanupTurn must leave the MCP config path untouched so the persistent
-	// MCP bridge survives across turns; only CleanupMCP tears it down.
-	provider.mcpConfigPath = "/tmp/does-not-exist-cleanup-turn-test.json"
-
+	provider := newClaudeBridgeTestProvider(t)
+	endpoint := prepareTestBridge(t, provider, core.Request{Tools: []core.ToolSpec{testMCPTool("alpha")}})
 	provider.CleanupTurn()
-
-	if provider.mcpConfigPath == "" {
-		t.Fatal("CleanupTurn cleared mcpConfigPath - it must be left for CleanupMCP (conversation scope)")
+	if got := provider.mcpBridge.current(); got != endpoint {
+		t.Fatal("CleanupTurn retired the conversation bridge")
 	}
 }
 
@@ -1046,10 +1042,10 @@ printf '%s\n' '{"type":"result","is_error":false,"result":"ok","usage":{"input_t
 	t.Setenv("CLAUDE_READY_FILE", readyFile)
 	t.Setenv("CLAUDE_RELEASE_FILE", releaseFile)
 
-	p := NewClaudeBinProvider("sonnet", nil)
-	p.commandRunner = func(ctx context.Context, _ []string, _, _, _ string, _ bool, send eventSender, _, expose bool) error {
+	p := newClaudeBridgeTestProvider(t)
+	p.commandRunner = func(ctx context.Context, args []string, _, _, _ string, _ bool, send eventSender, _, expose bool) error {
 		bridge := &claudeTurnBridge{toolReqCh: make(chan claudeToolRequest, 1), done: make(chan struct{})}
-		if expose {
+		if expose && slices.Contains(args, "--mcp-config") {
 			p.eventsMu.Lock()
 			p.currentBridge = bridge
 			p.currentEvents = send.ch
@@ -1078,7 +1074,7 @@ printf '%s\n' '{"type":"result","is_error":false,"result":"ok","usage":{"input_t
 	stream, err := p.Stream(context.Background(), core.Request{
 		Ephemeral: true,
 		Messages:  []core.Message{core.UserText("standalone tool request")},
-		Tools:     []core.ToolSpec{{Name: "diagnostic_ping", Description: "diagnostic"}},
+		Tools:     []core.ToolSpec{{Name: "diagnostic_ping", Description: "diagnostic", Schema: map[string]any{"type": "object"}}},
 	})
 	if err != nil {
 		t.Fatalf("Stream: %v", err)

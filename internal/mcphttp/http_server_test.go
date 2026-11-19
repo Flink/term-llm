@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,6 +15,24 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func TestStopClosesListenerBeforeServeBegins(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	// Model Start returning before its serving goroutine is scheduled.
+	server := &Server{running: true, listener: listener, server: &http.Server{}}
+	addr := listener.Addr().String()
+	if err := server.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if conn, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+		_ = conn.Close()
+		t.Fatal("Stop left the listener open")
+	}
+}
 
 func TestServerStartStop(t *testing.T) {
 	executor := func(ctx context.Context, name string, args json.RawMessage) (ToolResult, error) {

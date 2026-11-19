@@ -110,9 +110,8 @@ func TestCursorMCPConfigUsesPrivateProjectAndBearerToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := NewCursorBinProvider("auto-smart", nil)
-	p.mcpURL = "http://127.0.0.1:1234/mcp"
-	p.mcpToken = "mcp-secret"
-	if err := p.writeCursorMCPConfig(home, true); err != nil {
+	endpoint := cliMCPEndpoint{url: "http://127.0.0.1:1234/mcp", token: "mcp-secret"}
+	if err := p.writeCursorMCPConfig(home, endpoint); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(home, "cwd", ".cursor", "mcp.json"))
@@ -120,7 +119,7 @@ func TestCursorMCPConfigUsesPrivateProjectAndBearerToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, want := range []string{`"term-llm"`, p.mcpURL, "Bearer mcp-secret"} {
+	for _, want := range []string{`"term-llm"`, endpoint.url, "Bearer mcp-secret"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("MCP config %s missing %q", text, want)
 		}

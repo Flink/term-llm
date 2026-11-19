@@ -846,34 +846,29 @@ func writeFakeGrok(t *testing.T, dir, output string) {
 func TestGrokBinProviderRebuildsMCPForDynamicToolSurface(t *testing.T) {
 	provider := NewGrokBinProvider("grok-4.6", nil)
 	defer provider.CleanupMCP()
-	if err := provider.ensureGrokHome(); err != nil {
-		t.Fatal(err)
+	provider.SetToolExecutor(func(context.Context, string, json.RawMessage) (core.ToolOutput, error) {
+		return core.ToolOutput{}, nil
+	})
+	req := core.Request{Tools: []core.ToolSpec{{Name: "activate_dynamic", Schema: map[string]any{"type": "object"}}}}
+	first, err := provider.prepareMCPBridge(context.Background(), req)
+	if err != nil || !first.enabled() {
+		t.Fatalf("initial bridge enabled=%t: %v", first.enabled(), err)
 	}
-	initial := []core.ToolSpec{{Name: "activate_dynamic", Schema: map[string]any{"type": "object"}}}
-	if err := provider.ensureMCPServer(context.Background(), initial, false); err != nil {
-		t.Fatal(err)
+	if got, err := provider.prepareMCPBridge(context.Background(), req); err != nil || got != first {
+		t.Fatalf("unchanged tool surface did not reuse the bridge: %v", err)
 	}
-	firstURL := provider.mcpURL
-	if err := provider.ensureMCPServer(context.Background(), initial, false); err != nil {
-		t.Fatal(err)
-	}
-	if provider.mcpURL != firstURL {
-		t.Fatalf("unchanged tool surface restarted MCP: %q -> %q", firstURL, provider.mcpURL)
-	}
-	if err := provider.PublishDynamicTools([]core.ToolSpec{{Name: "late_dynamic", Schema: map[string]any{"type": "object"}}}); err != nil {
+	lateTool := core.ToolSpec{Name: "late_dynamic", Schema: map[string]any{"type": "object"}}
+	if err := provider.PublishDynamicTools([]core.ToolSpec{lateTool}); err != nil {
 		t.Fatal(err)
 	}
 	if !provider.inlineFlushRequested() {
 		t.Fatal("dynamic publication did not mark provider refresh boundary")
 	}
-	expanded := append(append([]core.ToolSpec(nil), initial...), core.ToolSpec{Name: "late_dynamic", Schema: map[string]any{"type": "object"}})
 	// The engine clears the marker at the next logical provider-turn boundary.
 	provider.clearInlineFlush()
-	if err := provider.ensureMCPServer(context.Background(), expanded, false); err != nil {
-		t.Fatal(err)
-	}
-	if provider.mcpURL == firstURL {
-		t.Fatal("expanded tool surface reused stale MCP server")
+	req.Tools = append(req.Tools, lateTool)
+	if got, err := provider.prepareMCPBridge(context.Background(), req); err != nil || !got.enabled() || got.token == first.token {
+		t.Fatalf("expanded tool surface did not rotate the bridge: %v", err)
 	}
 	if provider.inlineFlushRequested() {
 		t.Fatal("successful MCP rebuild retained dynamic refresh marker")

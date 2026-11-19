@@ -53,7 +53,7 @@ type grokACPProcess struct {
 
 	capabilities acp.AgentCapabilities
 	sessionID    string
-	mcpURL       string
+	mcpEndpoint  cliMCPEndpoint
 	model        string
 	effort       string
 	systemPrompt string
@@ -576,14 +576,14 @@ func formatGrokSteering(text string) string {
 	return grokSteeringNote + "\n<user_query>\n" + text + "\n</user_query>\n" + grokUnfinishedTasksReminder
 }
 
-func (p *GrokBinProvider) executeGrokACP(ctx context.Context, req core.Request, messages []core.Message, debug bool, send eventSender, exposeToolBridge bool) (grokCommandResult, error) {
+func (p *GrokBinProvider) executeGrokACP(ctx context.Context, req core.Request, messages []core.Message, debug bool, send eventSender, endpoint cliMCPEndpoint) (grokCommandResult, error) {
 	if p.acpRunner != nil {
-		return p.acpRunner(ctx, req, messages, debug, send, exposeToolBridge)
+		return p.acpRunner(ctx, req, messages, debug, send, endpoint.enabled())
 	}
-	return p.runGrokACP(ctx, req, messages, debug, send, exposeToolBridge)
+	return p.runGrokACP(ctx, req, messages, debug, send, endpoint)
 }
 
-func (p *GrokBinProvider) runGrokACP(ctx context.Context, req core.Request, messages []core.Message, debug bool, send eventSender, exposeToolBridge bool) (grokCommandResult, error) {
+func (p *GrokBinProvider) runGrokACP(ctx context.Context, req core.Request, messages []core.Message, debug bool, send eventSender, endpoint cliMCPEndpoint) (grokCommandResult, error) {
 	promptData, err := buildGrokACPPrompt(messages)
 	if err != nil {
 		return grokCommandResult{}, err
@@ -600,7 +600,7 @@ func (p *GrokBinProvider) runGrokACP(ctx context.Context, req core.Request, mess
 		blocks = applyGrokSteeringEnvelope(blocks)
 	}
 
-	process, temporary, err := p.ensureGrokACPProcess(ctx, req, debug)
+	process, temporary, err := p.ensureGrokACPProcess(ctx, req, debug, endpoint)
 	if errors.Is(err, errGrokACPResumeUnavailable) && !req.Ephemeral {
 		p.ResetConversation()
 		recoveryMessages := grokRecoveryMessages(req.Messages)
@@ -610,7 +610,7 @@ func (p *GrokBinProvider) runGrokACP(ctx context.Context, req core.Request, mess
 		if debug {
 			runtimeoutput.Printf("[grok-bin] ACP resume unavailable; starting bounded recovery (source_messages=%d, recovery_messages=%d, recovery_bytes=%d)\n", len(req.Messages), len(recoveryMessages), grokMessagesTextBytes(recoveryMessages))
 		}
-		return p.runGrokACP(ctx, req, recoveryMessages, debug, send, exposeToolBridge)
+		return p.runGrokACP(ctx, req, recoveryMessages, debug, send, endpoint)
 	}
 	if err != nil {
 		return grokCommandResult{}, err
@@ -619,6 +619,7 @@ func (p *GrokBinProvider) runGrokACP(ctx context.Context, req core.Request, mess
 		defer p.stopGrokACPProcess(process)
 	}
 
+	exposeToolBridge := endpoint.enabled()
 	bridge := &cliTurnBridge{toolReqCh: make(chan cliToolRequest, 64), done: make(chan struct{})}
 	var bridgeDoneOnce sync.Once
 	stopBridge := func() { bridgeDoneOnce.Do(func() { close(bridge.done) }) }
@@ -720,7 +721,7 @@ promptComplete:
 	policyErr := process.handler.policyError()
 	if promptResult.err != nil {
 		if debug {
-			redact := p.grokACPDiagnosticRedactor(req.Messages, process.cmd.Env)
+			redact := p.grokACPDiagnosticRedactor(req.Messages, process.cmd.Env, endpoint.token)
 			runtimeoutput.Printf("[grok-bin] ACP prompt %s failed: %s\n", promptID, redact(promptResult.err.Error()))
 		}
 		if !temporary {
@@ -808,11 +809,11 @@ promptComplete:
 	return grokCommandResult{sawEnd: true, sessionID: process.sessionID}, nil
 }
 
-func (p *grokACPProcess) matchesConfiguration(mcpURL, model, effort, systemPrompt string, nativeSearch bool) bool {
-	return p != nil && p.mcpURL == mcpURL && p.model == model && p.effort == effort && p.systemPrompt == systemPrompt && p.nativeSearch == nativeSearch
+func (p *grokACPProcess) matchesConfiguration(endpoint cliMCPEndpoint, model, effort, systemPrompt string, nativeSearch bool) bool {
+	return p != nil && p.mcpEndpoint == endpoint && p.model == model && p.effort == effort && p.systemPrompt == systemPrompt && p.nativeSearch == nativeSearch
 }
 
-func (p *GrokBinProvider) ensureGrokACPProcess(ctx context.Context, req core.Request, debug bool) (*grokACPProcess, bool, error) {
+func (p *GrokBinProvider) ensureGrokACPProcess(ctx context.Context, req core.Request, debug bool, endpoint cliMCPEndpoint) (*grokACPProcess, bool, error) {
 	if req.Ephemeral {
 		// Do not run two Grok processes against the same durable GROK_HOME.
 		// Stop the idle conversation process; the next normal turn will restore
@@ -823,7 +824,7 @@ func (p *GrokBinProvider) ensureGrokACPProcess(ctx context.Context, req core.Req
 			p.acpProcess = nil
 		}
 		p.acpMu.Unlock()
-		process, err := p.startGrokACPProcess(ctx, req, debug, "")
+		process, err := p.startGrokACPProcess(ctx, req, debug, endpoint, "")
 		return process, true, err
 	}
 
@@ -834,17 +835,15 @@ func (p *GrokBinProvider) ensureGrokACPProcess(ctx context.Context, req core.Req
 	if p.acpProcess != nil {
 		select {
 		case <-p.acpProcess.conn.Done():
-			p.stopGrokACPProcess(p.acpProcess)
-			p.acpProcess = nil
 		default:
-			if p.acpProcess.matchesConfiguration(p.mcpURL, requestedModel, requestedEffort, requestedSystemPrompt, req.Search) {
+			if p.acpProcess.matchesConfiguration(endpoint, requestedModel, requestedEffort, requestedSystemPrompt, req.Search) {
 				return p.acpProcess, false, nil
 			}
-			p.stopGrokACPProcess(p.acpProcess)
-			p.acpProcess = nil
 		}
+		p.stopGrokACPProcess(p.acpProcess)
+		p.acpProcess = nil
 	}
-	process, err := p.startGrokACPProcess(ctx, req, debug, p.sessionID)
+	process, err := p.startGrokACPProcess(ctx, req, debug, endpoint, p.sessionID)
 	if err != nil {
 		return nil, false, err
 	}
@@ -852,7 +851,7 @@ func (p *GrokBinProvider) ensureGrokACPProcess(ctx context.Context, req core.Req
 	return process, false, nil
 }
 
-func (p *GrokBinProvider) startGrokACPProcess(ctx context.Context, req core.Request, debug bool, resumeID string) (_ *grokACPProcess, returnErr error) {
+func (p *GrokBinProvider) startGrokACPProcess(ctx context.Context, req core.Request, debug bool, endpoint cliMCPEndpoint, resumeID string) (_ *grokACPProcess, returnErr error) {
 	profilePath, err := p.writeACPAgentProfile(req.Search)
 	if err != nil {
 		return nil, err
@@ -925,14 +924,14 @@ func (p *GrokBinProvider) startGrokACPProcess(ctx context.Context, req core.Requ
 		handler:      handler,
 		waitDone:     make(chan struct{}),
 		stderrDone:   make(chan struct{}),
-		mcpURL:       p.mcpURL,
+		mcpEndpoint:  endpoint,
 		model:        model,
 		effort:       effort,
 		systemPrompt: systemPrompt,
 		nativeSearch: req.Search,
 		wireAudit:    wireAudit,
 	}
-	redactDiagnostic := p.grokACPDiagnosticRedactor(req.Messages, cmd.Env)
+	redactDiagnostic := p.grokACPDiagnosticRedactor(req.Messages, cmd.Env, endpoint.token)
 	go func() {
 		defer close(process.stderrDone)
 		_ = drainCLIDiagnosticLines(stderr, func(rawLine string) {
@@ -999,11 +998,11 @@ func (p *GrokBinProvider) startGrokACPProcess(ctx context.Context, req core.Requ
 	}
 
 	mcpServers := []acp.MCPServer{}
-	if p.mcpURL != "" {
+	if endpoint.enabled() {
 		if !initialize.AgentCapabilities.MCPCapabilities.HTTP {
 			return nil, fmt.Errorf("Grok ACP does not support HTTP MCP required for term-llm tools")
 		}
-		mcpServers = append(mcpServers, grokACPMCPServer(p.mcpURL, p.mcpToken))
+		mcpServers = append(mcpServers, grokACPMCPServer(endpoint.url, endpoint.token))
 	}
 	neutralCWD := filepath.Join(p.grokHome, "cwd")
 	meta, err := grokACPSessionMeta(systemPrompt)
@@ -1085,7 +1084,7 @@ func (p *GrokBinProvider) selectGrokACPAuth(methods []acp.AuthMethod) string {
 	return ""
 }
 
-func (p *GrokBinProvider) grokACPDiagnosticRedactor(messages []core.Message, env []string) func(string) string {
+func (p *GrokBinProvider) grokACPDiagnosticRedactor(messages []core.Message, env []string, mcpToken string) func(string) string {
 	secrets := make([]string, 0, len(messages)+4)
 	for _, message := range messages {
 		for _, part := range message.Parts {
@@ -1118,7 +1117,7 @@ func (p *GrokBinProvider) grokACPDiagnosticRedactor(messages []core.Message, env
 		}
 		secrets = appendGrokACPDiagnosticSecret(secrets, value)
 	}
-	secrets = appendGrokACPDiagnosticSecret(secrets, p.mcpToken)
+	secrets = appendGrokACPDiagnosticSecret(secrets, mcpToken)
 	return func(text string) string {
 		for _, secret := range secrets {
 			text = strings.ReplaceAll(text, secret, "[redacted]")

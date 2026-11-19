@@ -2,7 +2,6 @@ package clibin
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/term-llm/term-llm/internal/acp"
 	"github.com/term-llm/term-llm/internal/llm/core"
-	"github.com/term-llm/term-llm/internal/mcphttp"
 	"github.com/term-llm/term-llm/internal/runtimeoutput"
 )
 
@@ -68,12 +66,7 @@ type VibeBinProvider struct {
 	extraEnv               map[string]string
 	toolExecutorConfigured bool
 
-	mcpMu                 sync.Mutex
-	mcpServer             *mcphttp.Server
-	mcpURL                string
-	mcpToken              string
-	mcpToolFingerprint    [sha256.Size]byte
-	mcpToolFingerprintSet bool
+	mcpBridge cliMCPBridge
 
 	acpMu      sync.Mutex
 	acpProcess *vibeACPProcess
@@ -204,10 +197,7 @@ func (p *VibeBinProvider) PublishDynamicTools(tools []core.ToolSpec) error {
 	if len(tools) == 0 {
 		return nil
 	}
-	p.mcpMu.Lock()
-	running := p.mcpServer != nil
-	p.mcpMu.Unlock()
-	if running {
+	if p.mcpBridge.active.Load() != nil {
 		p.requestInlineFlush()
 	}
 	return nil
@@ -231,18 +221,13 @@ func (p *VibeBinProvider) Stream(ctx context.Context, req core.Request) (core.St
 			return err
 		}
 		debug := req.Debug || req.DebugRaw
-		exposeToolBridge := false
-		if len(req.Tools) > 0 {
-			if !p.toolExecutorConfigured {
-				runtimeoutput.Warn("vibe-bin tools requested but no tool executor configured", "tool_count", len(req.Tools))
-			} else if err := p.ensureMCPServer(ctx, req.Tools, debug); err != nil {
-				return err
-			} else {
-				exposeToolBridge = true
-			}
+		defer p.mcpBridge.finishTurn(req)
+		endpoint, err := p.prepareMCPBridge(ctx, req)
+		if err != nil {
+			return err
 		}
 
-		result, err := p.runVibeACP(ctx, req, messages, debug, send, exposeToolBridge)
+		result, err := p.runVibeACP(ctx, req, messages, debug, send, endpoint)
 		if err != nil {
 			return err
 		}
@@ -410,48 +395,12 @@ func vibeRuntimeHome(cwd string) (string, error) {
 	return home, nil
 }
 
-func (p *VibeBinProvider) ensureMCPServer(ctx context.Context, tools []core.ToolSpec, debug bool) error {
-	specs := mcpToolSpecs(tools)
-	encoded, err := json.Marshal(specs)
-	if err != nil {
-		return fmt.Errorf("encode vibe-bin MCP tool surface: %w", err)
-	}
-	fingerprint := sha256.Sum256(encoded)
-
-	p.mcpMu.Lock()
-	if p.mcpServer != nil && p.mcpToolFingerprintSet && p.mcpToolFingerprint == fingerprint {
-		p.mcpMu.Unlock()
-		return nil
-	}
-	oldServer := p.mcpServer
-	p.mcpServer = nil
-	p.mcpURL = ""
-	p.mcpToken = ""
-	p.mcpToolFingerprintSet = false
-	p.mcpMu.Unlock()
-	if oldServer != nil {
-		stopCtx, cancel := context.WithTimeout(context.Background(), mcpStopTimeout)
-		oldServer.Stop(stopCtx)
-		cancel()
-	}
-
-	if debug {
-		runtimeoutput.Printf("[vibe-bin] starting HTTP MCP server for %d tools\n", len(tools))
-	}
-	server := mcphttp.NewServer(p.cliToolBridgeState.wrappedExecutor(p.formatToolOutput))
-	server.SetDebug(debug)
-	url, token, err := server.Start(ctx, specs)
-	if err != nil {
-		return fmt.Errorf("start vibe-bin MCP server: %w", err)
-	}
-	p.mcpMu.Lock()
-	p.mcpServer = server
-	p.mcpURL = url
-	p.mcpToken = token
-	p.mcpToolFingerprint = fingerprint
-	p.mcpToolFingerprintSet = true
-	p.mcpMu.Unlock()
-	return nil
+func (p *VibeBinProvider) prepareMCPBridge(ctx context.Context, req core.Request) (cliMCPEndpoint, error) {
+	return p.mcpBridge.prepare(ctx, req, cliMCPBridgeOptions{
+		name:     "vibe-bin",
+		enabled:  p.toolExecutorConfigured,
+		executor: p.cliToolBridgeState.wrappedExecutor(p.formatToolOutput),
+	})
 }
 
 func (p *VibeBinProvider) formatToolOutput(output core.ToolOutput) string {
@@ -467,20 +416,8 @@ func (p *VibeBinProvider) CleanupMCP() {
 		p.acpProcess = nil
 	}
 	p.acpMu.Unlock()
-	p.mcpMu.Lock()
-	server := p.mcpServer
-	p.mcpServer = nil
-	p.mcpURL = ""
-	p.mcpToken = ""
-	p.mcpToolFingerprint = [sha256.Size]byte{}
-	p.mcpToolFingerprintSet = false
+	p.mcpBridge.close()
 	p.clearInlineFlush()
-	p.mcpMu.Unlock()
-	if server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), mcpStopTimeout)
-		server.Stop(ctx)
-		cancel()
-	}
 	p.cleanupTempFiles()
 }
 

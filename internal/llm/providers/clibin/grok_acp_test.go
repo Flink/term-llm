@@ -786,9 +786,91 @@ func TestGrokBinProviderACPStreamEmitsUsage(t *testing.T) {
 	}
 }
 
+func TestGrokBinProviderPublishesTurnMCPBridge(t *testing.T) {
+	for _, legacy := range []string{"0", "1"} {
+		name := "ACP"
+		if legacy == "1" {
+			name = "legacy"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("XDG_CACHE_HOME", t.TempDir())
+			t.Setenv(grokLegacyTransportEnv, legacy)
+			binDir := t.TempDir()
+			startupConfig := filepath.Join(t.TempDir(), "startup.toml")
+			acpLog := filepath.Join(t.TempDir(), "acp.log")
+			t.Setenv("GROK_STARTUP_CONFIG", startupConfig)
+			t.Setenv("GROK_TEST_ACP_LOG", acpLog)
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			const script = `#!/bin/sh
+cp "$GROK_HOME/config.toml" "$GROK_STARTUP_CONFIG" || exit 1
+if [ "$TERM_LLM_GROK_LEGACY_STREAMING_JSON" = 1 ]; then
+  printf '%s\n' '{"type":"end","sessionId":"test-session"}'
+  exit 0
+fi
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$GROK_TEST_ACP_LOG"
+  id=${line#*\"id\":}
+  id=${id%%,*}
+  case "$line" in
+    *'"method":"initialize"'*) result='{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":true}},"authMethods":[{"id":"cached_token","name":"Cached"}]}' ;;
+    *'"method":"authenticate"'*|*'"method":"session/load"'*) result='{}' ;;
+    *'"method":"session/new"'*) result='{"sessionId":"test-session"}' ;;
+    *'"method":"session/prompt"'*) result='{"stopReason":"end_turn","_meta":{"inputTokens":1,"outputTokens":1}}' ;;
+    *) continue ;;
+  esac
+  printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$result}"
+done
+`
+			if err := os.WriteFile(filepath.Join(binDir, "grok"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			p := NewGrokBinProvider("grok-4.5-low", nil)
+			defer p.CleanupMCP()
+			p.SetToolExecutor(func(context.Context, string, json.RawMessage) (core.ToolOutput, error) {
+				return core.ToolOutput{}, nil
+			})
+			run := func(req core.Request) string {
+				t.Helper()
+				stream, err := p.Stream(context.Background(), req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer stream.Close()
+				collectGrokACPTestText(t, stream)
+				config, err := os.ReadFile(startupConfig)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(config)
+			}
+
+			req := core.Request{Messages: []core.Message{core.UserText("first")}, Tools: []core.ToolSpec{{Name: "test_tool", Schema: map[string]any{"type": "object"}}}}
+			config := run(req)
+			endpoint := p.mcpBridge.current()
+			const registration = "[mcp_servers.term-llm]"
+			if !endpoint.enabled() || !strings.Contains(config, registration) || !strings.Contains(config, endpoint.url) || !strings.Contains(config, "Bearer "+endpoint.token) {
+				t.Fatal("initial Grok startup config is missing its authenticated bridge")
+			}
+			if config := run(core.Request{Ephemeral: true, Messages: []core.Message{core.UserText("temporary")}}); strings.Contains(config, registration) || strings.Contains(config, endpoint.token) {
+				t.Fatal("tool-free ephemeral startup config exposed the persistent bridge")
+			}
+			if p.mcpBridge.current() != endpoint {
+				t.Fatal("tool-free ephemeral turn did not keep the bridge")
+			}
+			req.Messages = append(req.Messages, core.UserText("follow up"))
+			if got := run(req); got != config {
+				t.Fatal("persistent follow-up did not republish the unchanged bridge config")
+			}
+			if legacy == "0" {
+				assertACPTurnMCPServers(t, acpLog, []string{"session/new", "session/new", "session/load"}, []cliMCPEndpoint{endpoint, {}, endpoint})
+			}
+		})
+	}
+}
+
 func TestGrokACPProcessConfigurationChangesRequireRestart(t *testing.T) {
 	process := &grokACPProcess{
-		mcpURL:       "http://127.0.0.1/mcp",
+		mcpEndpoint:  cliMCPEndpoint{url: "http://127.0.0.1/mcp", token: "original"},
 		model:        "grok-4.5",
 		effort:       "low",
 		systemPrompt: "system",
@@ -796,23 +878,24 @@ func TestGrokACPProcessConfigurationChangesRequireRestart(t *testing.T) {
 	}
 	tests := []struct {
 		name         string
-		mcpURL       string
+		mcpEndpoint  cliMCPEndpoint
 		model        string
 		effort       string
 		systemPrompt string
 		nativeSearch bool
 		wantMatch    bool
 	}{
-		{name: "unchanged", mcpURL: process.mcpURL, model: process.model, effort: process.effort, systemPrompt: process.systemPrompt, wantMatch: true},
-		{name: "effort changed", mcpURL: process.mcpURL, model: process.model, effort: "high", systemPrompt: process.systemPrompt},
-		{name: "native search changed", mcpURL: process.mcpURL, model: process.model, effort: process.effort, systemPrompt: process.systemPrompt, nativeSearch: true},
-		{name: "model changed", mcpURL: process.mcpURL, model: "grok-5", effort: process.effort, systemPrompt: process.systemPrompt},
-		{name: "system prompt changed", mcpURL: process.mcpURL, model: process.model, effort: process.effort, systemPrompt: "different"},
-		{name: "MCP changed", mcpURL: "http://127.0.0.1/other", model: process.model, effort: process.effort, systemPrompt: process.systemPrompt},
+		{name: "unchanged", mcpEndpoint: process.mcpEndpoint, model: process.model, effort: process.effort, systemPrompt: process.systemPrompt, wantMatch: true},
+		{name: "effort changed", mcpEndpoint: process.mcpEndpoint, model: process.model, effort: "high", systemPrompt: process.systemPrompt},
+		{name: "native search changed", mcpEndpoint: process.mcpEndpoint, model: process.model, effort: process.effort, systemPrompt: process.systemPrompt, nativeSearch: true},
+		{name: "model changed", mcpEndpoint: process.mcpEndpoint, model: "grok-5", effort: process.effort, systemPrompt: process.systemPrompt},
+		{name: "system prompt changed", mcpEndpoint: process.mcpEndpoint, model: process.model, effort: process.effort, systemPrompt: "different"},
+		{name: "MCP changed", mcpEndpoint: cliMCPEndpoint{url: "http://127.0.0.1/other", token: process.mcpEndpoint.token}, model: process.model, effort: process.effort, systemPrompt: process.systemPrompt},
+		{name: "MCP bearer changed at the same URL", mcpEndpoint: cliMCPEndpoint{url: process.mcpEndpoint.url, token: "rotated"}, model: process.model, effort: process.effort, systemPrompt: process.systemPrompt},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := process.matchesConfiguration(tt.mcpURL, tt.model, tt.effort, tt.systemPrompt, tt.nativeSearch); got != tt.wantMatch {
+			if got := process.matchesConfiguration(tt.mcpEndpoint, tt.model, tt.effort, tt.systemPrompt, tt.nativeSearch); got != tt.wantMatch {
 				t.Fatalf("matchesConfiguration() = %t, want %t", got, tt.wantMatch)
 			}
 		})
@@ -836,17 +919,19 @@ func TestGrokBinProviderACPErrorRedactsDiagnostics(t *testing.T) {
 	const systemPrompt = "PRIVATE SYSTEM INSTRUCTION"
 	const userPrompt = "PRIVATE USER QUESTION"
 	const secret = "super-secret-value"
+	const mcpToken = "current-turn-bearer"
 	p := NewGrokBinProvider("grok-4.5-low", map[string]string{"GROK_TEST_SECRET": secret})
 	redact := p.grokACPDiagnosticRedactor(
 		[]core.Message{core.SystemText(systemPrompt), core.UserText(userPrompt)},
 		p.buildCommandEnv(),
+		mcpToken,
 	)
-	diagnostic := redact("stderr " + systemPrompt + " " + userPrompt + " " + secret)
-	if strings.Contains(diagnostic, systemPrompt) || strings.Contains(diagnostic, userPrompt) || strings.Contains(diagnostic, secret) {
+	diagnostic := redact("stderr " + systemPrompt + " " + userPrompt + " " + secret + " " + mcpToken)
+	if strings.Contains(diagnostic, systemPrompt) || strings.Contains(diagnostic, userPrompt) || strings.Contains(diagnostic, secret) || strings.Contains(diagnostic, mcpToken) {
 		t.Fatalf("ACP diagnostics leaked private data: %s", diagnostic)
 	}
-	if got := strings.Count(diagnostic, "[redacted]"); got != 3 {
-		t.Fatalf("ACP diagnostic redactions = %d, want 3: %s", got, diagnostic)
+	if got := strings.Count(diagnostic, "[redacted]"); got != 4 {
+		t.Fatalf("ACP diagnostic redactions = %d, want 4: %s", got, diagnostic)
 	}
 }
 

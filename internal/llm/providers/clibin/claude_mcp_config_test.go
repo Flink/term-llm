@@ -1,7 +1,6 @@
 package clibin
 
 import (
-	"context"
 	"encoding/json"
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"os"
@@ -9,15 +8,9 @@ import (
 )
 
 func TestClaudeGeneratedMCPConfigAllowsLongRunningTools(t *testing.T) {
-	provider := NewClaudeBinProvider("sonnet", nil)
-	path := provider.createHTTPMCPConfig(context.Background(), []core.ToolSpec{{
-		Name: "spawn_agent", Schema: map[string]any{"type": "object"},
-	}}, false)
-	if path == "" {
-		t.Fatal("createHTTPMCPConfig returned empty path")
-	}
-	t.Cleanup(provider.CleanupMCP)
-	data, err := os.ReadFile(path)
+	provider := newClaudeBridgeTestProvider(t)
+	endpoint := prepareTestBridge(t, provider, core.Request{Tools: []core.ToolSpec{testMCPTool("spawn_agent")}})
+	data, err := os.ReadFile(endpoint.configPath)
 	if err != nil {
 		t.Fatal(err)
 	}

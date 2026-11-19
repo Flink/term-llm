@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -147,7 +148,7 @@ type Server struct {
 	listener         net.Listener
 	authToken        string
 	executor         ToolExecutor
-	debug            bool
+	debug            atomic.Bool
 	progressInterval time.Duration
 
 	// HandlerMiddleware is installed before serving. Set only before Start.
@@ -171,7 +172,7 @@ func NewServer(executor ToolExecutor) *Server {
 
 // SetDebug enables debug logging for HTTP requests.
 func (s *Server) SetDebug(debug bool) {
-	s.debug = debug
+	s.debug.Store(debug)
 }
 
 // Start starts the HTTP server on a random available port on localhost.
@@ -319,9 +320,11 @@ func (s *Server) startInternal(host string, port int, token string, tools []Tool
 	// Use a channel to capture immediate startup errors
 	startupErr := make(chan error, 1)
 
-	// Start serving in background
+	// Capture this generation: Stop and a later Start may run before this
+	// goroutine is scheduled.
+	server := s.server
 	go func() {
-		err := s.server.Serve(listener)
+		err := server.Serve(listener)
 		// ErrServerClosed is expected on graceful shutdown
 		if err != nil && err != http.ErrServerClosed {
 			select {
@@ -362,14 +365,15 @@ func displayHost(host string) string {
 
 // authMiddleware validates the Authorization header.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
+	// Each HTTP server generation keeps the credential it started with.
+	// Stop may clear the public token while a timed-out handler unwinds.
+	expectedAuth := []byte("Bearer " + s.authToken)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
-		expectedAuth := "Bearer " + s.authToken
-
-		if subtle.ConstantTimeCompare([]byte(authHeader), []byte(expectedAuth)) != 1 {
-			if s.debug {
-				runtimeoutput.Printf("[mcp-http] %s Unauthorized request from %s (got auth: %q)\n",
-					time.Now().Format("15:04:05.000"), r.RemoteAddr, authHeader[:min(20, len(authHeader))])
+		if subtle.ConstantTimeCompare([]byte(authHeader), expectedAuth) != 1 {
+			if s.debug.Load() {
+				runtimeoutput.Printf("[mcp-http] %s Unauthorized request from %s\n",
+					time.Now().Format("15:04:05.000"), r.RemoteAddr)
 			}
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
@@ -382,7 +386,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 // loggingMiddleware logs HTTP requests when debug is enabled.
 func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.debug {
+		if s.debug.Load() {
 			// Read and restore body for logging, limiting to 8KB to avoid memory issues
 			const maxDebugBodySize = 8 * 1024
 			var bodyPreview string
@@ -417,7 +421,7 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 		wrapped := &responseLogger{ResponseWriter: w, status: 200}
 		next.ServeHTTP(wrapped, r)
 
-		if s.debug {
+		if s.debug.Load() {
 			runtimeoutput.Printf("[mcp-http] %s Response status: %d\n",
 				time.Now().Format("15:04:05.000"), wrapped.status)
 		}
@@ -460,9 +464,16 @@ func (s *Server) Stop(ctx context.Context) error {
 		}
 	}
 
+	// Shutdown only closes listeners already registered by Serve. Start binds
+	// synchronously, but Serve may not have been scheduled yet.
+	if s.listener != nil {
+		_ = s.listener.Close()
+	}
+
 	// Clear sensitive data
 	s.authToken = ""
 	s.listener = nil
+	s.server = nil
 
 	return nil
 }

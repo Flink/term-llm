@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/term-llm/term-llm/internal/acp"
 	"github.com/term-llm/term-llm/internal/llm/core"
 )
 
@@ -427,6 +428,69 @@ func TestVibeBinProviderResumesImportedSession(t *testing.T) {
 	}
 	if prompt := log[strings.Index(log, `"method":"session/prompt"`):]; strings.Contains(prompt, "old question") || !strings.Contains(prompt, "follow up") {
 		t.Fatalf("resumed prompt must carry only the new turn:\n%s", prompt)
+	}
+}
+
+func TestVibeBinProviderACPUsesTurnMCPBridge(t *testing.T) {
+	logPath := installFakeVibeACP(t)
+	p := NewVibeBinProvider("glm-5-3", nil)
+	defer p.CleanupMCP()
+	p.SetToolExecutor(func(context.Context, string, json.RawMessage) (core.ToolOutput, error) {
+		return core.ToolOutput{}, nil
+	})
+
+	req := core.Request{Messages: []core.Message{core.UserText("first")}, Tools: []core.ToolSpec{{Name: "first_tool", Schema: map[string]any{"type": "object"}}}}
+	collectVibeTestEvents(t, p, req)
+	first := p.mcpBridge.current()
+	if !first.enabled() {
+		t.Fatal("first turn did not start an MCP bridge")
+	}
+	collectVibeTestEvents(t, p, core.Request{Ephemeral: true, Messages: []core.Message{core.UserText("temporary")}})
+	if p.mcpBridge.current() != first {
+		t.Fatal("tool-free ephemeral turn did not keep the bridge")
+	}
+
+	req.Messages = append(req.Messages, core.UserText("follow up"))
+	req.Tools = append(req.Tools, core.ToolSpec{Name: "second_tool", Schema: map[string]any{"type": "object"}})
+	collectVibeTestEvents(t, p, req)
+	rotated := p.mcpBridge.current()
+	if !rotated.enabled() || rotated.token == first.token {
+		t.Fatal("changed tool surface did not rotate the bridge")
+	}
+	assertACPTurnMCPServers(t, logPath, []string{"session/new", "session/new", "session/load"}, []cliMCPEndpoint{first, {}, rotated})
+}
+
+func assertACPTurnMCPServers(t *testing.T, logPath string, methods []string, endpoints []cliMCPEndpoint) {
+	t.Helper()
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := 0
+	for _, line := range strings.Split(string(log), "\n") {
+		var request struct {
+			Method string
+			Params acp.NewSessionRequest
+		}
+		if json.Unmarshal([]byte(line), &request) != nil || (request.Method != "session/new" && request.Method != "session/load") {
+			continue
+		}
+		if i >= len(methods) || request.Method != methods[i] {
+			t.Fatalf("session request %d: unexpected %q", i, request.Method)
+		}
+		servers := request.Params.MCPServers
+		endpoint := endpoints[i]
+		if endpoint.enabled() {
+			if len(servers) != 1 || servers[0].URL != endpoint.url || len(servers[0].Headers) != 1 || servers[0].Headers[0] != (acp.Header{Name: "Authorization", Value: "Bearer " + endpoint.token}) {
+				t.Fatalf("session request %d did not receive the current authenticated endpoint", i)
+			}
+		} else if len(servers) != 0 {
+			t.Fatalf("session request %d exposed %d MCP servers on a tool-free turn", i, len(servers))
+		}
+		i++
+	}
+	if i != len(methods) {
+		t.Fatalf("got %d session requests, want %d", i, len(methods))
 	}
 }
 

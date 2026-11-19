@@ -4,18 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/term-llm/term-llm/internal/llm/core"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/term-llm/term-llm/internal/llm/core"
 )
 
 type fakeAgyIsolation struct {
 	started bool
 	require bool
 	env     map[string]string
+	onStop  func()
 }
 
 func (f *fakeAgyIsolation) SetUpstream(string, string) {}
@@ -28,7 +31,85 @@ func (f *fakeAgyIsolation) FilteredGenerations() int64 {
 	return 0
 }
 func (f *fakeAgyIsolation) Environment() map[string]string { return f.env }
-func (f *fakeAgyIsolation) Stop(context.Context) error     { f.started = false; return nil }
+func (f *fakeAgyIsolation) Stop(context.Context) error {
+	if f.onStop != nil {
+		f.onStop()
+	}
+	f.started = false
+	return nil
+}
+
+func TestAgyCleanupMCPAfterEventDone(t *testing.T) {
+	binary := writeAgyTestScript(t, `
+if [ "${1:-}" = --version ]; then
+  printf '%s\n' '1.3.3'
+  exit 0
+fi
+IFS= read -r input
+`+agyTestSuccessEvents)
+	t.Setenv("PATH", filepath.Dir(binary)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	p := NewAgyBinProvider("", nil)
+	p.realHome = t.TempDir()
+	credential := filepath.Join(p.realHome, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+	if err := os.MkdirAll(filepath.Dir(credential), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(credential, []byte("test-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.SetToolExecutor(testMCPExecutor)
+	t.Cleanup(p.CleanupMCP)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// Hold the stream defer open so EventDone is observed while it is still active.
+	resume := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(resume) })
+	p.isolation = &fakeAgyIsolation{onStop: func() {
+		select {
+		case <-resume:
+		case <-ctx.Done():
+		}
+	}}
+	stream, err := p.Stream(ctx, core.Request{
+		Messages: []core.Message{core.UserText("prompt")},
+		Tools:    []core.ToolSpec{testMCPTool("alpha")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		unblock()
+		_ = stream.Close()
+	}()
+	for {
+		event, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("receiving EventDone: %v", err)
+		}
+		if event.Type == core.EventError {
+			t.Fatal(event.Err)
+		}
+		if event.Type == core.EventDone {
+			break
+		}
+	}
+
+	endpoint := p.mcpBridge.current()
+	if !endpoint.enabled() {
+		t.Fatal("stream did not start an MCP bridge")
+	}
+	p.CleanupMCP()
+	if p.mcpBridge.current() != endpoint {
+		t.Fatal("CleanupMCP retired the bridge before the active stream exited")
+	}
+	unblock()
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertBridgeRetired(t, endpoint)
+}
 
 func TestAgyOversizedStdoutCancelsProcess(t *testing.T) {
 	home := t.TempDir()
@@ -411,8 +492,7 @@ func TestBuildAgyPromptIdentifiesActualWorkspace(t *testing.T) {
 func TestAgyMCPConfigIsPrivate(t *testing.T) {
 	p := NewAgyBinProvider("", nil)
 	p.agyHome = t.TempDir()
-	p.mcpURL = "http://127.0.0.1:1234/mcp"
-	p.mcpToken = "secret"
+	endpoint := cliMCPEndpoint{url: "http://127.0.0.1:1234/mcp", token: "secret"}
 	if err := ensureAgyHomeLayout(p.agyHome); err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +508,7 @@ func TestAgyMCPConfigIsPrivate(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := p.writeMCPConfigs(true); err != nil {
+	if err := p.writeMCPConfigs(endpoint); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(p.agyHome, ".gemini", "config", "mcp_config.json")
@@ -453,7 +533,7 @@ func TestAgyMCPConfigIsPrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := cfg.MCPServers[agyMCPServerName]
-	if server.URL != p.mcpURL || server.Headers["Authorization"] != "Bearer secret" {
+	if server.URL != endpoint.url || server.Headers["Authorization"] != "Bearer secret" {
 		t.Fatalf("config = %s", data)
 	}
 	for _, path := range legacy {
