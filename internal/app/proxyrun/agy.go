@@ -28,6 +28,63 @@ func agyConfiguredConnection(cfg *config.Config) (Connection, bool, error) {
 	return Connection{Root: binding.Root, Token: binding.Token}, true, err
 }
 
+// ResolveConfiguredAgyConnection returns the explicitly bound agy-bin route, if
+// any. A configured but invalid binding is an error: it never falls back to a
+// local Antigravity login.
+func ResolveConfiguredAgyConnection(cfg *config.Config) (Connection, bool, error) {
+	return agyConfiguredConnection(cfg)
+}
+
+// AgySharedOutput runs one non-interactive agy command as a shared worker in a
+// fresh private HOME routed through the scoped proxy and returns its stdout.
+// Native stderr is discarded because the child environment embeds the scoped
+// token; failures never fall back to the installed agy login.
+func AgySharedOutput(ctx context.Context, connection Connection, binary string, args ...string) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(connection.Root) == "" {
+		return nil, errors.New("Antigravity proxy command requires a scoped proxy connection (no direct fallback)")
+	}
+	if err := proxyclient.ValidateAgyNativeToken(connection.Token); err != nil {
+		return nil, err
+	}
+	stateDir, err := proxyclient.AgyNativeStateDir(connection.Root, connection.Token)
+	if err != nil {
+		return nil, err
+	}
+	proxy, err := proxyclient.PrepareAgyNativeProxy(ctx, connection.Root, connection.Token, stateDir)
+	if err != nil {
+		return nil, err
+	}
+	if !proxy.HasSharedIdentity() {
+		return nil, errors.New("Antigravity proxy route has no shared sign-in yet; complete the operator sign-in first (no direct fallback)")
+	}
+	home, cleanup, err := prepareAgyLauncherHome(stateDir, proxy, false)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	proxy, err = proxy.WithSystemTrust()
+	if err != nil {
+		return nil, err
+	}
+	env := proxyclient.AgyNativeEnvironment(os.Environ(), home, proxy)
+	if err := proxyclient.CheckAgyNativeVersion(ctx, binary, home, env); err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Env, cmd.Dir, cmd.WaitDelay = env, home, childWaitDelay
+	out, err := cmd.Output()
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("agy through the Antigravity proxy was canceled or timed out: %w", ctxErr)
+		}
+		return nil, errors.New("agy failed through the Antigravity proxy; check agy version, shared operator sign-in and route grant")
+	}
+	return out, nil
+}
+
 // RunAgy launches native Antigravity with inherited stdin/stdout and a fresh,
 // private Linux HOME for either shared use or operator enrollment.
 func RunAgy(ctx context.Context, opts Options) error {

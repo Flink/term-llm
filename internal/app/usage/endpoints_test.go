@@ -53,29 +53,15 @@ func TestGrokUsageRejectsImplicitLegacyRoot(t *testing.T) {
 	}
 }
 
-func TestExplicitAgyProxyUsageDoesNotTouchLocalLogin(t *testing.T) {
-	old := loadProviderUsageConfig
-	t.Cleanup(func() { loadProviderUsageConfig = old })
-	loadProviderUsageConfig = func() (*config.Config, error) {
-		return &config.Config{Providers: map[string]config.ProviderConfig{
-			"agy-bin": {ProxyBinding: "https://proxy.example.test/agy"},
-		}}, nil
-	}
-	if err := refuseLocalProxyAllowance("agy-bin"); err == nil || !strings.Contains(err.Error(), "not available in this proxy mode") {
-		t.Fatalf("explicit Antigravity binding did not block the direct quota command: %v", err)
-	}
-}
-
 func TestClaudeProxyUsageDoesNotRelaxOtherProviderAllowance(t *testing.T) {
 	old := loadProviderUsageConfig
 	t.Cleanup(func() { loadProviderUsageConfig = old })
 	loadProviderUsageConfig = func() (*config.Config, error) {
 		return &config.Config{Proxy: config.ProxyConfig{URL: "https://proxy.example.test"}, Providers: map[string]config.ProviderConfig{
 			"cursor-bin": {ProxyBinding: "https://proxy.example.test/cursor"},
-			"agy-bin":    {ProxyBinding: "https://proxy.example.test/agy"},
 		}}, nil
 	}
-	for _, provider := range []string{"cursor-bin", "agy-bin"} {
+	for _, provider := range []string{"cursor-bin"} {
 		if err := refuseLocalProxyAllowance(provider); err == nil || !strings.Contains(err.Error(), "not available in this proxy mode") {
 			t.Fatalf("%s allowance refusal = %v", provider, err)
 		}

@@ -251,6 +251,10 @@ endpoint `GET /oauth2/v2/userinfo` on `www.googleapis.com`. It does not proxy
 arbitrary Google APIs or browser traffic. See [Forwarding behavior](#forwarding-behavior) for the worker
 isolation requirements.
 
+`term-llm usage -p agy-bin` runs agy's read-only `/usage` command through the
+same binding, as a shared worker in a fresh private profile. It reports the
+shared subscription's quota and does not fall back to your local agy login.
+
 ### Upgrade an existing native route
 
 The proxy’s schema v8 upgrade keeps routes, client tokens, grants, and existing

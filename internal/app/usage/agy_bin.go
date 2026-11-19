@@ -79,7 +79,8 @@ func validateAgyBinUsageFlags(cmd interface{ Flags() *pflag.FlagSet }) error {
 }
 
 func runAgyBinUsage(parent context.Context, out io.Writer, jsonOutput bool) error {
-	if err := refuseLocalProxyAllowance("agy-bin"); err != nil {
+	connection, proxied, err := configuredAgyUsageProxy()
+	if err != nil {
 		return err
 	}
 	binary, err := agyUsageLookPath("agy")
@@ -92,12 +93,20 @@ func runAgyBinUsage(parent context.Context, out io.Writer, jsonOutput bool) erro
 	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
 
-	output, err := agyUsageCommand(ctx, binary)
+	var output []byte
+	if proxied {
+		output, err = agyUsageProxiedCommand(ctx, binary, connection)
+	} else {
+		output, err = agyUsageCommand(ctx, binary)
+	}
 	if err != nil {
 		return err
 	}
 	raw, report, err := parseAgyBinUsageOutput(output)
 	if err != nil {
+		if proxied {
+			return redactAgyProxyToken(err, connection.Token)
+		}
 		return err
 	}
 	if jsonOutput {
@@ -108,7 +117,11 @@ func runAgyBinUsage(parent context.Context, out io.Writer, jsonOutput bool) erro
 		_, err := fmt.Fprintln(out, pretty.String())
 		return err
 	}
-	return writeAgyBinUsageWithOptions(out, report, time.Now(), providerUsageFormatOptions(out))
+	source := "Live from agy"
+	if proxied {
+		source = "Live through credential proxy"
+	}
+	return writeAgyBinUsageWithSource(out, report, time.Now(), providerUsageFormatOptions(out), source)
 }
 
 func runAgyUsageCommand(ctx context.Context, binary string) ([]byte, error) {
@@ -195,10 +208,15 @@ func parseAgyBinUsageOutput(output []byte) (json.RawMessage, agyBinUsageReport, 
 }
 
 func writeAgyBinUsageWithOptions(out io.Writer, report agyBinUsageReport, now time.Time, opts providerusage.FormatOptions) error {
+	return writeAgyBinUsageWithSource(out, report, now, opts, "Live from agy")
+}
+
+func writeAgyBinUsageWithSource(out io.Writer, report agyBinUsageReport, now time.Time, opts providerusage.FormatOptions, source string) error {
 	providerReport, err := normalizeAgyBinUsage(report)
 	if err != nil {
 		return err
 	}
+	providerReport.Source = source
 	_, err = fmt.Fprintln(out, providerusage.FormatWithOptions(providerReport, now, opts))
 	return err
 }
