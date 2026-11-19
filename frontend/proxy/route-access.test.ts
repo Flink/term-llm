@@ -16,7 +16,6 @@ import {
   type ProxyRouteRule,
   type ProxyState,
 } from '../src/api/proxy-client';
-import type { PasskeyPlatform } from '../src/hub/platform/passkeys';
 import type { UIContext } from './dom';
 import { routeAccess } from './route-access';
 
@@ -134,12 +133,7 @@ function fixture(state = snapshot(), overrides: Partial<UIContext> = {}) {
     hasProtectedToken: () => false,
     ...overrides,
   };
-  const platform: PasskeyPlatform = {
-    available: () => true,
-    get: vi.fn().mockResolvedValue({ id: 'assertion' }),
-    create: vi.fn(),
-  };
-  const root = routeAccess(state.routes[0], state, api, context, platform);
+  const root = routeAccess(state.routes[0], state, api, context);
   document.body.append(root);
   return {
     api,
@@ -148,7 +142,6 @@ function fixture(state = snapshot(), overrides: Partial<UIContext> = {}) {
     announce,
     refresh,
     protectToken,
-    platform,
     updateCaller,
     createCaller,
   };
@@ -163,18 +156,16 @@ it('offers Grant access when no active client holds the route and expands inline
   const toggle = getByRole(root, 'button', { name: 'Grant access for route openai' });
   expect(toggle).toHaveAttribute('aria-expanded', 'false');
   expect(toggle).toHaveTextContent('Grant access');
-  expect(root).toHaveTextContent('No client can use this route yet.');
+  expect(root).toHaveTextContent('No clients yet.');
   expect(root.querySelector<HTMLElement>('.route-access-panel')!.hidden).toBe(true);
 
   fireEvent.click(toggle);
   expect(toggle).toHaveAttribute('aria-expanded', 'true');
   expect(root.querySelector<HTMLElement>('.route-access-panel')!.hidden).toBe(false);
-  expect(root).toHaveTextContent('No client has a grant for this route.');
-  expect(root).toHaveTextContent(
-    'No clients exist yet. Create a client below to connect a device.',
-  );
+  expect(root).toHaveTextContent('None.');
+  expect(root).not.toHaveTextContent('Add existing client');
   expect(queryByLabelText(root, 'Client')).toBeNull();
-  expect(getByRole(root, 'heading', { name: 'Current access' })).toHaveFocus();
+  expect(getByRole(root, 'heading', { name: 'Clients' })).toHaveFocus();
   const name = getByLabelText(root, 'Client name');
   fireEvent.input(name, { target: { value: 'Phone' } });
   fireEvent.click(getByRole(root, 'button', { name: 'Close' }));
@@ -190,9 +181,8 @@ it('counts only active clients and lists each grant plus its other routes before
   expect(getByRole(root, 'button', { name: 'Manage access for route openai' })).toHaveTextContent(
     'Manage access',
   );
-  expect(root).toHaveTextContent('1 client can use this route.');
+  expect(root.querySelector('.route-access-status')).toHaveTextContent('Laptop');
   open(root);
-  expect(root).toHaveTextContent('Also has 1 other route grant: docs');
 
   const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
   const remove = getByRole(root, 'button', { name: /Remove Laptop’s access to openai/ });
@@ -230,6 +220,28 @@ it('grants an existing client this route without reissuing its token or dropping
   );
 });
 
+it('offers one click to grant missing companion routes', async () => {
+  const laptop = caller({ id: 'lap', name: 'Laptop', grants: ['chatgpt', 'venice'] });
+  const state = snapshot({
+    routes: [
+      chatgptRoute,
+      { ...chatgptRoute, name: 'chatgpt-backend', local_prefix: '/chatgpt-backend/' },
+    ],
+    presets: [
+      { id: 'chatgpt', companions: ['chatgpt-backend', 'chatgpt-openai'] },
+    ] as ProxyState['presets'],
+    callers: [laptop],
+  });
+  const { root, updateCaller, refresh } = fixture(state);
+  open(root);
+  // chatgpt-openai does not exist as a route, so it is not offered.
+  fireEvent.click(getByRole(root, 'button', { name: 'Grant Laptop access to chatgpt-backend' }));
+  await waitFor(() =>
+    expect(updateCaller).toHaveBeenCalledWith('lap', ['chatgpt', 'venice', 'chatgpt-backend'], 7),
+  );
+  expect(refresh).toHaveBeenCalledWith('route:chatgpt');
+});
+
 it('creates a route-scoped client, shows the token once, and guards dismissal', async () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
@@ -265,7 +277,9 @@ it('creates a route-scoped client, shows the token once, and guards dismissal', 
   await waitFor(() => expect(writeText).toHaveBeenCalledWith('sk-tlp-once-only'));
 
   // A successful reconciliation must not replace the only copy of the token.
-  await waitFor(() => expect(root).toHaveTextContent('1 client can use this route.'));
+  await waitFor(() =>
+    expect(root.querySelector('.route-access-status')).toHaveTextContent('Phone'),
+  );
   expect(token.value).toBe('sk-tlp-once-only');
 
   fireEvent.click(getByRole(root, 'button', { name: 'I saved it — dismiss' }));
@@ -413,22 +427,16 @@ it('refuses token issuance, grants, and removals while another token is on scree
   expect(refresh).not.toHaveBeenCalled();
 });
 
-it('reauthenticates with a passkey before writing grants', async () => {
-  const { api, root, platform, updateCaller } = fixture(
+it('writes grants in passkey mode without a second passkey prompt', async () => {
+  const { api, root, updateCaller } = fixture(
     snapshot({ auth: 'passkey', callers: [caller({ grants: ['openai', 'docs'] })] }),
   );
-  vi.spyOn(api, 'beginAssertion').mockResolvedValue({ publicKey: { challenge: 'x' } } as never);
-  vi.spyOn(api, 'finishPasskey').mockResolvedValue();
+  const begin = vi.spyOn(api, 'beginAssertion');
   vi.spyOn(window, 'confirm').mockReturnValue(true);
   open(root);
   fireEvent.click(getByRole(root, 'button', { name: /Remove Laptop’s access to openai/ }));
-  await waitFor(() => expect(api.beginAssertion).toHaveBeenCalledWith('reauth'));
-  expect(platform.get).toHaveBeenCalled();
-  expect(api.finishPasskey).toHaveBeenCalledWith(
-    'reauth',
-    expect.objectContaining({ id: 'assertion' }),
-  );
   await waitFor(() => expect(updateCaller).toHaveBeenCalledWith('laptop', ['docs'], 7));
+  expect(begin).not.toHaveBeenCalled();
 });
 
 it('refreshes route state without replaying a stale grant write', async () => {

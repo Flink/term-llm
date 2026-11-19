@@ -15,6 +15,7 @@ type accountInput struct {
 	Kind        string             `json:"kind,omitempty"`
 	Region      string             `json:"region,omitempty"`
 	Replace     bool               `json:"replace,omitempty"`
+	Remove      bool               `json:"remove,omitempty"`
 	Credentials accountCredentials `json:"credentials,omitempty"`
 }
 
@@ -36,9 +37,6 @@ func (s *Service) accountsAPI(w http.ResponseWriter, r *http.Request, sess sessi
 		fail(w, 400, "Account name must be a slug")
 		return
 	}
-	if s.passkey != nil && !s.consumeRecentAuth(w, sess) {
-		return
-	}
 	unlock, lockErr := s.accountLock(r.Context(), in.Name)
 	if lockErr != nil {
 		fail(w, 503, "Account operation canceled")
@@ -57,6 +55,10 @@ func (s *Service) accountsAPI(w http.ResponseWriter, r *http.Request, sess sessi
 	if r.Method == http.MethodDelete {
 		if !exists {
 			fail(w, 404, "Account not found")
+			return
+		}
+		if in.Remove {
+			s.removeAccountLocked(w, r, old)
 			return
 		}
 		next := old

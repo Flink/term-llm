@@ -1,7 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { fireEvent, getByLabelText, getByRole, waitFor } from '@testing-library/preact';
 import { ProxyClient, type ProxyRoute, type ProxyState } from '../src/api/proxy-client';
-import type { PasskeyPlatform } from '../src/hub/platform/passkeys';
 import { providerOnboarding, providerRouteAction } from './provider-onboarding';
 import type { UIContext } from './dom';
 
@@ -60,7 +59,6 @@ function fixture(reconnect = false) {
       }
     },
   };
-  const platform: PasskeyPlatform = { available: () => true, create: vi.fn(), get: vi.fn() };
   const close = vi.fn();
   vi.spyOn(api, 'startChatGPTSetup').mockResolvedValue({
     id: 'attempt',
@@ -69,8 +67,8 @@ function fixture(reconnect = false) {
   });
   vi.spyOn(api, 'cancelChatGPTSetup').mockResolvedValue();
   const view = reconnect
-    ? (providerRouteAction(route, state, api, context, platform)! as HTMLDetailsElement)
-    : providerOnboarding(preset, state, api, context, platform, close)!;
+    ? (providerRouteAction(route, state, api, context)! as HTMLDetailsElement)
+    : providerOnboarding(preset, state, api, context, close)!;
   if (view instanceof HTMLDetailsElement) view.open = true;
   document.body.append(view);
   return { api, view, close, errors, context };

@@ -166,6 +166,12 @@ func accountRequestAllowed(a accountRecord, req *http.Request, r activeRoute) bo
 	var rules []string
 	switch a.Kind {
 	case "chatgpt":
+		// ChatGPT's WebRTC call uses /v1/live/<call-id>, not the public
+		// Realtime API's /v1/realtime WebSocket. Scope it to a single call
+		// segment and keep the route's allowlist and upgrade checks in force.
+		if callID, ok := strings.CutPrefix(p, "/v1/live/"); ok {
+			return r.origin == "https://api.openai.com:443" && r.WebSocket && validWebsocketRequest(req) && callID != "" && !strings.Contains(callID, "/")
+		}
 		rules = []string{"POST /backend-api/codex/responses", "GET /backend-api/codex/responses", "GET /backend-api/codex/models", "POST /backend-api/codex/images/generations", "POST /backend-api/codex/images/edits", "POST /backend-api/codex/realtime/calls", "POST /backend-api/transcribe", "GET /backend-api/wham/usage", "POST /v1/embeddings", "POST /v1/realtime/calls", "GET /v1/realtime"}
 	case "grok":
 		rules = []string{"POST /v1/responses", "POST /v1/chat/completions", "GET /v1/models", "GET /v1/billing"}

@@ -5,10 +5,8 @@ import {
   type ProxyRoute,
   type ProxyState,
 } from '../src/api/proxy-client';
-import type { PasskeyPlatform } from '../src/hub/platform/passkeys';
 import { isClaudeRoute } from './claude';
 import { actions, button, dateTime, el, field, input, select, submit, type UIContext } from './dom';
-import { assertPasskey } from './passkeys';
 import { authLabel, joinLocalPrefix, routeRules } from './route-rules';
 import { callerCurl } from './security';
 
@@ -16,6 +14,13 @@ let panelSequence = 0;
 
 function grantedClients(state: ProxyState, route: ProxyRoute): ProxyCaller[] {
   return state.callers.filter((caller) => !caller.revoked && caller.grants.includes(route.name));
+}
+
+// Sibling routes (for example chatgpt-backend) that clients reach by fixed name
+// beside this preset route. Only routes that exist are returned.
+function companionRoutes(state: ProxyState, route: ProxyRoute): string[] {
+  const preset = state.presets?.find((value) => value.id === route.name);
+  return (preset?.companions ?? []).filter((name) => state.routes.some((r) => r.name === name));
 }
 
 // Use the built-in CLI name only when the route matches its preset. A custom
@@ -115,7 +120,6 @@ export function routeAccess(
   state: ProxyState,
   api: ProxyClient,
   context: UIContext,
-  platform: PasskeyPlatform,
 ): HTMLElement {
   let current = state;
   const native = isClaudeRoute(route, current);
@@ -150,8 +154,8 @@ export function routeAccess(
     toggle.textContent = label;
     toggle.setAttribute('aria-label', `${label} for route ${route.name}`);
     status.textContent = granted.length
-      ? `${granted.length} ${granted.length === 1 ? 'client' : 'clients'} can use this route.`
-      : 'No client can use this route yet.';
+      ? granted.map((caller) => caller.name).join(', ')
+      : 'No clients yet.';
     toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
   }
 
@@ -163,7 +167,6 @@ export function routeAccess(
   }
 
   async function mutate<T>(operation: () => Promise<T>): Promise<T> {
-    if (current.auth === 'passkey') await assertPasskey(api, platform, 'reauth');
     try {
       return await operation();
     } catch (error) {
@@ -188,7 +191,7 @@ export function routeAccess(
     const consequence = others.length
       ? `Remove ${caller.name}’s access to ${route.name}? Its token and its grants for ${others.join(', ')} stay valid. New requests to ${route.name} are blocked; dispatched requests may continue.${nativeNote}`
       : `Remove ${caller.name}’s access to ${route.name}? This is its only route grant. Its token stays valid but can make no new requests; dispatched requests may continue.${nativeNote}`;
-    const remove = button('Remove access', () => {
+    const remove = button('Remove', () => {
       if (tokenGuard('Save or dismiss the open one-time client token before removing access.'))
         return;
       if (!window.confirm(consequence)) return;
@@ -207,32 +210,51 @@ export function routeAccess(
     return remove;
   }
 
+  // One click grants the sibling routes this client is missing.
+  function addCompanions(caller: ProxyCaller, missing: string[]): HTMLButtonElement {
+    const add = button(`Add ${missing.join(', ')}`, () => {
+      if (
+        tokenGuard('Save or dismiss the open one-time client token before granting route access.')
+      )
+        return;
+      void context.run(async () => {
+        await mutate(() =>
+          api.updateCaller(caller.id, [...caller.grants, ...missing], current.revision),
+        );
+        await context.refresh(`route:${route.name}`);
+        context.announce(`Granted ${caller.name} access to ${missing.join(', ')}.`);
+      }, add);
+    });
+    add.setAttribute('aria-label', `Grant ${caller.name} access to ${missing.join(', ')}`);
+    return add;
+  }
+
   function currentAccess(): HTMLElement {
     const granted = clients();
-    const section = el('div', el('h4', 'Current access'));
+    const section = el('div', el('h4', 'Clients'));
     section.className = 'route-access-current';
     if (!granted.length) {
-      section.append(el('p', 'No client has a grant for this route.'));
+      section.append(el('p', 'None.'));
       return section;
     }
+    const companions = companionRoutes(current, route);
     const list = el('ul');
     list.className = 'route-access-clients';
     for (const caller of granted) {
-      const others = caller.grants.filter((grant) => grant !== route.name);
+      const missing = companions.filter((name) => !caller.grants.includes(name));
+      const buttons = actions(
+        ...(missing.length ? [addCompanions(caller, missing)] : []),
+        removeAccess(caller),
+      );
       const item = el(
         'li',
-        el('strong', caller.name),
         el(
-          'small',
-          `Last used ${dateTime(caller.last_used)} · Created ${dateTime(caller.created, 'Unknown')}`,
+          'span',
+          el('strong', caller.name),
+          ' ',
+          el('small', caller.last_used ? `used ${dateTime(caller.last_used)}` : 'never used'),
         ),
-        el(
-          'small',
-          others.length
-            ? `Also has ${others.length} other route ${others.length === 1 ? 'grant' : 'grants'}: ${others.join(', ')}`
-            : 'This route is its only grant.',
-        ),
-        removeAccess(caller),
+        buttons,
       );
       item.className = 'route-access-client';
       list.append(item);
@@ -241,23 +263,13 @@ export function routeAccess(
     return section;
   }
 
-  function grantExisting(): HTMLElement {
+  function grantExisting(): HTMLElement | undefined {
     const eligible = current.callers.filter(
       (caller) => !caller.revoked && !caller.grants.includes(route.name),
     );
-    const section = el('div', el('h4', 'Grant an existing client'));
+    if (!eligible.length) return undefined;
+    const section = el('div', el('h4', 'Add existing client'));
     section.className = 'route-access-grant';
-    if (!eligible.length) {
-      section.append(
-        el(
-          'p',
-          current.callers.some((caller) => !caller.revoked)
-            ? 'Every active client can already use this route. Create a client below to connect another device.'
-            : 'No clients exist yet. Create a client below to connect a device.',
-        ),
-      );
-      return section;
-    }
     const choice = select([
       ['', 'Choose a client'],
       ...eligible.map(
@@ -270,15 +282,7 @@ export function routeAccess(
           ] as [string, string],
       ),
     ]);
-    const form = el(
-      'form',
-      field(
-        'Client',
-        choice,
-        'Only clients without access to this route are listed. Revoked clients cannot receive grants.',
-      ),
-      el('p', 'Its token and other grants stay unchanged; only this route is added.'),
-    );
+    const form = el('form', field('Client', choice));
     submit(
       form,
       context,
@@ -385,19 +389,12 @@ export function routeAccess(
   }
 
   function createClient(): HTMLElement {
-    const section = el('div', el('h4', 'Create a client for this route'));
+    const section = el('div', el('h4', 'New client'));
     section.className = 'route-access-create';
     const name = input();
     name.required = true;
     name.maxLength = 80;
-    const form = el(
-      'form',
-      field(
-        'Client name',
-        name,
-        'Name the device or application that will use this route. It gets this route only; add more routes later under Clients.',
-      ),
-    );
+    const form = el('form', field('Client name', name));
     submit(
       form,
       context,
@@ -410,7 +407,6 @@ export function routeAccess(
           return;
         const requested = name.value.trim();
         if (!requested) throw new Error('Enter a client name.');
-        if (current.auth === 'passkey') await assertPasskey(api, platform, 'reauth');
         context.protectToken(true, true);
         let issued = false;
         try {
@@ -467,12 +463,7 @@ export function routeAccess(
 
   function renderBody() {
     if (tokenShown) return;
-    const parts: HTMLElement[] = [
-      el(
-        'p',
-        'A grant lets one client token use this route’s upstream base URL. Other routes, providers and their credentials are unchanged.',
-      ),
-    ];
+    const parts: HTMLElement[] = [];
     if (native)
       parts.push(
         el(
@@ -496,7 +487,11 @@ export function routeAccess(
       );
     parts.push(currentAccess());
     if (native) parts.push(nativeGuidance());
-    else parts.push(grantExisting(), createClient());
+    else {
+      const existing = grantExisting();
+      if (existing) parts.push(existing);
+      parts.push(createClient());
+    }
     parts.push(
       actions(
         button('Close', () => {

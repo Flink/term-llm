@@ -1,7 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { fireEvent, getByLabelText, getByRole, waitFor } from '@testing-library/preact';
 import { ProxyClient, type ProxyAccount, type ProxyState } from '../src/api/proxy-client';
-import type { PasskeyPlatform } from '../src/hub/platform/passkeys';
 import type { UIContext } from './dom';
 import {
   accountControls,
@@ -36,21 +35,13 @@ function setup(auth: 'token' | 'passkey' = 'passkey', entry: ProxyAccount = acco
     protectToken: vi.fn(),
     navigate: vi.fn(),
   };
-  const platform: PasskeyPlatform = {
-    available: () => true,
-    create: vi.fn(),
-    get: vi.fn().mockResolvedValue({ id: 'assertion' }),
-  };
-  vi.spyOn(api, 'beginAssertion').mockResolvedValue({
-    publicKey: { challenge: 'fixture' },
-  } as never);
-  vi.spyOn(api, 'finishPasskey').mockResolvedValue();
+  vi.spyOn(api, 'beginAssertion');
   const state = { auth, accounts: [entry], routes: [] } as unknown as ProxyState;
-  const deps = { state, api, context: ctx, platform };
+  const deps = { state, api, context: ctx };
   const view = accountControls(deps, entry, ['home', 'home-backend']);
   view.open = true;
   document.body.append(view);
-  return { api, view, platform, announce, deps, ctx };
+  return { api, view, announce, deps, ctx };
 }
 afterEach(() => {
   document.body.replaceChildren();
@@ -63,7 +54,7 @@ it('shows account status and every route sharing it without credential fields', 
   expect(view.textContent).toContain('Shared by routes home, home-backend.');
   expect(view.querySelector('input')).toBeNull();
 });
-it('clears credential paste before fresh passkey authentication and replacement', async () => {
+it('clears credential paste before replacement without a second passkey prompt', async () => {
   const { api, view } = setup();
   fireEvent.click(getByRole(view, 'button', { name: 'Replace credentials' }));
   const paste = getByLabelText(view, 'Paste credential JSON (write-only)') as HTMLInputElement;
@@ -77,13 +68,10 @@ it('clears credential paste before fresh passkey authentication and replacement'
   };
   paste.value = JSON.stringify(credentials);
   vi.spyOn(window, 'confirm').mockReturnValue(true);
-  vi.mocked(api.beginAssertion).mockImplementation(async () => {
+  const save = vi.spyOn(api, 'saveAccount').mockImplementation(async () => {
     expect(paste.value).toBe('');
-    return { publicKey: { challenge: 'fixture' } } as never;
+    return { account: { ...account, state: 'ready' } };
   });
-  const save = vi
-    .spyOn(api, 'saveAccount')
-    .mockResolvedValue({ account: { ...account, state: 'ready' } });
   fireEvent.click(getByRole(view, 'button', { name: 'Replace account credentials' }));
   await waitFor(() =>
     expect(save).toHaveBeenCalledWith({
@@ -93,34 +81,46 @@ it('clears credential paste before fresh passkey authentication and replacement'
       credentials,
     }),
   );
-  expect(api.beginAssertion).toHaveBeenCalledWith('reauth');
-  expect(api.finishPasskey).toHaveBeenCalledBefore(save);
+  expect(api.beginAssertion).not.toHaveBeenCalled();
   await waitFor(() => expect(view.textContent).toContain('ready'));
   expect(view.textContent).not.toContain('canary-');
 });
-it('does not send credentials when the fresh passkey prompt is cancelled', async () => {
-  const { api, view, platform } = setup();
-  fireEvent.click(getByRole(view, 'button', { name: 'Replace credentials' }));
-  const paste = getByLabelText(view, 'Paste credential JSON (write-only)') as HTMLInputElement;
-  paste.value = '{"access_token":"canary"}';
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
-  vi.mocked(platform.get).mockRejectedValue(new DOMException('canary-secret', 'NotAllowedError'));
-  const save = vi.spyOn(api, 'saveAccount');
-  fireEvent.click(getByRole(view, 'button', { name: 'Replace account credentials' }));
-  await waitFor(() => expect(platform.get).toHaveBeenCalled());
-  expect(save).not.toHaveBeenCalled();
-  expect(paste.value).toBe('');
-});
-it('uses fresh authentication for account sign-out too', async () => {
+it('signs out after confirmation without a second passkey prompt', async () => {
   const { api, view } = setup();
   const signOut = vi.spyOn(api, 'signOutAccount').mockResolvedValue({ account });
   vi.spyOn(window, 'confirm').mockReturnValue(true);
   fireEvent.click(getByRole(view, 'button', { name: 'Sign out account' }));
   await waitFor(() => expect(signOut).toHaveBeenCalledWith('home-chat'));
-  expect(api.finishPasskey).toHaveBeenCalledBefore(signOut);
+  expect(api.beginAssertion).not.toHaveBeenCalled();
   expect(window.confirm).toHaveBeenCalledWith(
     expect.stringContaining('Routes home, home-backend use it.'),
   );
+});
+it('removes only unused accounts, after confirmation', async () => {
+  const { api, view, deps, ctx } = setup();
+  expect(view.querySelector('button.danger')).toBeNull();
+  const unused = accountControls(deps, account);
+  unused.open = true;
+  document.body.append(unused);
+  const remove = vi.spyOn(api, 'removeAccount').mockResolvedValue({ removed: 'home-chat' });
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  fireEvent.click(getByRole(unused, 'button', { name: 'Remove account' }));
+  await waitFor(() => expect(remove).toHaveBeenCalledWith('home-chat'));
+  expect(api.beginAssertion).not.toHaveBeenCalled();
+  expect(deps.state.accounts).toEqual([]);
+  expect(unused.isConnected).toBe(false);
+  expect(ctx.refresh).toHaveBeenCalled();
+});
+it('sends the remove flag on account removal', async () => {
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValue(new Response(JSON.stringify({ removed: 'test' })));
+  await new ProxyClient(fetcher).removeAccount('test');
+  expect(fetcher.mock.calls[0]?.[1]?.method).toBe('DELETE');
+  expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+    name: 'test',
+    remove: true,
+  });
 });
 it('uses real account endpoint verbs and existing CSRF transport', async () => {
   const fetcher = vi

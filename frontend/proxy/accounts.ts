@@ -4,7 +4,6 @@ import type {
   ProxyClient,
   ProxyState,
 } from '../src/api/proxy-client';
-import type { PasskeyPlatform } from '../src/hub/platform/passkeys';
 import {
   actions,
   button,
@@ -18,7 +17,6 @@ import {
   submit,
   type UIContext,
 } from './dom';
-import { assertPasskey } from './passkeys';
 
 // Accept credentials only, never operator-only issuer/origin/client overrides.
 // Errors deliberately omit pasted content and JSON parser exception messages.
@@ -85,11 +83,6 @@ export interface AccountDeps {
   state: ProxyState;
   api: ProxyClient;
   context: UIContext;
-  platform: PasskeyPlatform;
-}
-
-async function freshAuth({ state, api, platform }: AccountDeps) {
-  if (state.auth === 'passkey') await assertPasskey(api, platform, 'reauth');
 }
 
 export interface AccountFormOptions {
@@ -173,7 +166,6 @@ export function accountForm(deps: AccountDeps, options: AccountFormOptions): HTM
         )
       )
         return;
-      await freshAuth(deps);
       const result = await api.saveAccount(payload);
       await options.stored(result.account);
       context.announce(
@@ -249,13 +241,33 @@ export function accountControls(
     )
       return;
     void context.run(async () => {
-      await freshAuth(deps);
       const result = await api.signOutAccount(current.name);
       await stored(result.account);
       context.announce('Account signed out. No credentials were returned.');
     }, signOut);
   });
-  details.append(status, metadata, shared, actions(replace, signOut), editor);
+  const buttons = [replace, signOut];
+  // Only an account no route uses can be removed; that frees its name.
+  if (!usedBy.length) {
+    const remove = button('Remove account', () => {
+      if (
+        !window.confirm(
+          `Remove ${current.name}? Its stored sign-in is deleted and the name becomes free to reuse.`,
+        )
+      )
+        return;
+      void context.run(async () => {
+        await api.removeAccount(current.name);
+        deps.state.accounts = (deps.state.accounts ?? []).filter((a) => a.name !== current.name);
+        details.remove();
+        await context.refresh();
+        context.announce(`Account ${current.name} removed.`);
+      }, remove);
+    });
+    remove.className = 'danger';
+    buttons.push(remove);
+  }
+  details.append(status, metadata, shared, actions(...buttons), editor);
   return details;
 }
 
@@ -322,7 +334,7 @@ export function unusedAccountsView(deps: AccountDeps): HTMLElement | undefined {
   if (!unused.length) return undefined;
   const view = card(
     'Unused accounts',
-    el('p', 'No route uses these accounts. Sign out any you no longer need.'),
+    el('p', 'No route uses these accounts. Remove any you no longer need.'),
     ...unused.map((account) => accountControls(deps, account)),
   );
   view.classList.add('unused-accounts');

@@ -7,7 +7,6 @@ import {
 } from '@testing-library/preact';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ProxyClient, type ProxyAdminKey, type ProxyState } from '../src/api/proxy-client';
-import type { SerializedPublicKeyCredential } from '../src/hub/domain/types';
 import { mountProxy } from './app';
 import { dateTime } from './dom';
 
@@ -18,8 +17,6 @@ const key: ProxyAdminKey = {
   last_used: 0,
 };
 const token = 'sk-tlpadm-synthetic-show-once';
-const credential = { id: 'test-credential' } as SerializedPublicKeyCredential;
-const assertion = { publicKey: { challenge: 'assertion' } };
 const disposals: (() => void)[] = [];
 
 afterEach(() => {
@@ -49,8 +46,6 @@ async function setup(overrides: Partial<ProxyState> = {}) {
     if (url === '/_proxy/api/auth/status')
       return Response.json({ auth: snapshot.auth, csrf: 'auth-csrf' });
     if (url === '/_proxy/api/state') return readState();
-    if (url === '/_proxy/api/auth/reauth/begin') return Response.json(assertion);
-    if (url === '/_proxy/api/auth/reauth/finish') return Response.json({ csrf: 'fresh-csrf' });
     if (url === '/_proxy/api/admin-keys' && init?.method === 'POST') {
       const result = await issue();
       if (result.ok) snapshot.admin_keys = [key];
@@ -65,7 +60,7 @@ async function setup(overrides: Partial<ProxyState> = {}) {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  const get = vi.fn().mockResolvedValue(credential);
+  const get = vi.fn();
   const root = document.createElement('div');
   document.body.append(root);
   disposals.push(
@@ -89,14 +84,8 @@ const browserLeave = () => {
   return event.defaultPrevented;
 };
 
-it('reauthenticates before issuing, protects the pending and shown token, then clears it on dismissal', async () => {
+it('issues without a second passkey prompt, protects the pending and shown token, then clears it on dismissal', async () => {
   const { root, issue, get, create, click, requests, mutation } = await setup();
-  let finishAssertion!: (value: SerializedPublicKeyCredential) => void;
-  get.mockReturnValueOnce(
-    new Promise((resolve) => {
-      finishAssertion = resolve;
-    }),
-  );
   let deliverToken!: (response: Response) => void;
   issue.mockReturnValueOnce(
     new Promise((resolve) => {
@@ -108,16 +97,13 @@ it('reauthenticates before issuing, protects the pending and shown token, then c
   vi.stubGlobal('navigator', Object.assign(Object.create(navigator), { clipboard: { writeText } }));
 
   create();
-  await waitFor(() => expect(get).toHaveBeenCalledWith(assertion));
-  expect(requests()).toEqual(['auth/reauth/begin']);
-  expect(issue).not.toHaveBeenCalled();
-  finishAssertion(credential);
   await waitFor(() => expect(issue).toHaveBeenCalledOnce());
-  expect(requests()).toEqual(['auth/reauth/begin', 'auth/reauth/finish', 'admin-keys']);
+  expect(get).not.toHaveBeenCalled();
+  expect(requests()).toEqual(['admin-keys']);
   expect(mutation()).toMatchObject({
     method: 'POST',
     credentials: 'same-origin',
-    headers: { 'X-CSRF-Token': 'fresh-csrf', 'Content-Type': 'application/json' },
+    headers: { 'X-CSRF-Token': 'state-csrf', 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: key.name }),
   });
   expect(browserLeave()).toBe(true);
@@ -152,13 +138,7 @@ it('reauthenticates before issuing, protects the pending and shown token, then c
   );
   expect(queryByLabelText(root, 'API key token')).toBeNull();
   expect(browserLeave()).toBe(false);
-  expect(requests()).toEqual([
-    'auth/reauth/begin',
-    'auth/reauth/finish',
-    'admin-keys',
-    'state',
-    'state',
-  ]);
+  expect(requests()).toEqual(['admin-keys', 'state', 'state']);
 });
 
 it('does not let a refresh started before issuance drop the pending token view', async () => {
@@ -188,7 +168,7 @@ it('does not let a refresh started before issuance drop the pending token view',
 });
 
 it.each([false, true])(
-  'confirms and reauthenticates before revoking (cascade %s)',
+  'confirms before revoking without a second passkey prompt (cascade %s)',
   async (cascade) => {
     const { root, get, click, requests, mutation } = await setup({ admin_keys: [key] });
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
@@ -208,33 +188,14 @@ it.each([false, true])(
         `Revoked API key ${key.name}. ${cascade ? 2 : 0} clients revoked.`,
       ),
     );
-    expect(get).toHaveBeenCalledOnce();
-    expect(requests()).toEqual(['auth/reauth/begin', 'auth/reauth/finish', 'admin-keys', 'state']);
+    expect(get).not.toHaveBeenCalled();
+    expect(requests()).toEqual(['admin-keys', 'state']);
     expect(mutation()).toMatchObject({
       method: 'DELETE',
-      headers: { 'X-CSRF-Token': 'fresh-csrf', 'Content-Type': 'application/json' },
+      headers: { 'X-CSRF-Token': 'state-csrf', 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: key.id, revoke_clients: cascade }),
     });
     expect(root).toHaveTextContent('No API keys yet.');
-  },
-);
-
-it.each(['create', 'revoke'])(
-  'does not %s a key after cancelled reauthentication',
-  async (action) => {
-    const { root, get, create, click, requests } = await setup({ admin_keys: [key] });
-    get.mockRejectedValueOnce(new DOMException('synthetic browser error', 'NotAllowedError'));
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    if (action === 'create') create();
-    else click(`Revoke API key ${key.name}`);
-    await waitFor(() =>
-      expect(getByRole(root, 'status')).toHaveTextContent(
-        'The passkey prompt was cancelled or timed out.',
-      ),
-    );
-    expect(requests()).toEqual(['auth/reauth/begin']);
-    expect(browserLeave()).toBe(false);
-    expect(queryByLabelText(root, 'API key token')).toBeNull();
   },
 );
 

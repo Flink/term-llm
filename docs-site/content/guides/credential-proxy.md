@@ -149,8 +149,7 @@ launcher does not use them and never edits your Claude settings.
 
 ## Provision clients with an admin API key
 
-In **Admin → API keys**, create a named key and save the token when shown. In
-passkey mode, creating or revoking a key requires fresh passkey confirmation.
+In **Admin → API keys**, create a named key and save the token when shown.
 Send the key as a Bearer token to `/_proxy/manage/v1/` over **loopback or HTTPS
 only**. Keep it in a secret store; do not use it from browser code.
 
@@ -289,7 +288,7 @@ protocol roots fail closed rather than contacting a public vendor endpoint.
 
 Under **Routes → Advanced**, manual credential JSON is still supported for
 `chatgpt`, `grok`, `copilot` and `aws-sigv4`. Use the guided sign-in for new
-ChatGPT plan routes. Passkey mode requires fresh consent for credential changes.
+ChatGPT plan routes.
 Select the account when creating its route. Credentials are write-only; metadata
 contains state, mode and expiry. Account-managed headers cannot also have static
 substitutions. Origins and API paths are restricted to that integration. Sign-out

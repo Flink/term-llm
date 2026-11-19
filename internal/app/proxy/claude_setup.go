@@ -40,10 +40,6 @@ func (s *Service) claudeSetupAPI(w http.ResponseWriter, r *http.Request, sess se
 		fail(w, 409, "Configuration changed in another tab; refresh before saving")
 		return
 	}
-	// One security operation, not separate account/config/client actions.
-	if s.passkey != nil && !s.consumeRecentAuth(w, sess) {
-		return
-	}
 	if r.Method == http.MethodDelete {
 		s.clearClaudeSetup(w, r)
 		return

@@ -697,6 +697,55 @@ button.route-preset-custom {
   margin: 0.65rem 0;
 }
 
+/* Route access: one compact row per client, actions at the end. */
+.route-access-status {
+  color: var(--muted);
+}
+
+.route-access-panel h4 {
+  margin: 0.75rem 0 0.3rem;
+  font-size: 0.84rem;
+}
+
+.route-access-clients {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.route-access-client {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.route-access-client:first-child {
+  border-top: 0;
+}
+
+.route-access-client small {
+  color: var(--muted);
+}
+
+.route-access-client > .actions {
+  margin: 0 0 0 auto;
+}
+
+.route-access-panel form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.5rem;
+}
+
+.route-access-panel form .field {
+  flex: 1 1 12rem;
+  margin: 0;
+}
+
 /* Clients: one line per client; expanding a row edits its grants. */
 .client-counts {
   margin-left: auto;

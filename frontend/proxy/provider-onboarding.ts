@@ -5,22 +5,15 @@ import type {
   ProxyRoute,
   ProxyState,
 } from '../src/api/proxy-client';
-import type { PasskeyPlatform } from '../src/hub/platform/passkeys';
 import { claudeConnectionDetails, isClaudeRoute } from './claude';
 import { actions, button, disclosure, el, field, input, submit, type UIContext } from './dom';
-import { assertPasskey } from './passkeys';
 
 const chatGPTDeviceURL = 'https://auth.openai.com/codex/device';
-
-async function freshAuth(state: ProxyState, api: ProxyClient, platform: PasskeyPlatform) {
-  if (state.auth === 'passkey') await assertPasskey(api, platform, 'reauth');
-}
 
 function chatGPTSignIn(
   state: ProxyState,
   api: ProxyClient,
   context: UIContext,
-  platform: PasskeyPlatform,
   close: () => void,
   route?: ProxyRoute,
 ): HTMLElement {
@@ -147,7 +140,6 @@ function chatGPTSignIn(
     form,
     context,
     async () => {
-      await freshAuth(state, api, platform);
       const requested = name.value.trim();
       const signIn = await api.startChatGPTSetup(
         route ? { account: route.account } : requested ? { name: requested } : {},
@@ -174,7 +166,6 @@ function claudeLauncherSetup(
   state: ProxyState,
   api: ProxyClient,
   context: UIContext,
-  platform: PasskeyPlatform,
   route?: ProxyRoute,
 ): HTMLElement {
   const view = el('div');
@@ -188,7 +179,6 @@ function claudeLauncherSetup(
       context.protectToken(true, true);
       let issued = false;
       try {
-        await freshAuth(state, api, platform);
         const connection = route
           ? await api.setupClaude(state.revision, route.name)
           : await api.setupClaude(state.revision);
@@ -229,11 +219,10 @@ export function providerOnboarding(
   state: ProxyState,
   api: ProxyClient,
   context: UIContext,
-  platform: PasskeyPlatform,
   close: () => void,
 ): HTMLElement | undefined {
-  if (preset.id === 'chatgpt') return chatGPTSignIn(state, api, context, platform, close);
-  if (preset.id === 'claude-code') return claudeLauncherSetup(state, api, context, platform);
+  if (preset.id === 'chatgpt') return chatGPTSignIn(state, api, context, close);
+  if (preset.id === 'claude-code') return claudeLauncherSetup(state, api, context);
 }
 
 export function providerRouteAction(
@@ -241,17 +230,16 @@ export function providerRouteAction(
   state: ProxyState,
   api: ProxyClient,
   context: UIContext,
-  platform: PasskeyPlatform,
 ): HTMLElement | undefined {
   if (state.mode === 'file') return;
   if (isClaudeRoute(route, state)) {
     if (!route.enabled) return;
-    return disclosure('Add device', claudeLauncherSetup(state, api, context, platform, route));
+    return disclosure('Add device', claudeLauncherSetup(state, api, context, route));
   }
   const account = (state.accounts ?? []).find((value) => value.name === route.account);
   if (account?.kind !== 'chatgpt') return;
   const details = disclosure(account.state === 'ready' ? 'Reconnect' : 'Sign-in needed');
-  details.append(chatGPTSignIn(state, api, context, platform, () => (details.open = false), route));
+  details.append(chatGPTSignIn(state, api, context, () => (details.open = false), route));
   return details;
 }
 
@@ -259,7 +247,6 @@ export function clearClaudeSetup(
   state: ProxyState,
   api: ProxyClient,
   context: UIContext,
-  platform: PasskeyPlatform,
 ): HTMLButtonElement {
   const clear = button('Clear all Claude setup', () => {
     if (context.hasProtectedToken?.()) {
@@ -273,7 +260,6 @@ export function clearClaudeSetup(
     )
       return;
     void context.run(async () => {
-      await freshAuth(state, api, platform);
       await api.clearClaude(state.revision);
       await context.refresh();
       context.announce('Claude proxy setup cleared. Other providers are unchanged.');

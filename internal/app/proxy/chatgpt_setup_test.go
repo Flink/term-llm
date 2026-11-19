@@ -342,9 +342,7 @@ func TestChatGPTSetupPasskeyAndSafeIssuerFailure(t *testing.T) {
 		return nil, errors.New("fixture-private-error")
 	}
 	b := newPasskeyBrowser(t, s)
-	_, reauth := bootstrapPasskey(t, b)
-	b.send("POST", chatGPTSetupPath, chatGPTSetupInput{}, 403)
-	reauth("reauth", 1)
+	_, _ = bootstrapPasskey(t, b)
 	w := b.send("POST", chatGPTSetupPath, chatGPTSetupInput{}, 201)
 	id := readChatGPTSetupReply[chatGPTSetupChallenge](t, w, 201).ID
 	s.chatgptSetup.workers.Wait()
@@ -353,5 +351,4 @@ func TestChatGPTSetupPasskeyAndSafeIssuerFailure(t *testing.T) {
 	if status.Status != "failed" || status.Error == "" {
 		t.Fatalf("issuer failure did not produce a safe error: %+v", status)
 	}
-	b.send("POST", chatGPTSetupPath, chatGPTSetupInput{Name: "second"}, 403)
 }

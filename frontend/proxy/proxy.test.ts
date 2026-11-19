@@ -533,7 +533,7 @@ describe('proxy admin DOM', () => {
     await waitFor(() => expect(root.textContent).toContain('upstream-key → X-Api-Key'));
     expect(root.textContent).toContain('HTTP · unencrypted');
     expect(root.textContent).toContain('Disabled');
-    expect(root.textContent).toContain('No client can use this route yet.');
+    expect(root.textContent).toContain('No clients yet.');
     expect(root.querySelector('.disabled-route')).not.toBeNull();
     expect(getByRole(root, 'button', { name: 'Add route' }).classList.contains('primary')).toBe(
       true,

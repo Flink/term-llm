@@ -74,7 +74,7 @@ func (s *Service) checkChatGPTSetupTarget(target chatGPTSetupTarget) (accountRec
 		return old, nil
 	}
 	if err == nil {
-		return old, &chatGPTSetupError{409, "An account with this name already exists; choose a different route name or reconnect the existing account"}
+		return old, &chatGPTSetupError{409, "An account named " + target.name + " already exists; remove it under Routes › Unused accounts, or choose a different route name"}
 	}
 	return old, s.checkNewChatGPTRoute(target.name)
 }

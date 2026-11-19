@@ -109,9 +109,6 @@ func (s *Service) beginChatGPTSetup(w http.ResponseWriter, r *http.Request, sess
 		fail(w, problem.code, problem.message)
 		return
 	}
-	if s.passkey != nil && !s.consumeRecentAuth(w, sess) {
-		return
-	}
 	challenge, problem := s.startChatGPTDevice(r.Context(), sess.expires, owner, target)
 	if problem != nil {
 		fail(w, problem.code, problem.message)

@@ -1,5 +1,4 @@
 import type { ProxyAccount, ProxyClient, ProxyRoute, ProxyState } from '../src/api/proxy-client';
-import { browserPasskeyPlatform, type PasskeyPlatform } from '../src/hub/platform/passkeys';
 import { accountControls, connectAccount, unusedAccountsView } from './accounts';
 import { isClaudeRoute } from './claude';
 import { actions, button, card, disclosure, el, type UIContext } from './dom';
@@ -25,12 +24,7 @@ function pageNumbers(current: number, total: number): (number | 'ellipsis')[] {
   return pages;
 }
 
-export function routesView(
-  state: ProxyState,
-  api: ProxyClient,
-  context: UIContext,
-  platform: PasskeyPlatform = browserPasskeyPlatform(),
-): HTMLElement {
+export function routesView(state: ProxyState, api: ProxyClient, context: UIContext): HTMLElement {
   const readonly = state.mode === 'file';
   const view = el('div');
   const intro = card(
@@ -111,10 +105,8 @@ export function routesView(
             (preset) => {
               if (blocked()) return;
               const formContext = componentContext();
-              const manualForm = () =>
-                routeForm(state, api, formContext, close, undefined, preset, platform);
-              const guided =
-                preset && providerOnboarding(preset, state, api, formContext, platform, close);
+              const manualForm = () => routeForm(state, api, formContext, close, undefined, preset);
+              const guided = preset && providerOnboarding(preset, state, api, formContext, close);
               const panel =
                 guided && preset ? card(`Set up ${presetLabel(preset)}`, guided) : manualForm();
               if (guided && preset?.account_kind === 'claude-code')
@@ -169,7 +161,7 @@ export function routesView(
   pagination.className = 'route-pagination';
   pagination.setAttribute('aria-label', 'Route pagination');
 
-  const accountDeps = () => ({ state, api, context: componentContext(), platform });
+  const accountDeps = () => ({ state, api, context: componentContext() });
   // Credentials are maintained beside the routes that use them. Claude
   // sign-ins live on each device and are managed by Claude Code settings.
   function routeAccountTools(route: ProxyRoute, kind?: ProxyAccount['kind']) {
@@ -184,7 +176,7 @@ export function routesView(
     const settings = disclosure(
       'Claude Code settings',
       el('p', 'Removes every Claude route, device connection and saved proxy sign-in.'),
-      clearClaudeSetup(state, api, componentContext(), platform),
+      clearClaudeSetup(state, api, componentContext()),
     );
     settings.className = 'claude-settings';
     return settings;
@@ -196,12 +188,12 @@ export function routesView(
     const head = el('div', display.summary);
     head.className = 'route-row-head';
     const provider = el('div', el('h3', 'Provider setup'), display.provider);
-    const providerAction = providerRouteAction(route, state, api, componentContext(), platform);
+    const providerAction = providerRouteAction(route, state, api, componentContext());
     if (providerAction) provider.append(providerAction);
     const accountTools = routeAccountTools(route, preset?.account_kind);
     if (accountTools) provider.append(accountTools);
     if (!readonly && isClaudeRoute(route, state)) provider.append(claudeSettings());
-    const sides = el('div', provider, routeAccess(route, state, api, componentContext(), platform));
+    const sides = el('div', provider, routeAccess(route, state, api, componentContext()));
     sides.className = 'route-connections';
     const row = el('article', head, sides, display.advanced);
     row.dataset.focus = `route:${route.name}`;
@@ -226,7 +218,6 @@ export function routesView(
         },
         route,
         preset,
-        platform,
       );
       row.classList.add('expanded');
       row.append(form);

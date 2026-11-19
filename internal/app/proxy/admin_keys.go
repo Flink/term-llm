@@ -144,9 +144,6 @@ func (s *Service) createAdminKey(w http.ResponseWriter, r *http.Request, sess se
 		fail(w, 400, "Enter an admin API key name (1–80 characters)")
 		return
 	}
-	if s.passkey != nil && !s.consumeRecentAuth(w, sess) {
-		return
-	}
 	key := AdminKey{ID: randomToken("ak_")[:26], Name: name, Created: time.Now().UnixMilli()}
 	token := randomToken(adminKeyPrefix)
 	hash := hashToken(token)
@@ -170,7 +167,7 @@ func (s *Service) revokeAdminKey(w http.ResponseWriter, r *http.Request, sess se
 		ID            string `json:"id"`
 		RevokeClients bool   `json:"revoke_clients"`
 	}
-	if !readJSON(w, r, &in) || s.passkey != nil && !s.consumeRecentAuth(w, sess) {
+	if !readJSON(w, r, &in) {
 		return
 	}
 	s.mu.Lock()

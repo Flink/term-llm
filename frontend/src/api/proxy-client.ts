@@ -622,6 +622,10 @@ export class ProxyClient {
   signOutAccount(name: string): Promise<{ account: ProxyAccount }> {
     return this.request('accounts', 'DELETE', { name });
   }
+  /** Deletes an account no route uses, freeing its name. */
+  removeAccount(name: string): Promise<{ removed: string }> {
+    return this.request('accounts', 'DELETE', { name, remove: true });
+  }
   timeline(
     range: ChartRange = '30d',
     group: ChartGroup = 'total',

@@ -201,20 +201,16 @@ func TestAccountWaiterCancellationAndMissingAccount(t *testing.T) {
 	}
 }
 
-func TestAccountFreshPasskeyMutation(t *testing.T) {
+// The passkey sign-in is the only challenge; account changes need no repeat.
+func TestAccountMutationsNeedOnlyPasskeySession(t *testing.T) {
 	s, _ := passkeyFixture(t)
 	b := newPasskeyBrowser(t, s)
-	_, assert := bootstrapPasskey(t, b)
-	// Bootstrap grants no fresh security-change assertion.
+	_, _ = bootstrapPasskey(t, b)
 	in := accountInput{Name: "fresh", Kind: "copilot", Credentials: accountCredentials{GitHubToken: "synthetic-github-token"}}
-	b.send("POST", "accounts", in, 403)
-	assert("reauth", 1)
 	b.send("POST", "accounts", in, 201)
 	in.Replace = true
-	b.send("PUT", "accounts", in, 403)
-	assert("reauth", 2)
 	b.send("PUT", "accounts", in, 200)
-	b.send("DELETE", "accounts", map[string]string{"name": "fresh"}, 403)
+	b.send("DELETE", "accounts", map[string]string{"name": "fresh"}, 200)
 }
 
 func TestAccountAttributionBoundsAndDuplicateIdentity(t *testing.T) {

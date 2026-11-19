@@ -1,4 +1,3 @@
-import { browserPasskeyPlatform, type PasskeyPlatform } from '../src/hub/platform/passkeys';
 import { accountDialog, accountStateLabel } from './accounts';
 import { secretForm } from './security';
 import { presetLabel } from './route-presets';
@@ -41,7 +40,6 @@ export function routeForm(
   close: () => void,
   route?: ProxyRoute,
   preset?: ProxyPreset,
-  platform: PasskeyPlatform = browserPasskeyPlatform(),
 ): HTMLElement {
   const defaults = route ? undefined : preset;
   let suggestedName = defaults?.id ?? '';
@@ -250,7 +248,7 @@ export function routeForm(
     if (accountKind && accountKind !== 'claude-code')
       accountField.append(
         button('Connect new account', () =>
-          accountDialog({ state, api, context, platform }, formRoot, accountKind, (stored) => {
+          accountDialog({ state, api, context }, formRoot, accountKind, (stored) => {
             const option = el('option', `${stored.name} · ${accountStateLabel(stored)}`);
             option.value = stored.name;
             account.append(option);

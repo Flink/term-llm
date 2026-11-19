@@ -78,19 +78,13 @@ func TestBrowserAdminKeysTokenSession(t *testing.T) {
 	}
 }
 
-func TestBrowserAdminKeysRequireRecentPasskey(t *testing.T) {
+func TestBrowserAdminKeysNeedOnlyPasskeySession(t *testing.T) {
 	s, _ := passkeyFixture(t)
 	browser := newPasskeyBrowser(t, s)
-	_, assert := bootstrapPasskey(t, browser)
+	_, _ = bootstrapPasskey(t, browser)
 	body := map[string]string{"name": "Passkey provisioner"}
-	browser.send("POST", "admin-keys", body, 403)
-	assert("reauth", 1)
 	issued := proxyResponse[issuedAdminKey](t, browser.send("POST", "admin-keys", body, 201), 201)
-	revoke := map[string]string{"id": issued.Key.ID}
-	browser.send("DELETE", "admin-keys", revoke, 403)
-	assert("reauth", 2)
-	browser.send("DELETE", "admin-keys", revoke, 200)
-	browser.send("POST", "admin-keys", body, 403)
+	browser.send("DELETE", "admin-keys", map[string]string{"id": issued.Key.ID}, 200)
 }
 
 func TestBrowserAdminKeyCascadeIsSelectiveAndAtomic(t *testing.T) {

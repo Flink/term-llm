@@ -14,7 +14,6 @@ import {
   type ProxyRoute,
   type ProxyState,
 } from '../src/api/proxy-client';
-import type { PasskeyPlatform } from '../src/hub/platform/passkeys';
 import type { UIContext } from './dom';
 import { routesView } from './routes';
 
@@ -85,7 +84,6 @@ function setup(overrides: Partial<ProxyState> = {}) {
     protectToken: vi.fn(),
     navigate: vi.fn(),
   };
-  const platform: PasskeyPlatform = { available: () => true, create: vi.fn(), get: vi.fn() };
   const state: ProxyState = {
     auth: 'token',
     mode: 'ui',
@@ -99,7 +97,7 @@ function setup(overrides: Partial<ProxyState> = {}) {
     accounts,
     ...overrides,
   };
-  const root = routesView(state, api, context, platform);
+  const root = routesView(state, api, context);
   document.body.append(root);
   return { root, save, announce };
 }

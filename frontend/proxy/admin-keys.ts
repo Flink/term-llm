@@ -1,5 +1,4 @@
 import { ProxyAPIError, type ProxyClient, type ProxyState } from '../src/api/proxy-client';
-import type { PasskeyPlatform } from '../src/hub/platform/passkeys';
 import {
   actions,
   button,
@@ -14,7 +13,6 @@ import {
   submit,
   type UIContext,
 } from './dom';
-import { assertPasskey } from './passkeys';
 
 const focusKey = 'admin-keys';
 
@@ -40,7 +38,6 @@ export function adminKeysView(
   state: ProxyState,
   api: ProxyClient,
   context: UIContext,
-  platform: PasskeyPlatform,
 ): HTMLElement {
   let current = state;
   const name = input();
@@ -64,10 +61,6 @@ export function adminKeysView(
     usage,
   );
 
-  async function reauth() {
-    if (current.auth === 'passkey') await assertPasskey(api, platform, 'reauth');
-  }
-
   function renderKeys() {
     list.replaceChildren(el('h3', 'Issued keys'));
     if (!current.admin_keys.length) list.append(el('p', 'No API keys yet.'));
@@ -79,8 +72,6 @@ export function adminKeysView(
           const revokeClients = cascade.checked;
           manage.inert = true;
           try {
-            await reauth();
-            if (!view.isConnected) return;
             const result = await api.revokeAdminKey(key.id, revokeClients);
             await context.refresh(focusKey);
             const count = result.revoked_clients;
@@ -162,8 +153,6 @@ export function adminKeysView(
       if (!requested) throw new Error('Enter an API key name.');
       manage.inert = true;
       try {
-        await reauth();
-        if (!view.isConnected) return;
         context.protectToken(true, true);
         let issued = false;
         try {

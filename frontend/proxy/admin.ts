@@ -1,14 +1,8 @@
 import type { ProxyClient, ProxyState } from '../src/api/proxy-client';
-import type { PasskeyPlatform } from '../src/hub/platform/passkeys';
 import { adminKeysView } from './admin-keys';
 import { button, card, download, el, field, input, select, submit, type UIContext } from './dom';
 
-export function adminView(
-  state: ProxyState,
-  api: ProxyClient,
-  context: UIContext,
-  platform: PasskeyPlatform,
-): HTMLElement {
+export function adminView(state: ProxyState, api: ProxyClient, context: UIContext): HTMLElement {
   const readonly = state.mode === 'file';
   const section = el(
     'div',
@@ -21,7 +15,7 @@ export function adminView(
     ),
   );
   section.firstElementChild?.classList.add('page-intro');
-  section.append(adminKeysView(state, api, context, platform));
+  section.append(adminKeysView(state, api, context));
   const exportButton = button('Download routes.yaml', () => {
     void context.run(async () => {
       download('routes.yaml', await api.exportYAML(), 'text/yaml');

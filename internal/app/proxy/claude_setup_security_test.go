@@ -97,14 +97,12 @@ func TestClaudeSetupSecurity(t *testing.T) {
 	}
 }
 
-func TestClaudeSetupRecentAuthOnce(t *testing.T) {
+func TestClaudeSetupNeedsOnlyPasskeySession(t *testing.T) {
 	s, _ := passkeyFixture(t)
 	b := newPasskeyBrowser(t, s)
-	_, login := bootstrapPasskey(t, b)
-	for i, method := range []string{"POST", "DELETE"} {
+	_, _ = bootstrapPasskey(t, b)
+	for _, method := range []string{"POST", "DELETE"} {
 		body := map[string]any{"revision": s.snap.revision}
-		b.send(method, "claude/setup", body, 403)
-		login("reauth", uint32(i+1))
 		want := 201
 		if method == "DELETE" {
 			want = 200
@@ -116,7 +114,6 @@ func TestClaudeSetupRecentAuthOnce(t *testing.T) {
 				t.Fatalf("untrusted response URL: %+v %v", reply, err)
 			}
 		}
-		b.send(method, "claude/setup", map[string]any{"revision": s.snap.revision}, 403)
 	}
 }
 

@@ -146,7 +146,6 @@ function providerFixture(state = snapshot(), refresh = vi.fn().mockResolvedValue
       }
     },
   };
-  const platform: PasskeyPlatform = { available: () => true, get: vi.fn(), create: vi.fn() };
   const connection = {
     revision: 8,
     url: 'https://proxy.example/native/',
@@ -155,16 +154,16 @@ function providerFixture(state = snapshot(), refresh = vi.fn().mockResolvedValue
   };
   vi.spyOn(api, 'setupClaude').mockResolvedValue(connection);
   vi.spyOn(api, 'clearClaude').mockResolvedValue();
-  return { api, context, errors, platform, refresh, connection };
+  return { api, context, errors, refresh, connection };
 }
 
 it('creates a route and launcher, keeps the token out of browser storage, and clears it only after dismissal refresh succeeds', async () => {
   const fixture = providerFixture();
-  const { api, context, errors, refresh, platform } = fixture;
+  const { api, context, errors, refresh } = fixture;
   const writeText = vi.fn().mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
   const storageWrite = vi.spyOn(Storage.prototype, 'setItem');
-  const view = providerOnboarding(presets[0], snapshot(), api, context, platform, vi.fn())!;
+  const view = providerOnboarding(presets[0], snapshot(), api, context, vi.fn())!;
   document.body.append(view);
   await click(view, 'Create route & get launcher');
   const command = await waitFor(
@@ -189,8 +188,8 @@ it('creates a route and launcher, keeps the token out of browser storage, and cl
 
 it('adds a device to the selected enabled route without picking a different route or issuing another visible token', async () => {
   const state = snapshot(configured);
-  const { api, context, platform } = providerFixture(state);
-  const view = providerRouteAction(route, state, api, context, platform)! as HTMLDetailsElement;
+  const { api, context } = providerFixture(state);
+  const view = providerRouteAction(route, state, api, context)! as HTMLDetailsElement;
   document.body.append(view);
   expect(view.querySelector('summary')).toHaveTextContent('Add device');
   view.open = true;
@@ -200,18 +199,14 @@ it('adds a device to the selected enabled route without picking a different rout
   context.protectToken(false);
   await click(view, 'Create device launcher');
   await waitFor(() => expect(api.setupClaude).toHaveBeenCalledExactlyOnceWith(7, route.name));
-  expect(
-    providerRouteAction({ ...route, enabled: false }, state, api, context, platform),
-  ).toBeUndefined();
-  expect(
-    providerRouteAction(route, { ...state, mode: 'file' }, api, context, platform),
-  ).toBeUndefined();
+  expect(providerRouteAction({ ...route, enabled: false }, state, api, context)).toBeUndefined();
+  expect(providerRouteAction(route, { ...state, mode: 'file' }, api, context)).toBeUndefined();
 });
 
 it('keeps clearing all Claude setup separate and requires confirmation', async () => {
   const state = snapshot(configured);
-  const { api, context, platform, refresh } = providerFixture(state);
-  const view = clearClaudeSetup(state, api, context, platform);
+  const { api, context, refresh } = providerFixture(state);
+  const view = clearClaudeSetup(state, api, context);
   document.body.append(view);
   const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
   fireEvent.click(view);

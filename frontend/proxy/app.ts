@@ -359,7 +359,7 @@ export function mountProxy(
     }
     const views: Record<Tab, () => HTMLElement> = {
       Home: () => homeView(snapshot, api, context),
-      Routes: () => routesView(snapshot, api, context, platform),
+      Routes: () => routesView(snapshot, api, context),
       Secrets: () => secretsView(snapshot, api, context),
       Clients: () => callersView(snapshot, api, context),
       Requests: () => {
@@ -371,7 +371,7 @@ export function mountProxy(
         return debug.element;
       },
       Passkeys: () => passkeysView(api, context, platform),
-      Admin: () => adminView(snapshot, api, context, platform),
+      Admin: () => adminView(snapshot, api, context),
     };
     content.replaceChildren(nav, views[tab]());
   }
