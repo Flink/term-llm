@@ -46,13 +46,19 @@ func claudeSetupDBState(t *testing.T, s *Service, tables ...string) string {
 	return string(data)
 }
 
-func TestClaudeSetupSecurity(t *testing.T) {
+func TestNativeSetupSecurity(t *testing.T) {
+	for _, endpoint := range []string{"claude/setup", "agy/setup"} {
+		t.Run(endpoint, func(t *testing.T) { testNativeSetupSecurity(t, endpoint) })
+	}
+}
+
+func testNativeSetupSecurity(t *testing.T, endpoint string) {
 	for _, method := range []string{"POST", "DELETE"} {
 		t.Run(method, func(t *testing.T) {
 			s := testService(t)
 			cookie, csrf := loginAdmin(t, s)
-			claudeSetupPost(t, s, cookie, csrf)
-			before := claudeSetupDBState(t, s, "configuration", "accounts", "callers", "grants", "claude_vault")
+			nativeSetupPost(t, s, endpoint, cookie, csrf, "create", "")
+			before := claudeSetupDBState(t, s, "configuration", "accounts", "callers", "grants", "claude_shared_enrollment")
 			snap := s.snap
 			for _, tc := range []struct {
 				name, origin, csrf string
@@ -68,10 +74,10 @@ func TestClaudeSetupSecurity(t *testing.T) {
 				{"missing revision", "http://localhost", csrf, true, `{}`, 400},
 				{"null revision", "http://localhost", csrf, true, `{"revision":null}`, 400},
 				{"stale revision", "http://localhost", csrf, true, fmt.Sprintf(`{"revision":%d}`, s.snap.revision-1), 409},
-				{"unknown fields", "http://localhost", csrf, true, fmt.Sprintf(`{"revision":%d,"name":"unasked"}`, s.snap.revision), 400},
+				{"other provider", "http://localhost", csrf, true, fmt.Sprintf(`{"revision":%d,"provider":"unexpected"}`, s.snap.revision), 400},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					r := httptest.NewRequest(method, "http://localhost/_proxy/api/claude/setup", strings.NewReader(tc.body))
+					r := httptest.NewRequest(method, "http://localhost/_proxy/api/"+endpoint, strings.NewReader(tc.body))
 					r.Header.Set("Content-Type", "application/json")
 					r.Header.Set("Origin", tc.origin)
 					r.Header.Set("X-CSRF-Token", tc.csrf)
@@ -86,11 +92,11 @@ func TestClaudeSetupSecurity(t *testing.T) {
 				})
 			}
 			s.opts.ConfigFile = "synthetic-operator-file-not-read"
-			w := adminRequest(s, method, "claude/setup", map[string]any{"revision": s.snap.revision}, cookie, csrf)
+			w := adminRequest(s, method, endpoint, map[string]any{"revision": s.snap.revision}, cookie, csrf)
 			if w.Code != 409 {
 				t.Fatal(w.Code, w.Body.String())
 			}
-			if s.snap != snap || claudeSetupDBState(t, s, "configuration", "accounts", "callers", "grants", "claude_vault") != before {
+			if s.snap != snap || claudeSetupDBState(t, s, "configuration", "accounts", "callers", "grants", "claude_shared_enrollment") != before {
 				t.Fatal("rejected operation wrote state")
 			}
 		})
@@ -109,7 +115,7 @@ func TestClaudeSetupNeedsOnlyPasskeySession(t *testing.T) {
 		}
 		out := b.send(method, "claude/setup", body, want)
 		if method == "POST" {
-			var reply claudeSetupReply
+			var reply nativeSetupReply
 			if err := json.Unmarshal(out.Body.Bytes(), &reply); err != nil || reply.URL != passkeyOrigin+s.snap.routes[0].LocalPrefix {
 				t.Fatalf("untrusted response URL: %+v %v", reply, err)
 			}
@@ -123,20 +129,11 @@ func TestClaudeSetupRollback(t *testing.T) {
 			s := testService(t)
 			cookie, csrf := loginAdmin(t, s)
 			if method == "DELETE" {
-				out := claudeSetupPost(t, s, cookie, csrf)
-				ar := s.snap.routes[0]
-				a, err := s.store.account(ar.Account)
-				if err != nil {
-					t.Fatal(err)
-				}
-				scope := claudeForwardScope{caller: out.CallerID, route: ar.Name, account: ar.Account, authority: ar.authority, identity: a.identityVersion}
-				if _, err := s.store.claudeVaultBeginCode(context.Background(), [32]byte{}, scope); err != nil {
-					t.Fatal(err)
-				}
+				claudeSetupPost(t, s, cookie, csrf)
 			}
 			snap := s.snap
 			beforeConfig := fmt.Sprintf("%+v", snap.config)
-			before := claudeSetupDBState(t, s, "configuration", "money_settings", "accounts", "secrets", "callers", "grants", "claude_vault")
+			before := claudeSetupDBState(t, s, "configuration", "money_settings", "accounts", "secrets", "callers", "grants", "claude_shared_enrollment")
 			ctx, cancel := context.WithCancelCause(context.Background())
 			defer cancel(nil)
 			s.sockets.Store("test", &activeSocket{route: "synthetic", account: "claude-code", cancel: cancel})
@@ -155,7 +152,7 @@ func TestClaudeSetupRollback(t *testing.T) {
 			if s.snap != snap || fmt.Sprintf("%+v", snap.config) != beforeConfig || context.Cause(ctx) != nil {
 				t.Fatal("failed commit published config or canceled a live socket")
 			}
-			if after := claudeSetupDBState(t, s, "configuration", "money_settings", "accounts", "secrets", "callers", "grants", "claude_vault"); !reflect.DeepEqual(before, after) {
+			if after := claudeSetupDBState(t, s, "configuration", "money_settings", "accounts", "secrets", "callers", "grants", "claude_shared_enrollment"); !reflect.DeepEqual(before, after) {
 				t.Fatalf("transaction was not atomic\nbefore=%s\nafter=%s", before, after)
 			}
 			var synchronous int

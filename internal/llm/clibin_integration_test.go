@@ -29,10 +29,27 @@ func TestCreateProviderFromConfigAgyBin(t *testing.T) {
 
 func TestProviderModelIDsPrefersAgyBinCache(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	want := []string{"gemini-3.8-flash-high", "claude-sonnet-4-6"}
-	clibin.RefreshAgyBinCacheSync([]core.ModelInfo{{ID: want[0]}, {ID: want[1]}})
+	clibin.RefreshAgyBinCacheSync([]core.ModelInfo{
+		{ID: "gemini-4-neon-high"},
+		{ID: "gemini-4-neon-xhigh"},
+		{ID: "gemini-4-neon-low"},
+		{ID: "claude-sonnet-4-6"},
+	})
+	want := []string{"gemini-4-neon", "claude-sonnet-4-6"}
 	if got := ProviderModelIDs("agy-bin"); !equalSlice(got, want) {
 		t.Fatalf("ProviderModelIDs = %v, want %v", got, want)
+	}
+	if got := ReasoningEffortsForProviderModel("agy-bin", "gemini-4-neon"); !equalSlice(got, []string{"low", "high", "xhigh"}) {
+		t.Fatalf("ReasoningEffortsForProviderModel(gemini-4-neon) = %v, want [low high xhigh]", got)
+	}
+	if got := ReasoningEffortsForProviderModel("agy-bin", "claude-sonnet-4-6"); len(got) != 0 {
+		t.Fatalf("ReasoningEffortsForProviderModel(claude-sonnet-4-6) = %v, want none", got)
+	}
+	if base, effort := BaseModelAndEffortForProvider("agy-bin", "gemini-4-neon-xhigh"); base != "gemini-4-neon" || effort != "xhigh" {
+		t.Fatalf("BaseModelAndEffortForProvider = (%q, %q), want (gemini-4-neon, xhigh)", base, effort)
+	}
+	if deduped := DedupeEffortVariantsForProvider("agy-bin", []string{"gemini-4-neon", "gemini-4-neon-high", "gemini-4-neon-xhigh"}); !equalSlice(deduped, []string{"gemini-4-neon"}) {
+		t.Fatalf("DedupeEffortVariantsForProvider = %v, want [gemini-4-neon]", deduped)
 	}
 }
 

@@ -48,7 +48,7 @@ func (s *store) deleteAccount(ctx context.Context, name string, expected int64) 
 		if n != 1 {
 			return errors.New("account changed")
 		}
-		_, err = tx.ExecContext(ctx, "DELETE FROM claude_vault WHERE account=?", name)
+		_, err = tx.ExecContext(ctx, "DELETE FROM claude_shared_enrollment WHERE account=?", name)
 		return err
 	})
 }

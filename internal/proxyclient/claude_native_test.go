@@ -74,8 +74,8 @@ const claudeNativeTestToken = "sk-tlp-0123456789abcdef0123456789abcdef0123456789
 // is supplied by each test because httptest binds the host at construction.
 func claudeNativeTestMetadata(caPEM []byte, proxyURL, route string) map[string]any {
 	return map[string]any{
-		"protocol_version": claudeNativeProtocolVersion,
-		"token_mode":       claudeNativeTokenMode,
+		"protocol_version": nativeProtocolVersion,
+		"token_mode":       nativeTokenMode,
 		"hosts":            claudeNativeHosts,
 		"certificate_pem":  string(caPEM),
 		"proxy_url":        proxyURL,
@@ -511,7 +511,7 @@ func TestPrepareClaudeNativeEnvironmentRejectsOversizeAndBadTokens(t *testing.T)
 		t.Fatalf("invalid tokens reached the proxy %d times", calls)
 	}
 	large := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, strings.Repeat("x", claudeNativeMetadataLimit+1))
+		io.WriteString(w, strings.Repeat("x", nativeMetadataLimit+1))
 	}))
 	defer large.Close()
 	if _, err := PrepareClaudeNativeEnvironment(context.Background(), large.URL+"/team/claude-code", claudeNativeTestToken, t.TempDir(), nil); err == nil || !strings.Contains(err.Error(), "64 KiB") {
@@ -536,7 +536,7 @@ func TestClaudeNativeProxyURLChecksExactOrigin(t *testing.T) {
 		{name: "opaque", raw: "https:proxy.example.test:8443"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := validateClaudeNativeProxyURL(root, tt.raw)
+			got, err := claudeNativePolicy.validateProxyURL(root, tt.raw)
 			if tt.ok {
 				if err != nil || got != tt.want {
 					t.Fatalf("got %q, %v; want %q", got, err, tt.want)
@@ -639,7 +639,7 @@ func TestClaudeNativeCARequiresSingleConstrainedPublicCA(t *testing.T) {
 		{name: "not self-signed", pem: claudeNativeNotSelfSignedCA(t, valid)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := validateClaudeNativeCA(string(tt.pem))
+			got, err := claudeNativePolicy.validateCA(string(tt.pem))
 			if tt.ok {
 				if err != nil {
 					t.Fatalf("valid CA rejected: %v", err)

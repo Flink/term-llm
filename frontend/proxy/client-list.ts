@@ -1,4 +1,5 @@
-import type { ProxyCaller, ProxyRoute } from '../src/api/proxy-client';
+import type { ProxyCaller } from '../src/api/proxy-client';
+import type { ProviderGroup } from './provider-groups';
 import { badge, dateTime, el } from './dom';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -68,14 +69,31 @@ function nameNode(caller: ProxyCaller, suffixes: Map<string, string>): Node[] {
   return [document.createTextNode(`${caller.name} `), id];
 }
 
-function grantBadges(caller: ProxyCaller): HTMLElement {
-  const grants = [...caller.grants].sort();
-  const node = el(
-    'div',
-    ...(grants.length
-      ? grants.map((grant) => badge(grant, caller.revoked ? '' : 'credential'))
-      : [badge('No routes')]),
-  );
+// Approvals are provider-wide, so the row summarizes providers, not routes.
+// Revoked rows still show the approvals they held: providerApproval() answers
+// for live access and reports none once a client is revoked.
+function approvalBadges(caller: ProxyCaller, groups: ProviderGroup[]): HTMLElement {
+  const nodes: HTMLElement[] = [];
+  for (const group of [...groups].sort((a, b) => a.label.localeCompare(b.label))) {
+    const covered = group.routes.filter((route) => caller.grants.includes(route.name)).length;
+    if (!covered) continue;
+    const partial = covered < group.routes.length;
+    const label = !partial
+      ? group.label
+      : caller.revoked
+        ? `${group.label} (partial)`
+        : `${group.label} (needs approval)`;
+    nodes.push(
+      badge(
+        label,
+        partial ? (caller.revoked ? '' : 'caution') : caller.revoked ? '' : 'credential',
+      ),
+    );
+  }
+  // A grant to a route no longer in a group still represents access; never hide it.
+  const grouped = new Set(groups.flatMap((group) => group.routes.map((route) => route.name)));
+  for (const grant of [...caller.grants].sort()) if (!grouped.has(grant)) nodes.push(badge(grant));
+  const node = el('div', ...(nodes.length ? nodes : [badge('No providers')]));
   node.className = 'route-badges client-grants';
   return node;
 }
@@ -94,7 +112,7 @@ function lastUsed(caller: ProxyCaller, now: Date): HTMLElement {
 }
 
 export function clientListHeader(): HTMLElement {
-  const head = el('div', el('span', 'Client'), el('span', 'Routes'), el('span', 'Last used'));
+  const head = el('div', el('span', 'Client'), el('span', 'Providers'), el('span', 'Last used'));
   head.className = 'client-list-head';
   head.setAttribute('aria-hidden', 'true');
   return head;
@@ -105,6 +123,7 @@ export function clientRow(
   caller: ProxyCaller,
   suffixes: Map<string, string>,
   keyNames: ReadonlyMap<string, string>,
+  groups: ProviderGroup[],
   detail?: { panel: HTMLElement; toggle: (open: boolean) => void },
   now = new Date(),
 ): HTMLElement {
@@ -120,7 +139,7 @@ export function clientRow(
   const identity = metadata.length
     ? el('div', heading, ...metadata.map((text) => el('p', el('small', text))))
     : heading;
-  const main = el('div', identity, grantBadges(caller), lastUsed(caller, now));
+  const main = el('div', identity, approvalBadges(caller, groups), lastUsed(caller, now));
   main.className = 'client-row-main';
   const row = el('article', main);
   row.className = 'client-row';
@@ -153,19 +172,85 @@ export function setRowExpanded(row: HTMLElement, open: boolean): void {
   row.querySelector('.client-toggle')?.setAttribute('aria-expanded', String(open));
 }
 
-/** Pill-style grant checkboxes; disabled routes stay selectable but labelled. */
-export function grantChips(
-  routes: ProxyRoute[],
-  selected: string[],
+export type ProviderApprovalState = 'none' | 'partial' | 'approved';
+
+export interface ProviderApprovalChange {
+  id: string;
+  approved: boolean;
+}
+
+export interface ProviderChips {
+  fields: HTMLFieldSetElement;
+  /** Provider IDs that are ticked and can be approved. */
+  selected: () => string[];
+  /** Explicit changes only; untouched legacy partial approvals are omitted. */
+  changes: () => ProviderApprovalChange[];
+  reset: () => void;
+}
+
+interface ApprovalChoice {
+  group: ProviderGroup;
+  initial: ProviderApprovalState;
+  blocked: readonly string[];
+  control: HTMLInputElement;
+  label: HTMLLabelElement;
+  text: HTMLSpanElement;
+  touched: boolean;
+}
+
+function paintApprovalChoice(choice: ApprovalChoice): void {
+  const unavailable = choice.initial === 'none' && choice.blocked.length > 0;
+  const suffix = unavailable
+    ? ' (shared subscription not ready)'
+    : choice.control.indeterminate
+      ? ' (needs approval)'
+      : '';
+  choice.text.textContent = choice.group.label + suffix;
+  const routes = choice.group.routes.map((route) => route.name).join(', ');
+  choice.label.title = unavailable
+    ? `Enable and connect a shared subscription for ${choice.blocked.join(', ')} before approving ${choice.group.label}. Routes: ${routes}`
+    : routes;
+}
+
+/**
+ * Provider-wide approval checkboxes. A legacy partial approval starts
+ * indeterminate and is preserved unless the operator touches it; an explicit
+ * uncheck revokes every current route in that provider.
+ */
+export function providerChips(
+  groups: ProviderGroup[],
+  approvals: ReadonlyMap<string, ProviderApprovalState>,
   legend: string,
-): { fields: HTMLFieldSetElement; selected: () => string[]; reset: () => void } {
-  const choices = routes.map((route) => {
+  unavailable: ReadonlyMap<string, readonly string[]> = new Map(),
+): ProviderChips {
+  const choices: ApprovalChoice[] = groups.map((group) => {
+    const initial = approvals.get(group.id) ?? 'none';
+    const blocked = unavailable.get(group.id) ?? [];
     const control = el('input');
     control.type = 'checkbox';
-    control.checked = selected.includes(route.name);
-    const label = el('label', control, route.name + (route.enabled ? '' : ' (disabled)'));
+    control.checked = initial === 'approved';
+    control.indeterminate = initial === 'partial';
+    control.disabled = blocked.length > 0 && initial === 'none';
+    control.dataset.provider = group.id;
+    const text = el('span');
+    const label = el('label', control, text);
     label.className = 'check grant-chip';
-    return { route, control, label };
+    const choice: ApprovalChoice = {
+      group,
+      initial,
+      blocked,
+      control,
+      label,
+      text,
+      touched: false,
+    };
+    paintApprovalChoice(choice);
+    control.addEventListener('change', () => {
+      choice.touched = true;
+      control.indeterminate = false;
+      paintApprovalChoice(choice);
+    });
+    return choice;
   });
   const chips = el('div', ...choices.map((choice) => choice.label));
   chips.className = 'grant-chips';
@@ -173,7 +258,34 @@ export function grantChips(
   fields.className = 'client-grant-fields';
   return {
     fields,
-    selected: () => choices.filter((c) => c.control.checked).map((c) => c.route.name),
-    reset: () => choices.forEach((c) => (c.control.checked = selected.includes(c.route.name))),
+    selected: () =>
+      choices
+        // The submit guard temporarily disables every control before invoking us.
+        .filter(
+          (choice) =>
+            !(choice.initial === 'none' && choice.blocked.length) && choice.control.checked,
+        )
+        .map((choice) => choice.group.id),
+    changes: () => {
+      const out: ProviderApprovalChange[] = [];
+      for (const choice of choices) {
+        // Existing approvals can be revoked, but unavailable routes cannot gain access.
+        if (choice.blocked.length && choice.control.checked) continue;
+        if (choice.initial === 'partial') {
+          if (choice.touched) out.push({ id: choice.group.id, approved: choice.control.checked });
+          continue;
+        }
+        if (choice.control.checked !== (choice.initial === 'approved'))
+          out.push({ id: choice.group.id, approved: choice.control.checked });
+      }
+      return out;
+    },
+    reset: () =>
+      choices.forEach((choice) => {
+        choice.touched = false;
+        choice.control.checked = choice.initial === 'approved';
+        choice.control.indeterminate = choice.initial === 'partial';
+        paintApprovalChoice(choice);
+      }),
   };
 }

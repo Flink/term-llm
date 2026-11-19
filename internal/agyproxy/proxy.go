@@ -58,6 +58,7 @@ type Server struct {
 	proxyToken    string
 	upstreamProxy string
 	upstreamCA    string
+	upstream      *url.URL // immutable for the running server
 	requireMCP    bool
 	artifactRoot  string
 	promptRoot    string
@@ -66,13 +67,16 @@ type Server struct {
 	running       bool
 }
 
-// SetUpstream configures an optional authenticated HTTP proxy used for all
+// SetUpstream configures an optional authenticated HTTP(S) CONNECT proxy used for all
 // outbound traffic. It must be called before Start.
 func (s *Server) SetUpstream(proxyURL, caPath string) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running {
+		return
+	}
 	s.upstreamProxy = strings.TrimSpace(proxyURL)
 	s.upstreamCA = strings.TrimSpace(caPath)
-	s.mu.Unlock()
 }
 
 // Start starts the proxy and writes its public CA certificate to a private
@@ -87,12 +91,9 @@ func (s *Server) Start() (proxyURL, caPath string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	var upstreamCA []byte
-	if path := strings.TrimSpace(s.upstreamCA); path != "" {
-		upstreamCA, err = os.ReadFile(path)
-		if err != nil {
-			return "", "", fmt.Errorf("read upstream wire-audit CA: %w", err)
-		}
+	upstream, upstreamCA, err := loadUpstream(s.upstreamProxy, s.upstreamCA)
+	if err != nil {
+		return "", "", err
 	}
 	certPEM, err := authority.BundleWithSystemRoots(upstreamCA)
 	if err != nil {
@@ -120,25 +121,17 @@ func (s *Server) Start() (proxyURL, caPath string, err error) {
 	s.authority, s.caPath, s.proxyToken = authority, path, proxyToken
 	s.listener = ln
 	s.connections = make(map[net.Conn]struct{})
-	transport := &http.Transport{}
-	if proxyText := strings.TrimSpace(s.upstreamProxy); proxyText != "" {
-		proxyURL, err := url.Parse(proxyText)
-		if err != nil {
-			ln.Close()
-			os.RemoveAll(dir)
-			return "", "", fmt.Errorf("parse upstream wire-audit proxy: %w", err)
+	transport := &http.Transport{TLSHandshakeTimeout: 15 * time.Second}
+	if upstream != nil {
+		roots, err := x509.SystemCertPool()
+		if err != nil || roots == nil {
+			roots = x509.NewCertPool()
 		}
-		roots := x509.NewCertPool()
-		if !roots.AppendCertsFromPEM(certPEM) {
-			ln.Close()
-			os.RemoveAll(dir)
-			return "", "", errors.New("load chained agy proxy CA bundle")
-		}
-		transport.Proxy = http.ProxyURL(proxyURL)
+		roots.AppendCertsFromPEM(upstreamCA) // Already validated by loadUpstream.
+		transport.Proxy = http.ProxyURL(upstream)
 		transport.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
-	} else {
-		transport.Proxy = nil
 	}
+	s.upstream = upstream
 	s.transport = transport
 	server := &http.Server{Handler: http.HandlerFunc(s.serveHTTP), ReadHeaderTimeout: 10 * time.Second}
 	s.server = server
@@ -217,7 +210,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) tunnel(w http.ResponseWriter, r *http.Request) {
-	upstream, err := s.dialTunnel(r.Host)
+	upstream, err := s.dialTunnel(r.Context(), r.Host)
 	if err != nil {
 		http.Error(w, "proxy connect failed", http.StatusBadGateway)
 		return
@@ -242,50 +235,99 @@ func (s *Server) tunnel(w http.ResponseWriter, r *http.Request) {
 	s.untrackConnection(upstream)
 }
 
-func (s *Server) dialTunnel(target string) (net.Conn, error) {
+func loadUpstream(endpoint, caPath string) (*url.URL, []byte, error) {
+	if endpoint == "" && caPath == "" {
+		return nil, nil, nil
+	}
+	proxy, err := url.Parse(endpoint)
+	if err != nil || proxy.Hostname() == "" || (proxy.Scheme != "http" && proxy.Scheme != "https") ||
+		proxy.Path != "" || proxy.RawQuery != "" || proxy.ForceQuery || proxy.Fragment != "" || proxy.Opaque != "" {
+		return nil, nil, errors.New("invalid upstream agy CONNECT origin")
+	}
+	pem, err := os.ReadFile(caPath)
+	if err != nil || !x509.NewCertPool().AppendCertsFromPEM(pem) {
+		return nil, nil, errors.New("could not load upstream agy proxy CA")
+	}
+	return proxy, pem, nil
+}
+
+func (s *Server) dialTunnel(ctx context.Context, target string) (net.Conn, error) {
 	s.mu.Lock()
-	proxyText := s.upstreamProxy
+	upstream, running := s.upstream, s.running
 	s.mu.Unlock()
-	if strings.TrimSpace(proxyText) == "" {
-		return net.DialTimeout("tcp", target, 15*time.Second)
+	if !running {
+		return nil, errors.New("agy proxy is stopping")
 	}
-	proxyURL, err := url.Parse(proxyText)
+	dialer := &net.Dialer{Timeout: 15 * time.Second}
+	if upstream == nil {
+		return dialer.DialContext(ctx, "tcp", target)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	port := upstream.Port()
+	if port == "" {
+		if upstream.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	addr := net.JoinHostPort(upstream.Hostname(), port)
+	// The outer hop is to the proxy origin, not to Google; authenticate its
+	// HTTPS endpoint with ordinary system roots before sending Proxy-Authorization.
+	var conn net.Conn
+	var err error
+	if upstream.Scheme == "https" {
+		tlsDialer := &tls.Dialer{NetDialer: dialer, Config: &tls.Config{MinVersion: tls.VersionTLS12}}
+		conn, err = tlsDialer.DialContext(ctx, "tcp", addr)
+	} else {
+		conn, err = dialer.DialContext(ctx, "tcp", addr)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("parse upstream proxy: %w", err)
+		return nil, err
 	}
-	conn, err := net.DialTimeout("tcp", proxyURL.Host, 15*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("dial upstream proxy: %w", err)
-	}
+	return openUpstreamTunnel(ctx, conn, target, upstream.User)
+}
+
+func openUpstreamTunnel(ctx context.Context, conn net.Conn, target string, user *url.Userinfo) (net.Conn, error) {
+	// CONNECT is bounded independently of the long-lived TLS stream.
+	deadline, _ := ctx.Deadline()
+	_ = conn.SetDeadline(deadline)
 	req := &http.Request{Method: http.MethodConnect, URL: &url.URL{Opaque: target}, Host: target, Header: make(http.Header)}
-	if proxyURL.User != nil {
-		password, _ := proxyURL.User.Password()
-		token := base64.StdEncoding.EncodeToString([]byte(proxyURL.User.Username() + ":" + password))
+	if user != nil {
+		password, _ := user.Password()
+		token := base64.StdEncoding.EncodeToString([]byte(user.Username() + ":" + password))
 		req.Header.Set("Proxy-Authorization", "Basic "+token)
 	}
 	if err := req.WriteProxy(conn); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("write upstream CONNECT: %w", err)
+		return nil, err
 	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
-	if err != nil {
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, req)
+	if err != nil || resp.StatusCode != http.StatusOK {
 		conn.Close()
-		return nil, fmt.Errorf("read upstream CONNECT response: %w", err)
+		return nil, errors.New("upstream agy CONNECT was rejected")
 	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		conn.Close()
-		return nil, fmt.Errorf("upstream CONNECT returned %s", resp.Status)
-	}
-	return conn, nil
+	_ = conn.SetDeadline(time.Time{})
+	return &tunnelConn{Conn: conn, reader: reader}, nil
 }
+
+type tunnelConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *tunnelConn) Read(b []byte) (int, error) { return c.reader.Read(b) }
 
 func proxyCopy(dst, src net.Conn) { _, _ = io.Copy(dst, src); _ = dst.Close(); _ = src.Close() }
 
 func (s *Server) trackConnection(conn net.Conn) {
 	s.mu.Lock()
-	if s.connections != nil {
+	if s.running {
 		s.connections[conn] = struct{}{}
+	} else {
+		_ = conn.Close()
 	}
 	s.mu.Unlock()
 }
@@ -351,6 +393,7 @@ func (s *Server) forward(w http.ResponseWriter, req *http.Request) {
 	// has detached the transport fail safely below.
 	s.mu.Lock()
 	transport := s.transport
+	chained := s.upstream != nil
 	artifactRoot := s.artifactRoot
 	promptRoot := s.promptRoot
 	requireMCP := s.requireMCP
@@ -399,7 +442,13 @@ func (s *Server) forward(w http.ResponseWriter, req *http.Request) {
 	}
 	resp, err := transport.RoundTrip(req)
 	if err != nil {
-		http.Error(w, "forward agy request: "+err.Error(), http.StatusBadGateway)
+		message := "forward agy request failed"
+		if !chained {
+			// Preserve direct mode diagnostics. A chained proxy failure may
+			// include the scoped endpoint; do not echo its error text.
+			message = "forward agy request: " + err.Error()
+		}
+		http.Error(w, message, http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
@@ -512,6 +561,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	s.proxyToken = ""
 	s.upstreamProxy = ""
 	s.upstreamCA = ""
+	s.upstream = nil
 	s.artifactRoot = ""
 	s.promptRoot = ""
 	s.connections = nil

@@ -89,13 +89,31 @@ func agyFailureAfterStart(err error) bool {
 	return errors.As(err, &processErr)
 }
 
-// runCommand executes one agy process for one engine stream. The whole prompt
-// travels as a single NDJSON user event on stdin; argv carries flags only, so a
-// large transcript can no longer hit the per-argument E2BIG limit. A fresh
-// process per stream preserves procutil ownership, cancellation, concurrent
-// drains, neutral cwd and proxy environment semantics.
+func (p *AgyBinProvider) stageAgyPromptInput(prompt string, parts []agyproxy.PromptPart) (string, bool, error) {
+	if len(parts) > 0 {
+		wire, err := agyproxy.StagePromptParts(p.agyHome, parts, prompt)
+		if err != nil {
+			return "", false, fmt.Errorf("stage agy-bin prompt parts: %w", err)
+		}
+		if strings.TrimSpace(wire) == "" {
+			return "", false, errors.New("stage agy-bin prompt parts: empty wire prompt")
+		}
+		return wire, true, nil
+	}
+	return p.stageAgyPrompt(prompt)
+}
+
 func (p *AgyBinProvider) runCommand(ctx context.Context, args []string, prompt, workspaceDir, expectedConversationID string, debug bool, send eventSender, exposeBridge bool) (*agyStreamState, error) {
-	wirePrompt, staged, err := p.stageAgyPrompt(prompt)
+	return p.runCommandWithParts(ctx, args, prompt, nil, workspaceDir, expectedConversationID, debug, send, exposeBridge)
+}
+
+// runCommandWithParts executes one agy process for one engine stream. The whole
+// prompt travels as a single NDJSON user event on stdin; argv carries flags
+// only, so a large transcript can no longer hit the per-argument E2BIG limit.
+// When parts are non-empty (multimodal turns with images), the parts are staged
+// in the private agy home and restored into Gemini inlineData parts by agyproxy.
+func (p *AgyBinProvider) runCommandWithParts(ctx context.Context, args []string, prompt string, parts []agyproxy.PromptPart, workspaceDir, expectedConversationID string, debug bool, send eventSender, exposeBridge bool) (*agyStreamState, error) {
+	wirePrompt, staged, err := p.stageAgyPromptInput(prompt, parts)
 	if err != nil {
 		return nil, err
 	}
@@ -106,8 +124,8 @@ func (p *AgyBinProvider) runCommand(ctx context.Context, args []string, prompt, 
 	if debug {
 		// Original prompt bytes describe the conversation input; stdin bytes
 		// describe the transport. Neither contains prompt text.
-		runtimeoutput.Printf("[agy-bin] starting agy with model %q (prompt_bytes=%d stdin_bytes=%d staged=%t)\n",
-			core.ChooseModel("", p.model), len(prompt), len(input), staged)
+		runtimeoutput.Printf("[agy-bin] starting agy with model %q effort %q (prompt_bytes=%d stdin_bytes=%d staged=%t parts=%d)\n",
+			core.ChooseModel(argFlagValue(args, "--model"), p.model), argFlagValue(args, "--effort"), len(prompt), len(input), staged, len(parts))
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -123,6 +141,15 @@ func (p *AgyBinProvider) runCommand(ctx context.Context, args []string, prompt, 
 	return state, nil
 }
 
+func argFlagValue(args []string, flag string) string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 // startAgyCommand prepares and starts the subprocess. Every error it returns is
 // pre-exec: no prompt bytes were accepted, so callers must not invalidate a
 // resumable conversation because of it.
@@ -136,7 +163,10 @@ func (p *AgyBinProvider) startAgyCommand(ctx context.Context, args []string, inp
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("prepare agy command: %w", err)
 	}
-	cmd.Env = forceCLIWireEnvironment(p.buildCommandEnv(), p.isolation.Environment())
+	cmd.Env = p.proxyEnv
+	if cmd.Env == nil {
+		cmd.Env = forceCLIWireEnvironment(p.buildCommandEnv(), p.isolation.Environment())
+	}
 	// exec copies a non-file Stdin on its own goroutine, so agy can write a
 	// result before draining a multi-megabyte payload without deadlocking the
 	// stdout drain. EPIPE from an early exit is ignored by os/exec.

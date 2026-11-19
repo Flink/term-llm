@@ -10,6 +10,8 @@ import (
 	"github.com/term-llm/term-llm/internal/sqliteutil"
 )
 
+const removeProxyV7 = `DROP TABLE claude_shared_enrollment; `
+
 // Remove version 6 objects before reconstructing older fixtures from live stores.
 const removeProxyV6 = `DROP INDEX callers_external_id; DROP TABLE admin_keys;
 ALTER TABLE callers DROP COLUMN external_id; ALTER TABLE callers DROP COLUMN created_by; `

@@ -37,7 +37,7 @@ func (s *Service) trackPolicyStream(route activeRoute, rec *Record, cancel conte
 		// A routine token rotation is not a sign-out. The identity epoch changes
 		// only for an explicit replacement/revocation, not a successful refresh.
 		sharedIdentity := custody != nil && (a.State == "ready" || a.State == "refreshing") && a.identityVersion == custody.identityVersion
-		if err != nil || !(sharedIdentity || custody.claudeVaultStreamIdentity(a)) {
+		if err != nil || !sharedIdentity {
 			valid = false
 		}
 	}

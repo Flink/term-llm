@@ -6,9 +6,9 @@ import (
 	"errors"
 	"io"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode"
 
@@ -26,72 +26,72 @@ const (
 // Everything else, including unrelated provider configuration and Claude Code
 // isolation flags, is preserved.
 var claudeNativeEnvKeys = map[string]bool{
-	"ANTHROPIC_BASE_URL":                      true,
-	"ANTHROPIC_AUTH_TOKEN":                    true,
-	"ANTHROPIC_API_KEY":                       true,
-	"ANTHROPIC_CONFIG_DIR":                    true,
-	"ANTHROPIC_PROFILE":                       true,
-	"ANTHROPIC_UNIX_SOCKET":                   true,
-	"ANTHROPIC_FEDERATION_RULE_ID":            true,
-	"ANTHROPIC_ORGANIZATION_ID":               true,
-	"ANTHROPIC_IDENTITY_TOKEN":                true,
-	"ANTHROPIC_IDENTITY_TOKEN_FILE":           true,
-	"ANTHROPIC_SERVICE_ACCOUNT_ID":            true,
-	"ANTHROPIC_WORKSPACE_ID":                  true,
-	"ANTHROPIC_GOOGLE_CLOUD_BASE_URL":         true,
-	"ANTHROPIC_GOOGLE_CLOUD_LOCATION":         true,
-	"ANTHROPIC_GOOGLE_CLOUD_PROJECT":          true,
-	"ANTHROPIC_GOOGLE_CLOUD_WORKSPACE_ID":     true,
-	"ANTHROPIC_AWS_API_KEY":                   true,
-	"ANTHROPIC_AWS_BASE_URL":                  true,
-	"ANTHROPIC_AWS_WORKSPACE_ID":              true,
-	"CLAUDE_CODE_API_BASE_URL":                true,
-	"CLAUDE_CODE_OAUTH_TOKEN":                 true,
-	"CLAUDE_CODE_OAUTH_TOKEN_FILE":            true,
-	"CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR": true,
-	"CLAUDE_CODE_OAUTH_REFRESH_TOKEN":         true,
-	"CLAUDE_CODE_OAUTH_SCOPES":                true,
-	"CLAUDE_CODE_OAUTH_CLIENT_ID":             true,
-	"CLAUDE_CODE_CUSTOM_OAUTH_URL":            true,
-	"CLAUDE_CODE_SESSIONS_OAUTH_TOKEN":        true,
-	"CLAUDE_CODE_SESSION_ACCESS_TOKEN":        true,
-	"CLAUDE_CODE_API_KEY_HELPER_FD":           true,
-	"CLAUDE_CODE_HOST_CREDS_FILE":             true,
-	"CLAUDE_CODE_HOST_AUTH_ENV_VAR":           true,
-	"CCR_OAUTH_TOKEN_FILE":                    true,
-	"ANTHROPIC_CUSTOM_HEADERS":                true,
-	"CLAUDE_CODE_USE_BEDROCK":                 true,
-	"CLAUDE_CODE_USE_VERTEX":                  true,
-	"CLAUDE_CODE_USE_FOUNDRY":                 true,
-	"CLAUDE_CODE_USE_ANTHROPIC_AWS":           true,
-	"CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD":  true,
-	"CLAUDE_CODE_USE_MANTLE":                  true,
-	"ANTHROPIC_BEDROCK_BASE_URL":              true,
-	"ANTHROPIC_BEDROCK_MANTLE_BASE_URL":       true,
-	"ANTHROPIC_BEDROCK_REGION_PREFIX":         true,
-	"ANTHROPIC_BEDROCK_SERVICE_TIER":          true,
-	"ANTHROPIC_VERTEX_BASE_URL":               true,
-	"ANTHROPIC_VERTEX_PROJECT_ID":             true,
-	"ANTHROPIC_FOUNDRY_BASE_URL":              true,
-	"ANTHROPIC_FOUNDRY_API_KEY":               true,
-	"ANTHROPIC_FOUNDRY_AUTH_TOKEN":            true,
-	"ANTHROPIC_FOUNDRY_RESOURCE":              true,
-	"AWS_BEARER_TOKEN_BEDROCK":                true,
-	"AWS_ACCESS_KEY_ID":                       true,
-	"AWS_SECRET_ACCESS_KEY":                   true,
-	"AWS_SESSION_TOKEN":                       true,
-	"HTTP_PROXY":                              true,
-	"HTTPS_PROXY":                             true,
-	"ALL_PROXY":                               true,
-	"NO_PROXY":                                true,
-	"http_proxy":                              true,
-	"https_proxy":                             true,
-	"all_proxy":                               true,
-	"no_proxy":                                true,
-	"NODE_EXTRA_CA_CERTS":                     true,
-	"NODE_TLS_REJECT_UNAUTHORIZED":            true,
-	"CLAUDE_CONFIG_DIR":                       true,
-	"TERM_LLM_CLAUDE_PROXY_ROOT":              true,
+	"ANTHROPIC_BASE_URL":                     true,
+	"ANTHROPIC_AUTH_TOKEN":                   true,
+	"ANTHROPIC_API_KEY":                      true,
+	"ANTHROPIC_CONFIG_DIR":                   true,
+	"ANTHROPIC_PROFILE":                      true,
+	"ANTHROPIC_UNIX_SOCKET":                  true,
+	"ANTHROPIC_FEDERATION_RULE_ID":           true,
+	"ANTHROPIC_ORGANIZATION_ID":              true,
+	"ANTHROPIC_IDENTITY_TOKEN":               true,
+	"ANTHROPIC_IDENTITY_TOKEN_FILE":          true,
+	"ANTHROPIC_SERVICE_ACCOUNT_ID":           true,
+	"ANTHROPIC_WORKSPACE_ID":                 true,
+	"ANTHROPIC_GOOGLE_CLOUD_BASE_URL":        true,
+	"ANTHROPIC_GOOGLE_CLOUD_LOCATION":        true,
+	"ANTHROPIC_GOOGLE_CLOUD_PROJECT":         true,
+	"ANTHROPIC_GOOGLE_CLOUD_WORKSPACE_ID":    true,
+	"ANTHROPIC_AWS_API_KEY":                  true,
+	"ANTHROPIC_AWS_BASE_URL":                 true,
+	"ANTHROPIC_AWS_WORKSPACE_ID":             true,
+	"CLAUDE_CODE_API_BASE_URL":               true,
+	claudeOAuthTokenEnv:                      true,
+	"CLAUDE_CODE_OAUTH_TOKEN_FILE":           true,
+	claudeOAuthFDEnv:                         true,
+	"CLAUDE_CODE_OAUTH_REFRESH_TOKEN":        true,
+	claudeOAuthScopesEnv:                     true,
+	"CLAUDE_CODE_OAUTH_CLIENT_ID":            true,
+	"CLAUDE_CODE_CUSTOM_OAUTH_URL":           true,
+	"CLAUDE_CODE_SESSIONS_OAUTH_TOKEN":       true,
+	"CLAUDE_CODE_SESSION_ACCESS_TOKEN":       true,
+	"CLAUDE_CODE_API_KEY_HELPER_FD":          true,
+	"CLAUDE_CODE_HOST_CREDS_FILE":            true,
+	"CLAUDE_CODE_HOST_AUTH_ENV_VAR":          true,
+	"CCR_OAUTH_TOKEN_FILE":                   true,
+	"ANTHROPIC_CUSTOM_HEADERS":               true,
+	"CLAUDE_CODE_USE_BEDROCK":                true,
+	"CLAUDE_CODE_USE_VERTEX":                 true,
+	"CLAUDE_CODE_USE_FOUNDRY":                true,
+	"CLAUDE_CODE_USE_ANTHROPIC_AWS":          true,
+	"CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD": true,
+	"CLAUDE_CODE_USE_MANTLE":                 true,
+	"ANTHROPIC_BEDROCK_BASE_URL":             true,
+	"ANTHROPIC_BEDROCK_MANTLE_BASE_URL":      true,
+	"ANTHROPIC_BEDROCK_REGION_PREFIX":        true,
+	"ANTHROPIC_BEDROCK_SERVICE_TIER":         true,
+	"ANTHROPIC_VERTEX_BASE_URL":              true,
+	"ANTHROPIC_VERTEX_PROJECT_ID":            true,
+	"ANTHROPIC_FOUNDRY_BASE_URL":             true,
+	"ANTHROPIC_FOUNDRY_API_KEY":              true,
+	"ANTHROPIC_FOUNDRY_AUTH_TOKEN":           true,
+	"ANTHROPIC_FOUNDRY_RESOURCE":             true,
+	"AWS_BEARER_TOKEN_BEDROCK":               true,
+	"AWS_ACCESS_KEY_ID":                      true,
+	"AWS_SECRET_ACCESS_KEY":                  true,
+	"AWS_SESSION_TOKEN":                      true,
+	"HTTP_PROXY":                             true,
+	"HTTPS_PROXY":                            true,
+	"ALL_PROXY":                              true,
+	"NO_PROXY":                               true,
+	"http_proxy":                             true,
+	"https_proxy":                            true,
+	"all_proxy":                              true,
+	"no_proxy":                               true,
+	"NODE_EXTRA_CA_CERTS":                    true,
+	"NODE_TLS_REJECT_UNAUTHORIZED":           true,
+	"CLAUDE_CONFIG_DIR":                      true,
+	"TERM_LLM_CLAUDE_PROXY_ROOT":             true,
 }
 
 // claudeNativeEnvironment builds the child-only environment. The proxy URL
@@ -99,19 +99,16 @@ var claudeNativeEnvKeys = map[string]bool{
 // clients turn into Proxy-Authorization: Basic. Loopback stays outside the
 // proxy so native MCP and local tools keep working, while inherited exclusions
 // that could match either Anthropic host are dropped. The CA is trusted only
-// through NODE_EXTRA_CA_CERTS. No vendor OAuth credential is injected: the
-// native client signs in through the intercepted platform host and keeps only
-// the resulting placeholder inside the term-managed configuration directory.
-func claudeNativeEnvironment(env []string, bootstrap *claudeNativeBootstrap, token, caPath, stateDir string) ([]string, error) {
-	proxy, err := url.Parse(bootstrap.ProxyURL)
-	if err != nil {
-		return nil, errors.New("Claude proxy metadata proxy_url is invalid")
-	}
-	proxy.User = url.UserPassword(bootstrap.Route, token)
-	proxyEndpoint := proxy.String()
+// through NODE_EXTRA_CA_CERTS. Any shared placeholder is attached separately
+// to the prepared command, not included in this environment.
+func claudeNativeEnvironment(env []string, bootstrap *nativeBootstrap, token, caPath, stateDir string) ([]string, error) {
+	proxyEndpoint := bootstrap.connectURL(token)
 	noProxy := ClaudeNativeNoProxy(env)
 
 	forced := []struct{ key, value string }{
+		// Claude applies settings.json env after exec. Mark routing as host-managed
+		// so project and profile settings cannot replace the scoped proxy.
+		{"CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1"},
 		{"HTTPS_PROXY", proxyEndpoint},
 		{"HTTP_PROXY", proxyEndpoint},
 		{"NO_PROXY", noProxy},
@@ -128,6 +125,13 @@ func claudeNativeEnvironment(env []string, bootstrap *claudeNativeBootstrap, tok
 	out := make([]string, 0, len(env)+len(forced))
 	for _, entry := range env {
 		key, _, _ := strings.Cut(entry, "=")
+		if runtime.GOOS == "windows" {
+			key = strings.ToUpper(key)
+		}
+		// Simple mode disables OAuth, including descriptor-supplied access.
+		if key == "CLAUDE_CODE_SIMPLE" && bootstrap.claudeAccess.placeholder != "" {
+			continue
+		}
 		if _, replaced := replace[key]; replaced || claudeNativeEnvKeys[key] {
 			continue
 		}
@@ -216,45 +220,60 @@ func claudeNativeNoProxyCouldReachAPI(entry string) bool {
 }
 
 func prepareClaudeNativeState(stateDir string, caPEM []byte) (string, error) {
-	dir := filepath.Clean(stateDir)
-	if dir == "." || dir == string(filepath.Separator) {
-		return "", errors.New("Claude proxy state must be a private directory")
-	}
-	if err := fileprivacy.MkdirAll(dir); err != nil {
-		return "", errors.New("could not create the private Claude proxy state directory")
-	}
-	info, err := os.Lstat(dir)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || fileprivacy.CheckDir(info) != nil {
-		return "", errors.New("Claude proxy state must be a private non-symlink directory")
-	}
-	caPath := filepath.Join(dir, claudeNativeCAFile)
-	if err := writeClaudeNativeCAFile(caPath, caPEM); err != nil {
+	caPath, err := claudeNativePolicy.prepareCA(stateDir, claudeNativeCAFile, caPEM)
+	if err != nil {
 		return "", err
 	}
-	if err := ensureClaudeNativeLoginSettings(dir); err != nil {
+	if err := ensureClaudeNativeLoginSettings(filepath.Clean(stateDir)); err != nil {
 		return "", err
 	}
 	return caPath, nil
 }
 
-func writeClaudeNativeCAFile(path string, data []byte) error {
+func (p nativePolicy) prepareCA(stateDir, filename string, caPEM []byte) (string, error) {
+	dir := filepath.Clean(stateDir)
+	if dir == "." || dir == string(filepath.Separator) {
+		return "", p.errorf("state must be a private directory")
+	}
+	if err := fileprivacy.MkdirAll(dir); err != nil {
+		return "", p.errorf("could not create the private state directory")
+	}
+	if err := checkNativePrivateDir(dir); err != nil {
+		return "", p.errorf("state must be a private non-symlink directory")
+	}
+	path := filepath.Join(dir, filename)
+	return path, p.writeCAFile(path, caPEM)
+}
+
+func checkNativePrivateDir(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || fileprivacy.CheckDir(info) != nil {
+		return errors.New("not a private non-symlink directory")
+	}
+	return nil
+}
+
+func (p nativePolicy) writeCAFile(path string, data []byte) error {
 	info, err := os.Lstat(path)
 	if err == nil {
-		if !info.Mode().IsRegular() || info.Size() > claudeNativeCAMaxBytes {
-			return errors.New("Claude proxy CA must be a private regular file")
+		if !info.Mode().IsRegular() || info.Size() > nativeCAMaxBytes {
+			return p.errorf("CA must be a private regular file")
 		}
 		current, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return errors.New("could not read the Claude proxy CA file")
+			return p.errorf("CA file could not be read")
 		}
 		if bytes.Equal(current, data) && fileprivacy.CheckFile(info) == nil {
 			return nil
 		}
 	} else if !os.IsNotExist(err) {
-		return errors.New("could not inspect the Claude proxy CA file")
+		return p.errorf("CA file could not be inspected")
 	}
 	if err := fileprivacy.WriteFileAtomic(path, data); err != nil {
-		return errors.New("could not write the Claude proxy CA file")
+		return p.errorf("CA file could not be written")
 	}
 	return nil
 }
@@ -280,7 +299,7 @@ func ensureClaudeNativeLoginSettings(dir string) error {
 			return errors.New("could not read the Claude proxy settings")
 		}
 		if len(bytes.TrimSpace(data)) > 0 {
-			if err := decodeClaudeNativeSettings(data, &settings); err != nil {
+			if err := decodeUniqueJSONObject(data, &settings); err != nil {
 				return errors.New("Claude proxy settings must be one valid JSON object; refusing to overwrite them")
 			}
 		}
@@ -311,7 +330,7 @@ func ensureClaudeNativeLoginSettings(dir string) error {
 	return nil
 }
 
-func decodeClaudeNativeSettings(data []byte, out *map[string]json.RawMessage) error {
+func decodeUniqueJSONObject(data []byte, out *map[string]json.RawMessage) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	token, err := decoder.Token()
 	if err != nil || token != json.Delim('{') {

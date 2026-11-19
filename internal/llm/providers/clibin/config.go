@@ -15,3 +15,8 @@ func (p *GrokBinProvider) ConfiguredModel() (model, effort string) {
 func (p *CursorBinProvider) ConfiguredModel() (model, effort string, fast bool) {
 	return p.model, p.effort, p.fast
 }
+
+// ConfiguredModel reports the model and effort passed to the agy CLI.
+func (p *AgyBinProvider) ConfiguredModel() (model, effort string) {
+	return p.model, p.effort
+}

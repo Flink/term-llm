@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -120,14 +121,13 @@ func TestClaudeProxyEnvironmentUsesNativeTunnelForAllLaunches(t *testing.T) {
 	}
 	dir := ""
 	for _, env := range [][]string{provider.buildCommandEnv("high"), provider.buildModelListEnv()} {
-		final, wire, err := startCLIWireAuditContext(t.Context(), "claude-bin-models", env)
+		cmd := &exec.Cmd{Env: env}
+		cleanup, err := prepareClaudeLaunch(t.Context(), "claude-bin-models", cmd)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if wire != nil {
-			t.Fatal("unexpected wire capture")
-		}
-		values := envSliceMap(final)
+		t.Cleanup(cleanup)
+		values := envSliceMap(cmd.Env)
 		if _, ok := values["CLAUDE_CODE_OAUTH_TOKEN"]; ok {
 			t.Fatal("launcher must not inject a vendor OAuth token")
 		}
@@ -221,7 +221,7 @@ func TestClaudeProxyEnvironmentUsesNativeTunnelForAllLaunches(t *testing.T) {
 }
 
 func TestClaudeProxyMissingBindingFailsBeforeExec(t *testing.T) {
-	_, _, err := startCLIWireAuditContext(t.Context(), "claude-bin", []string{claudeProxyRootEnv + "=https://missing-claude-proxy.example.test/root"})
+	_, err := prepareClaudeLaunch(t.Context(), "claude-bin", &exec.Cmd{Env: []string{claudeProxyRootEnv + "=https://missing-claude-proxy.example.test/root"}})
 	if err == nil || strings.Contains(err.Error(), "missing-claude-proxy") {
 		t.Fatalf("unregistered root accepted or leaked: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestClaudeProxyBootstrapFailureDoesNotFallBackToNativeCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider := NewClaudeBinProvider("opus", map[string]string{claudeProxyRootEnv: root})
-	_, _, err := startCLIWireAuditContext(t.Context(), "claude-bin", provider.buildCommandEnv(""))
+	_, _, _, err := provider.prepareClaudeCommand(t.Context(), nil, "", "")
 	if err == nil || !strings.Contains(err.Error(), "HTTP 500") {
 		t.Fatalf("bootstrap failure was not surfaced: %v", err)
 	}
@@ -264,11 +264,13 @@ func TestClaudeProxyBootstrapFailureDoesNotFallBackToNativeCLI(t *testing.T) {
 
 func TestClaudeProxyLeavesUnboundLaunchUntouched(t *testing.T) {
 	env := []string{"HOME=/home/user", "ANTHROPIC_AUTH_TOKEN=direct-oauth", "PRESERVED=value"}
-	final, wire, err := startCLIWireAuditContext(t.Context(), "claude-bin", env)
-	if err != nil || wire != nil {
+	cmd := &exec.Cmd{Env: env}
+	cleanup, err := prepareClaudeLaunch(t.Context(), "claude-bin", cmd)
+	if err != nil {
 		t.Fatalf("direct launch changed: %v", err)
 	}
-	if strings.Join(final, "\n") != strings.Join(env, "\n") {
-		t.Fatalf("unbound environment changed: %v", final)
+	defer cleanup()
+	if strings.Join(cmd.Env, "\n") != strings.Join(env, "\n") {
+		t.Fatalf("unbound environment changed: %v", cmd.Env)
 	}
 }

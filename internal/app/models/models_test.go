@@ -135,14 +135,21 @@ exit 1
 		got = append(got, model.ID)
 	}
 	want := []string{
-		"gemini-3.8-flash-high",
-		"gemini-3.8-flash-medium",
-		"gemini-3.8-flash-low",
+		"gemini-3.8-flash",
 		"claude-sonnet-4-6",
-		"gpt-oss-120b-medium",
+		"gpt-oss-120b",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("listed models = %v, want %v", got, want)
+	}
+	if !slices.Equal(models[0].ReasoningEfforts, []string{"low", "medium", "high"}) {
+		t.Fatalf("gemini-3.8-flash efforts = %v, want [low medium high]", models[0].ReasoningEfforts)
+	}
+	if len(models[1].ReasoningEfforts) != 0 {
+		t.Fatalf("claude-sonnet-4-6 efforts = %v, want none", models[1].ReasoningEfforts)
+	}
+	if !slices.Equal(models[2].ReasoningEfforts, []string{"medium"}) {
+		t.Fatalf("gpt-oss-120b efforts = %v, want [medium]", models[2].ReasoningEfforts)
 	}
 	if cached := clibin.GetCachedAgyBinModels(); !slices.Equal(cached, want) {
 		t.Fatalf("cached models = %v, want %v", cached, want)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/term-llm/term-llm/internal/agyproxy"
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/runtimeoutput"
 )
@@ -53,6 +54,7 @@ type agyTurnPlan struct {
 	Reason         string
 	Messages       []core.Message
 	Prompt         string
+	PromptParts    []agyproxy.PromptPart
 	PromptBytes    int
 	ResumeID       string
 	SentCount      int
@@ -100,7 +102,7 @@ func (p *AgyBinProvider) planTurn(req core.Request, workspaceDir string) (agyTur
 		return agyTurnPlan{}, err
 	}
 	plan.TranscriptHash = hash
-	plan.Prompt = buildAgyPrompt(plan.Messages, workspaceDir)
+	plan.Prompt, plan.PromptParts = buildAgyPromptParts(plan.Messages, workspaceDir)
 	if strings.TrimSpace(plan.Prompt) == "" {
 		return agyTurnPlan{}, errors.New("build agy-bin prompt: no user-visible content")
 	}

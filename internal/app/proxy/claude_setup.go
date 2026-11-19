@@ -7,22 +7,40 @@ import (
 	"time"
 )
 
-type claudeSetupInput struct {
-	Revision *int64 `json:"revision"`
-	Route    string `json:"route,omitempty"`
+// Native setup descriptors are selected by the admin path, never by request JSON.
+type nativeSetupProvider struct {
+	proxy             *nativeProxyProvider
+	callerName        string
+	requiredEndpoints []string
 }
 
-type claudeSetupReply struct {
+var claudeSetup = nativeSetupProvider{
+	proxy: claudeProxyProvider, callerName: "Claude Code",
+	requiredEndpoints: []string{"GET /api/oauth/profile", "GET /api/oauth/usage", "POST /v1/messages", "POST /v1/messages/count_tokens", "GET /v1/models"},
+}
+
+var agySetup = nativeSetupProvider{
+	proxy: agyProxyProvider, callerName: "Antigravity",
+	requiredEndpoints: []string{"POST /v1internal:loadCodeAssist", "POST /v1internal:fetchUserInfo", "POST /v1internal:retrieveUserQuotaSummary", "POST /v1internal:fetchAvailableModels", "POST /v1internal:listExperiments", "POST /v1internal:generateContent", "POST /v1internal:streamGenerateContent"},
+}
+
+type nativeSetupInput struct {
+	Revision     *int64 `json:"revision"`
+	Route        string `json:"route,omitempty"`
+	SharedAction string `json:"shared_action,omitempty"`
+}
+
+type nativeSetupReply struct {
 	URL      string `json:"url"`
 	Token    string `json:"token"`
 	CallerID string `json:"caller_id"`
 	Revision int64  `json:"revision"`
 }
 
-// claudeSetupAPI is deliberately ordinary authenticated administration. It does
+// nativeSetupAPI is deliberately ordinary authenticated administration. It does
 // not enroll a worker, contact an issuer, or read/write a client's login files.
-func (s *Service) claudeSetupAPI(w http.ResponseWriter, r *http.Request, sess session) {
-	var in claudeSetupInput
+func (s *Service) nativeSetupAPI(w http.ResponseWriter, r *http.Request, provider nativeSetupProvider) {
+	var in nativeSetupInput
 	if !readJSON(w, r, &in) {
 		return
 	}
@@ -41,7 +59,11 @@ func (s *Service) claudeSetupAPI(w http.ResponseWriter, r *http.Request, sess se
 		return
 	}
 	if r.Method == http.MethodDelete {
-		s.clearClaudeSetup(w, r)
+		if in.SharedAction != "" {
+			fail(w, 400, "Unexpected shared sign-in action")
+			return
+		}
+		s.clearNativeSetup(w, r, provider)
 		return
 	}
 	origin, allowed := s.browserOrigin(r)
@@ -49,32 +71,50 @@ func (s *Service) claudeSetupAPI(w http.ResponseWriter, r *http.Request, sess se
 		fail(w, 403, "Admin Host is not allowed")
 		return
 	}
-	next, chosen, account, err := s.prepareClaudeSetup(r, in.Route)
+	if err := in.validateSharedAction(r.Method); err != nil {
+		provider.setupFailure(w, err)
+		return
+	}
+	if in.SharedAction == "" && in.Route == "" {
+		in.SharedAction = "create"
+	}
+	next, chosen, account, err := s.prepareNativeSetup(r, provider, in.Route, in.SharedAction)
 	if err != nil {
-		claudeSetupFailure(w, err)
+		provider.setupFailure(w, err)
 		return
 	}
 	id, token := randomToken("c_")[:26], randomToken("sk-tlp-")
-	if err = s.store.createClaudeSetup(r.Context(), next, account, chosen.Name, id, token); err != nil {
-		claudeSetupFailure(w, err)
+	callerName := provider.callerName
+	if in.SharedAction != "" {
+		callerName += " sign-in launcher"
+	}
+	// Shared sign-in launchers enroll on one route and are not device grants.
+	operator := in.SharedAction != ""
+	grants, err := s.nativeSetupGrants(next, chosen, provider.proxy, operator)
+	if err != nil {
+		provider.setupFailure(w, err)
+		return
+	}
+	if err = s.store.createNativeSetup(r.Context(), next, account, chosen, id, token, callerName, operator, grants); err != nil {
+		provider.setupFailure(w, err)
 		return
 	}
 	s.reconcileSockets(next)
 	s.snap = next
-	jsonReply(w, 201, claudeSetupReply{URL: origin + chosen.LocalPrefix, Token: token, CallerID: id, Revision: next.revision})
+	jsonReply(w, 201, nativeSetupReply{URL: origin + chosen.LocalPrefix, Token: token, CallerID: id, Revision: next.revision})
 }
 
-func claudeSetupFailure(w http.ResponseWriter, err error) {
+func (p nativeSetupProvider) setupFailure(w http.ResponseWriter, err error) {
 	if safe, ok := err.(inputError); ok {
 		fail(w, 400, safe.Error())
 		return
 	}
-	fail(w, 503, "Could not commit Claude setup; existing configuration and access are unchanged")
+	fail(w, 503, "Could not commit "+p.proxy.label+" setup; existing configuration and access are unchanged")
 }
 
 // Copy the mutable config containers: compile normalizes routes in place. Money
 // is canonical in its singleton, not necessarily the last published snapshot.
-func (s *Service) claudeSetupConfig(r *http.Request) (Config, error) {
+func (s *Service) nativeSetupConfig(r *http.Request) (Config, error) {
 	c := s.snap.config
 	c.Routes = append([]Route{}, c.Routes...)
 	c.Accounts = make(map[string]AccountRef, len(s.snap.config.Accounts))
@@ -86,74 +126,24 @@ func (s *Service) claudeSetupConfig(r *http.Request) (Config, error) {
 	return c, err
 }
 
-func (s *Service) prepareClaudeSetup(r *http.Request, requestedRoute string) (*snapshot, Route, *accountRecord, error) {
-	c, err := s.claudeSetupConfig(r)
+func (s *Service) prepareNativeSetup(r *http.Request, p nativeSetupProvider, requestedRoute, sharedAction string) (*snapshot, Route, *accountRecord, error) {
+	c, err := s.nativeSetupConfig(r)
 	if err != nil {
 		return nil, Route{}, nil, err
 	}
-	infos, slots, used, err := s.claudeSetupInventory(c)
+	slots, used, err := s.nativeSetupInventory(c, p.proxy.kind)
 	if err != nil {
 		return nil, Route{}, nil, err
 	}
-	preset, err := claudeSetupPreset()
+	preset, err := p.preset()
 	if err != nil {
 		return nil, Route{}, nil, err
 	}
-	var chosen Route
-	var found bool
-	if requestedRoute == "" {
-		chosen, found = claudeSetupExistingRoute(c.Routes, slots, preset)
-	} else {
-		for _, route := range c.Routes {
-			if route.Name == requestedRoute && route.Enabled && claudeSetupMatches(route, slots, preset) {
-				chosen, found = route, true
-				break
-			}
-		}
-		if !found {
-			return nil, Route{}, nil, inputError("Enable a launcher-compatible Claude route before adding a device")
-		}
+	c, chosen, created, err := s.chooseNativeSetupRoute(c, p, preset, slots, used, requestedRoute)
+	if err != nil {
+		return nil, Route{}, nil, err
 	}
-	var created *accountRecord
-	if found {
-		for i := range c.Routes {
-			if c.Routes[i].Name == chosen.Name {
-				c.Routes[i].Enabled = true
-			}
-		}
-		chosen.Enabled = true
-	} else {
-		origin, err := Origin(preset.Upstream)
-		if err != nil {
-			return nil, Route{}, nil, err
-		}
-		accountName := ""
-		// accountInfos is sorted, making reuse stable without map-order choices.
-		for _, info := range infos {
-			if a, ok := slots[info.Name]; ok && accountOriginAllowed(a, origin) {
-				accountName = a.Name
-				break
-			}
-		}
-		if accountName == "" {
-			accountName = claudeSetupFreeName(preset.ID, used)
-			created = &accountRecord{AccountInfo: AccountInfo{Name: accountName, Kind: preset.AccountKind, State: "native_login", AuthMode: "vault", Generation: 1, Updated: time.Now().UnixMilli()}, credentials: accountCredentials{Mode: "vault"}}
-		}
-		chosen = Route{Account: accountName, Enabled: true, Upstream: preset.Upstream, CallerAuth: preset.Auth, Billing: preset.Billing, Usage: preset.Usage, WebSocket: preset.WebSocket}
-		used = map[string]bool{}
-		for _, route := range c.Routes {
-			used[route.Name] = true
-		}
-		for i := 1; ; i++ {
-			name := claudeSetupName(preset.ID, i)
-			chosen.Name, chosen.LocalPrefix = name, "/"+name+"/"
-			if !used[name] && validatePrefix(chosen, s.snap.routes) == nil {
-				break
-			}
-		}
-		c.Routes = append(c.Routes, chosen)
-	}
-	next, err := compile(c, s.snap.revision+1, s.snap.secrets)
+	next, err := s.snap.recompile(c, s.snap.secrets)
 	if err != nil {
 		return nil, Route{}, nil, inputError(err.Error())
 	}
@@ -172,10 +162,39 @@ func (s *Service) prepareClaudeSetup(r *http.Request, requestedRoute string) (*s
 	return next, chosen, created, nil
 }
 
-func (s *Service) claudeSetupInventory(c Config) ([]AccountInfo, map[string]accountRecord, map[string]bool, error) {
+func (s *Service) chooseNativeSetupRoute(c Config, p nativeSetupProvider, preset routePreset, slots map[string]accountRecord, used map[string]bool, requestedRoute string) (Config, Route, *accountRecord, error) {
+	if requestedRoute != "" {
+		for _, route := range c.Routes {
+			if route.Name == requestedRoute && route.Enabled && p.matches(route, slots, preset) {
+				return c, route, nil, nil
+			}
+		}
+		return c, Route{}, nil, inputError("Enable a launcher-compatible shared " + p.proxy.label + " route first")
+	}
+	account := newNativeAccount(nativeSetupFreeName(preset.ID, used), preset.AccountKind)
+	route := Route{Account: account.Name, Enabled: true, Upstream: preset.Upstream, CallerAuth: preset.Auth, Billing: preset.Billing, Usage: preset.Usage, WebSocket: preset.WebSocket}
+	for i := 1; ; i++ {
+		name := nativeSetupName(preset.ID, i)
+		route.Name, route.LocalPrefix = name, "/"+name+"/"
+		if !used[name] && validatePrefix(route, s.snap.routes) == nil {
+			break
+		}
+	}
+	c.Routes = append(c.Routes, route)
+	return c, route, &account, nil
+}
+
+func newNativeAccount(name, kind string) accountRecord {
+	return accountRecord{
+		AccountInfo: AccountInfo{Name: name, Kind: kind, State: "needs_login", AuthMode: claudeSharedMode, Generation: 1, Updated: time.Now().UnixMilli()},
+		credentials: accountCredentials{Mode: claudeSharedMode}, claudeSharedID: randomToken("ns_"),
+	}
+}
+
+func (s *Service) nativeSetupInventory(c Config, kind string) (map[string]accountRecord, map[string]bool, error) {
 	infos, err := s.store.accountInfos()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	slots := map[string]accountRecord{}
 	used := map[string]bool{}
@@ -187,58 +206,46 @@ func (s *Service) claudeSetupInventory(c Config) ([]AccountInfo, map[string]acco
 	}
 	for _, info := range infos {
 		used[info.Name] = true
-		if info.Kind != "claude-code" {
+		if info.Kind != kind {
 			continue
 		}
 		a, err := s.store.account(info.Name)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
-		if validateAccountCredentials(a.Kind, a.credentials) == nil {
+		if a.claudeShared() {
 			slots[a.Name] = a
 		}
 	}
-	return infos, slots, used, nil
+	return slots, used, nil
 }
 
-func claudeSetupPreset() (routePreset, error) {
-	for _, p := range routePresets {
-		if p.ID == "claude-code" && p.AccountKind == "claude-code" {
-			return p, nil
+func (p nativeSetupProvider) preset() (routePreset, error) {
+	for _, preset := range routePresets {
+		if preset.ID == p.proxy.kind && preset.AccountKind == p.proxy.kind {
+			return preset, nil
 		}
 	}
-	return routePreset{}, fmt.Errorf("native Claude preset unavailable")
+	return routePreset{}, fmt.Errorf("native %s preset unavailable", p.proxy.label)
 }
 
-func claudeSetupExistingRoute(routes []Route, slots map[string]accountRecord, p routePreset) (Route, bool) {
-	// Prefer a working enabled route over waking an intentionally disabled one.
-	for _, enabled := range []bool{true, false} {
-		for _, route := range routes {
-			if route.Enabled == enabled && claudeSetupMatches(route, slots, p) {
-				return route, true
-			}
-		}
-	}
-	return Route{}, false
-}
-
-func claudeSetupMatches(route Route, slots map[string]accountRecord, p routePreset) bool {
+func (p nativeSetupProvider) matches(route Route, slots map[string]accountRecord, preset routePreset) bool {
 	a, ok := slots[route.Account]
-	if !ok || (route.Upstream != p.Upstream && route.Upstream != p.Upstream+"/") {
+	if !ok || (route.Upstream != preset.Upstream && route.Upstream != preset.Upstream+"/") {
 		return false
 	}
 	origin, err := Origin(route.Upstream)
-	return err == nil && accountOriginAllowed(a, origin) && claudeSetupNativeCompatible(route)
+	return err == nil && accountOriginAllowed(a, origin) && p.compatible(route)
 }
 
 // The native helper bootstraps with a bearer token and needs the full core
 // endpoint surface. Do not rewrite a customized auth scheme or broaden policy
 // merely to reuse its route; a separate canonical route can share its slot.
-func claudeSetupNativeCompatible(r Route) bool {
+func (p nativeSetupProvider) compatible(r Route) bool {
 	if !strings.EqualFold(r.CallerAuth.Header, "Authorization") || r.CallerAuth.Prefix != "Bearer " {
 		return false
 	}
-	for _, endpoint := range []string{"GET /api/oauth/profile", "GET /api/oauth/usage", "POST /v1/messages", "POST /v1/messages/count_tokens", "GET /v1/models"} {
+	for _, endpoint := range p.requiredEndpoints {
 		method, path, _ := strings.Cut(endpoint, " ")
 		if !policyAllows(r, method, path) {
 			return false
@@ -247,43 +254,43 @@ func claudeSetupNativeCompatible(r Route) bool {
 	return true
 }
 
-func claudeSetupName(base string, n int) string {
+func nativeSetupName(base string, n int) string {
 	if n == 1 {
 		return base
 	}
 	return fmt.Sprintf("%s-%d", base, n)
 }
 
-func claudeSetupFreeName(base string, used map[string]bool) string {
+func nativeSetupFreeName(base string, used map[string]bool) string {
 	for i := 1; ; i++ {
-		if name := claudeSetupName(base, i); !used[name] {
+		if name := nativeSetupName(base, i); !used[name] {
 			return name
 		}
 	}
 }
 
-func (s *Service) clearClaudeSetup(w http.ResponseWriter, r *http.Request) {
-	c, err := s.claudeSetupConfig(r)
+func (s *Service) clearNativeSetup(w http.ResponseWriter, r *http.Request, provider nativeSetupProvider) {
+	c, err := s.nativeSetupConfig(r)
 	if err != nil {
-		claudeSetupFailure(w, err)
+		provider.setupFailure(w, err)
 		return
 	}
 	infos, err := s.store.accountInfos()
 	if err != nil {
-		claudeSetupFailure(w, err)
+		provider.setupFailure(w, err)
 		return
 	}
 	accounts := map[string]bool{}
 	otherAccounts := map[string]bool{}
 	for _, info := range infos {
-		if info.Kind == "claude-code" {
+		if info.Kind == provider.proxy.kind {
 			accounts[info.Name] = true
 		} else {
 			otherAccounts[info.Name] = true
 		}
 	}
 	for name, ref := range c.Accounts {
-		if ref.Kind == "claude-code" || accounts[name] {
+		if ref.Kind == provider.proxy.kind || accounts[name] {
 			if !otherAccounts[name] {
 				accounts[name] = true
 			}
@@ -300,16 +307,16 @@ func (s *Service) clearClaudeSetup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	c.Routes = routes
-	next, err := compile(c, s.snap.revision+1, s.snap.secrets)
+	next, err := s.snap.recompile(c, s.snap.secrets)
 	if err == nil {
 		err = s.validateAccounts(next)
 	}
 	var revoked []string
 	if err == nil {
-		revoked, err = s.store.clearClaudeSetup(r.Context(), next, removed)
+		revoked, err = s.store.clearNativeSetup(r.Context(), next, removed, provider.proxy)
 	}
 	if err != nil {
-		claudeSetupFailure(w, err)
+		provider.setupFailure(w, err)
 		return
 	}
 	// Publication and live cancellation are strictly after the durable commit.
@@ -322,4 +329,17 @@ func (s *Service) clearClaudeSetup(w http.ResponseWriter, r *http.Request) {
 		s.cancelCallerSockets(id)
 	}
 	jsonReply(w, 200, map[string]int64{"revision": next.revision})
+}
+
+func (in nativeSetupInput) validateSharedAction(method string) error {
+	if in.SharedAction == "" {
+		return nil
+	}
+	if method != http.MethodPost {
+		return inputError("Shared sign-in requires a setup POST")
+	}
+	if in.SharedAction == "create" && in.Route == "" || in.SharedAction == "connect" && in.Route != "" {
+		return nil
+	}
+	return inputError("Invalid shared native sign-in action")
 }

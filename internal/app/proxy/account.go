@@ -56,20 +56,20 @@ var errAccountUnavailable = errors.New("trusted account unavailable; sign in or 
 
 func accountKind(kind string) bool {
 	switch kind {
-	case "chatgpt", "grok", "copilot", "claude-code", "aws-sigv4":
+	case "chatgpt", "grok", "copilot", "claude-code", "agy-bin", "aws-sigv4":
 		return true
 	}
 	return false
 }
 func validateAccountCredentials(kind string, c accountCredentials) error {
-	if kind == "claude-code" {
-		if c.Mode != "vault" || c.AccessToken != "" || c.RefreshToken != "" || c.GitHubToken != "" || c.AccountID != "" || c.ExpiresAt != 0 || c.AccessKeyID != "" || c.SecretAccessKey != "" || c.SessionToken != "" || len(c.Scopes) != 0 {
-			return inputError("Claude accounts use native login through term-llm proxy run claude; credentials must contain only mode: vault")
+	if nativeProviderForKind(kind) != nil {
+		if c.Mode != claudeSharedMode || c.AccessToken != "" || c.RefreshToken != "" || c.GitHubToken != "" || c.AccountID != "" || c.ExpiresAt != 0 || c.AccessKeyID != "" || c.SecretAccessKey != "" || c.SessionToken != "" || len(c.Scopes) != 0 {
+			return inputError("Native subscription accounts use shared proxy sign-in; credentials must contain only mode: shared_vault")
 		}
 		return nil
 	}
 	if c.Mode != "" {
-		return inputError("credential mode is only supported for Claude Code accounts")
+		return inputError("credential mode is only supported for native subscription accounts")
 	}
 	for _, v := range accountValues(c) {
 		if len(v) > 16<<10 || !httpguts.ValidHeaderFieldValue(v) {
@@ -186,6 +186,9 @@ func (s *Service) bootstrapAccounts(ctx context.Context, c Config) error {
 			return e
 		}
 		a := accountRecord{AccountInfo: AccountInfo{Name: name, Kind: ref.Kind, State: "ready", Generation: 1, ExpiresAt: b.ExpiresAt, Updated: time.Now().UnixMilli()}, credentials: b.accountCredentials, operator: b.accountOperator}
+		if nativeProviderForKind(ref.Kind) != nil {
+			a = newNativeAccount(name, ref.Kind)
+		}
 		if e = s.store.replaceAccount(ctx, a, 0); e != nil {
 			return fmt.Errorf("commit imported account: %w", errAccountUnavailable)
 		}
@@ -268,6 +271,9 @@ func (s *Service) redactAccountMaterial(text string, values ...string) string {
 }
 
 func accountOriginAllowed(a accountRecord, origin string) bool {
+	if a.Kind == agyProxyProvider.kind {
+		return origin == "https://"+agyProxyProvider.apiHost+":443"
+	}
 	if len(a.operator.Origins) > 0 {
 		for _, o := range a.operator.Origins {
 			if o == origin {
@@ -285,7 +291,7 @@ func accountOriginAllowed(a accountRecord, origin string) bool {
 	case "copilot":
 		hosts = []string{"https://api.githubcopilot.com:443", "https://api.business.githubcopilot.com:443", "https://api.enterprise.githubcopilot.com:443"}
 	case "claude-code":
-		hosts = []string{"https://api.anthropic.com:443"}
+		hosts = []string{"https://" + claudeAPIHost + ":443"}
 	case "aws-sigv4":
 		if !validAWSRegion(a.operator.Region) {
 			return false
@@ -353,11 +359,10 @@ func boundedAttribution(value string) string {
 	return out.String()
 }
 
-// accountAuthMode describes native Claude credential custody. Older stored
-// credentials are not used by native proxy sessions; each client logs in itself.
+// Native subscription accounts always share an operator-owned login.
 func accountAuthMode(kind string, _ accountCredentials) string {
-	if kind == "claude-code" {
-		return "vault"
+	if nativeProviderForKind(kind) != nil {
+		return claudeSharedMode
 	}
 	return ""
 }

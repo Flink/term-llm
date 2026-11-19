@@ -42,6 +42,16 @@ func (s *store) updateGrants(id string, grants []string, snap *snapshot) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := editableCaller(tx, id); err != nil {
+		return err
+	}
+	if err := replaceGrants(tx, id, grants, snap); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func editableCaller(tx *sql.Tx, id string) error {
 	var revoked bool
 	if err := tx.QueryRow("SELECT revoked FROM callers WHERE id=?", id).Scan(&revoked); err == sql.ErrNoRows {
 		return inputError("client no longer exists; refresh before editing grants")
@@ -51,10 +61,7 @@ func (s *store) updateGrants(id string, grants []string, snap *snapshot) error {
 	if revoked {
 		return inputError("revoked clients cannot receive new grants; create a new client")
 	}
-	if err := replaceGrants(tx, id, grants, snap); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return nil
 }
 
 func replaceGrants(tx *sql.Tx, id string, grants []string, snap *snapshot) error {
@@ -64,13 +71,11 @@ func replaceGrants(tx *sql.Tx, id string, grants []string, snap *snapshot) error
 	if err := writeGrants(tx, id, grants, snap); err != nil {
 		return err
 	}
-	// Revoking and later regranting an identical route must not resurrect a
-	// native login. Retained grants keep their existing isolated sessions.
-	_, err := tx.Exec("DELETE FROM claude_vault WHERE caller=? AND NOT EXISTS (SELECT 1 FROM grants g WHERE g.caller=claude_vault.caller AND g.route=claude_vault.route AND g.authority=claude_vault.authority)", id)
+	_, err := tx.Exec("DELETE FROM claude_shared_enrollment WHERE caller=? AND NOT EXISTS (SELECT 1 FROM grants g WHERE g.caller=claude_shared_enrollment.caller AND g.route=claude_shared_enrollment.route AND g.authority=claude_shared_enrollment.authority)", id)
 	return err
 }
 
-// revokeCaller clears the caller's native custody in the same durable commit as
+// revokeCaller clears the caller's outstanding enrollment in the same durable commit as
 // revocation. A late token exchange cannot re-create it after this fence.
 func (s *store) revokeCaller(ctx context.Context, id string) error {
 	return s.accountWrite(ctx, func(tx *sql.Tx) error {
@@ -82,6 +87,6 @@ func revokeCallerTx(ctx context.Context, tx *sql.Tx, id string) error {
 	if _, err := tx.ExecContext(ctx, "UPDATE callers SET revoked=1 WHERE id=?", id); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, "DELETE FROM claude_vault WHERE caller=?", id)
+	_, err := tx.ExecContext(ctx, "DELETE FROM claude_shared_enrollment WHERE caller=?", id)
 	return err
 }

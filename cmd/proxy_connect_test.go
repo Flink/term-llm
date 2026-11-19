@@ -67,3 +67,18 @@ func TestProxyRunClaudeAcceptsNativeFlagsOnlyAfterSeparator(t *testing.T) {
 		t.Fatalf("vendored token or native argument handling changed: %v", err)
 	}
 }
+
+func TestProxyRunAgyHelpDocumentsPersonalLogin(t *testing.T) {
+	root := newProxyCommand()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs([]string{"run", "agy", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"personal Antigravity subscription", "proxy run agy -- acp --login", "--agy-command", "--url", "--token"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("agy help missing %q", want)
+		}
+	}
+}

@@ -1,3 +1,4 @@
+import { nativeProvider } from './native';
 import type {
   ProxyAccount,
   ProxyAccountInput,
@@ -9,7 +10,6 @@ import {
   button,
   card,
   dateTime,
-  disclosure,
   el,
   field,
   input,
@@ -67,8 +67,6 @@ export function parseAccountCredentials(raw: string): ProxyAccountInput['credent
 }
 
 export function accountStateLabel(account: ProxyAccount): string {
-  // Slot metadata identifies the mechanism, not any client's native sign-in state.
-  if (account.kind === 'claude-code') return 'Native login';
   return account.state.replaceAll('_', ' ');
 }
 
@@ -196,21 +194,26 @@ export function accountControls(
   account: ProxyAccount,
   usedBy: string[] = [],
   focusKey?: string,
-): HTMLDetailsElement {
+): HTMLElement {
   const { api, context } = deps;
   let current = account;
   const status = el('p');
+  status.className = 'account-controls-status';
   const metadata = el('small');
+  metadata.className = 'account-controls-meta';
   function renderStatus() {
-    status.textContent = `${current.kind} · ${accountStateLabel(current)}`;
+    status.replaceChildren(
+      el('strong', current.name),
+      ` · ${current.kind} · ${accountStateLabel(current)}`,
+    );
     metadata.textContent = `Updated ${dateTime(current.updated)}${current.expires_at ? ` · Expires ${dateTime(current.expires_at * 1000)}` : ''}`;
   }
   renderStatus();
   const shared = usedBy.length > 1 ? el('p', `Shared by routes ${usedBy.join(', ')}.`) : '';
   const affected = usedBy.length ? ` Routes ${usedBy.join(', ')} use it.` : '';
   const editor = el('div');
-  const details = disclosure(`Manage account ${account.name}`);
-  details.className = 'account-controls';
+  const container = el('div');
+  container.className = 'account-controls';
   const stored = async (next: ProxyAccount) => {
     current = next;
     mergeAccount(deps.state, next);
@@ -259,7 +262,7 @@ export function accountControls(
       void context.run(async () => {
         await api.removeAccount(current.name);
         deps.state.accounts = (deps.state.accounts ?? []).filter((a) => a.name !== current.name);
-        details.remove();
+        container.remove();
         await context.refresh();
         context.announce(`Account ${current.name} removed.`);
       }, remove);
@@ -267,8 +270,8 @@ export function accountControls(
     remove.className = 'danger';
     buttons.push(remove);
   }
-  details.append(status, metadata, shared, actions(...buttons), editor);
-  return details;
+  container.append(status, metadata, shared, actions(...buttons), editor);
+  return container;
 }
 
 // A route names an account that does not exist yet (file-managed routes, or
@@ -277,22 +280,34 @@ export function connectAccount(
   deps: AccountDeps,
   name: string,
   kind: ProxyAccount['kind'] | undefined,
-): HTMLDetailsElement {
-  const details = disclosure(`Connect account ${name}`);
-  details.className = 'account-controls';
-  details.append(
-    accountForm(deps, {
-      name,
-      kind,
-      fixedName: true,
-      stored: async (account) => {
-        mergeAccount(deps.state, account);
-        await deps.context.refresh();
-      },
-      cancel: () => (details.open = false),
-    }),
-  );
-  return details;
+): HTMLElement {
+  const container = el('div');
+  container.className = 'account-controls';
+  const editor = el('div');
+  const connect = button(`Connect account ${name}`, () => {
+    if (editor.childElementCount) {
+      editor.querySelector<HTMLInputElement>('input[type=password]')?.focus();
+      return;
+    }
+    editor.replaceChildren(
+      accountForm(deps, {
+        name,
+        kind,
+        fixedName: true,
+        stored: async (account) => {
+          mergeAccount(deps.state, account);
+          await deps.context.refresh();
+        },
+        cancel: () => {
+          editor.replaceChildren();
+          connect.focus();
+        },
+      }),
+    );
+    editor.querySelector<HTMLInputElement>('input[type=password]')?.focus();
+  });
+  container.append(el('p', `Account ${name} is not connected.`), actions(connect), editor);
+  return container;
 }
 
 // Opens the credential form in a modal so an unsaved route draft survives.
@@ -325,11 +340,11 @@ export function accountDialog(
   dialog.querySelector<HTMLInputElement>('input[type=password]')?.focus();
 }
 
-// Accounts no route references. Claude sign-ins are managed with Claude routes.
+// Accounts no route references. Native sign-ins are managed with their routes.
 export function unusedAccountsView(deps: AccountDeps): HTMLElement | undefined {
   const used = new Set(deps.state.routes.map((route) => route.account).filter(Boolean));
   const unused = (deps.state.accounts ?? []).filter(
-    (account) => account.kind !== 'claude-code' && !used.has(account.name),
+    (account) => !nativeProvider(account.kind) && !used.has(account.name),
   );
   if (!unused.length) return undefined;
   const view = card(

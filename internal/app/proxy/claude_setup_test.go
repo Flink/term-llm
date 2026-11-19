@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,13 +14,28 @@ import (
 	"time"
 )
 
-func claudeSetupPost(t *testing.T, s *Service, cookie *http.Cookie, csrf string) claudeSetupReply {
+// Keep the Claude-specific entry point used by the managed-client capacity tests.
+func (s *store) createClaudeSetup(ctx context.Context, next *snapshot, account *accountRecord, route, id, token string) error {
+	for _, r := range next.routes {
+		if r.Name == route {
+			return s.createNativeSetup(ctx, next, account, r.Route, id, token, claudeSetup.callerName, false, []string{route})
+		}
+	}
+	return fmt.Errorf("missing route")
+}
+
+func claudeSetupPost(t *testing.T, s *Service, cookie *http.Cookie, csrf string) nativeSetupReply {
 	t.Helper()
-	rr := adminRequest(s, "POST", "claude/setup", map[string]any{"revision": s.snap.revision}, cookie, csrf)
+	return nativeSetupPost(t, s, "claude/setup", cookie, csrf, "create", "")
+}
+
+func nativeSetupPost(t *testing.T, s *Service, endpoint string, cookie *http.Cookie, csrf, action, route string) nativeSetupReply {
+	t.Helper()
+	rr := adminRequest(s, "POST", endpoint, nativeSetupInput{Revision: &s.snap.revision, SharedAction: action, Route: route}, cookie, csrf)
 	if rr.Code != 201 || rr.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("setup: %d %s headers=%v", rr.Code, rr.Body.String(), rr.Header())
 	}
-	var out claudeSetupReply
+	var out nativeSetupReply
 	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
@@ -32,9 +48,8 @@ func claudeSetupPost(t *testing.T, s *Service, cookie *http.Cookie, csrf string)
 func claudeSetupAccount(t *testing.T, s *Service, name, kind string) accountRecord {
 	t.Helper()
 	a := accountRecord{AccountInfo: AccountInfo{Name: name, Kind: kind, State: "ready", Generation: 1, Updated: time.Now().UnixMilli()}, credentials: accountCredentials{AccessToken: "synthetic-" + name}}
-	if kind == "claude-code" {
-		a.State = "native_login"
-		a.credentials = accountCredentials{Mode: "vault"}
+	if kind == "claude-code" || kind == "agy-bin" {
+		a = newNativeAccount(name, kind)
 	}
 	if err := s.store.replaceAccount(context.Background(), a, 0); err != nil {
 		t.Fatal(err)
@@ -46,15 +61,15 @@ func claudeSetupRoute(name, account string) Route {
 	return Route{Name: name, Account: account, Enabled: true, LocalPrefix: "/" + name + "/", Upstream: "https://api.anthropic.com", CallerAuth: Auth{Header: "Authorization", Prefix: "Bearer "}, Billing: "plan", Usage: "auto"}
 }
 
-func TestClaudeSetupNewAndRepeat(t *testing.T) {
+func TestClaudeSetupDefaultsToCreateAndConnectReusesRoute(t *testing.T) {
 	s := testService(t)
 	cookie, csrf := loginAdmin(t, s)
-	first := claudeSetupPost(t, s, cookie, csrf)
+	first := nativeSetupPost(t, s, "claude/setup", cookie, csrf, "", "")
 	if len(s.snap.routes) != 1 || first.URL != "http://localhost"+s.snap.routes[0].LocalPrefix {
 		t.Fatalf("unexpected setup: %+v routes=%+v", first, s.snap.routes)
 	}
 	route := s.snap.routes[0]
-	preset, err := claudeSetupPreset()
+	preset, err := claudeSetup.preset()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,10 +77,10 @@ func TestClaudeSetupNewAndRepeat(t *testing.T) {
 		t.Fatalf("not canonical defaults: %+v preset=%+v", route, preset)
 	}
 	a, err := s.store.account(route.Account)
-	if err != nil || a.Kind != "claude-code" || a.credentials.Mode != "vault" || a.State != "native_login" {
+	if err != nil || a.Kind != "claude-code" || !a.claudeShared() || a.State != "needs_login" || len(a.claudeSharedCipher) != 0 {
 		t.Fatalf("not a native slot: %+v err=%v", a, err)
 	}
-	second := claudeSetupPost(t, s, cookie, csrf)
+	second := nativeSetupPost(t, s, "claude/setup", cookie, csrf, "connect", route.Name)
 	if second.CallerID == first.CallerID || second.Token == first.Token || second.URL != first.URL || second.Revision != first.Revision+1 || len(s.snap.routes) != 1 {
 		t.Fatalf("repeat should only create another connection: %+v %+v", first, second)
 	}
@@ -78,7 +93,7 @@ func TestClaudeSetupNewAndRepeat(t *testing.T) {
 		t.Fatalf("clients=%+v err=%v", clients, err)
 	}
 	for _, c := range clients {
-		if c.Name != "Claude Code" || c.Revoked || !reflect.DeepEqual(c.Grants, []string{route.Name}) {
+		if c.Name != "Claude Code sign-in launcher" || c.Revoked || !reflect.DeepEqual(c.Grants, []string{route.Name}) {
 			t.Fatalf("unscoped client: %+v", c)
 		}
 	}
@@ -87,9 +102,8 @@ func TestClaudeSetupNewAndRepeat(t *testing.T) {
 			t.Fatalf("connection cannot use native route: %v", err)
 		}
 	}
-	var vaultRows int
-	if err := s.store.db.QueryRow("SELECT count(*) FROM claude_vault").Scan(&vaultRows); err != nil || vaultRows != 0 {
-		t.Fatalf("setup performed a login: count=%d err=%v", vaultRows, err)
+	if n := proxyCount(t, s.store, "SELECT count(*) FROM claude_shared_enrollment WHERE account=? AND caller=? AND reserved=0", a.Name, second.CallerID); n != 1 {
+		t.Fatal("connect did not replace the pending operator enrollment")
 	}
 	state := adminRequest(s, "GET", "state", nil, cookie, csrf)
 	if _, err := os.Stat(filepath.Join(s.opts.StateDir, claudeForwardCAFile)); !os.IsNotExist(err) {
@@ -100,52 +114,34 @@ func TestClaudeSetupNewAndRepeat(t *testing.T) {
 			t.Fatal("one-time token leaked by state")
 		}
 	}
-	claudeSetupAssertMetadata(t, s, first, route.Name)
+	claudeSetupAssertMetadata(t, s, second, route.Name)
 }
 
-func TestClaudeSetupReuseKeepsCustomizations(t *testing.T) {
-	for _, enabled := range []bool{true, false} {
-		t.Run(map[bool]string{true: "enabled", false: "disabled"}[enabled], func(t *testing.T) {
-			s := testService(t)
-			claudeSetupAccount(t, s, "my-slot", "claude-code")
-			r := claudeSetupRoute("custom-claude", "my-slot")
-			r.Enabled, r.Upstream = enabled, r.Upstream+"/"
-			r.Billing, r.Usage, r.Redirects = "unspecified", "off", "refuse"
-			r.CallerAuth = Auth{Header: "authorization", Prefix: "Bearer "}
-			r.Allow = []string{"GET /api/oauth/profile", "GET /api/oauth/usage", "GET /v1/models", "POST /v1/messages", "POST /v1/messages/count_tokens"}
-			r.RequestIDHeader = "X-Custom-Request"
-			configure(t, s, Config{Routes: []Route{r}}, nil)
-			before := claudeSetupDBState(t, s, "accounts")
-			cookie, csrf := loginAdmin(t, s)
-			out := claudeSetupPost(t, s, cookie, csrf)
-			r.Enabled = true
-			if out.URL != "http://localhost/custom-claude/" || len(s.snap.routes) != 1 || !reflect.DeepEqual(s.snap.config.Routes[0], r) {
-				t.Fatalf("custom route overwritten: %+v want=%+v", s.snap.config.Routes, r)
-			}
-			if got := claudeSetupDBState(t, s, "accounts"); got != before {
-				t.Fatal("existing slot changed")
-			}
-			claudeSetupAssertMetadata(t, s, out, r.Name)
-		})
-	}
-}
-
-func TestClaudeSetupPrefersEnabledRoute(t *testing.T) {
+func TestClaudeSetupConnectKeepsCustomizations(t *testing.T) {
 	s := testService(t)
-	claudeSetupAccount(t, s, "slot", "claude-code")
-	disabled, enabled := claudeSetupRoute("disabled", "slot"), claudeSetupRoute("enabled", "slot")
-	disabled.Enabled = false
-	configure(t, s, Config{Routes: []Route{disabled, enabled}}, nil)
+	claudeSetupAccount(t, s, "my-slot", "claude-code")
+	r := claudeSetupRoute("custom-claude", "my-slot")
+	r.Upstream += "/"
+	r.Billing, r.Usage, r.Redirects = "unspecified", "off", "refuse"
+	r.CallerAuth = Auth{Header: "authorization", Prefix: "Bearer "}
+	r.Allow = []string{"GET /api/oauth/profile", "GET /api/oauth/usage", "GET /v1/models", "POST /v1/messages", "POST /v1/messages/count_tokens"}
+	r.RequestIDHeader = "X-Custom-Request"
+	configure(t, s, Config{Routes: []Route{r}}, nil)
+	before := claudeSetupDBState(t, s, "accounts")
 	cookie, csrf := loginAdmin(t, s)
-	out := claudeSetupPost(t, s, cookie, csrf)
-	if out.URL != "http://localhost/enabled/" || s.snap.routes[0].Enabled {
-		t.Fatal("enabled route not preferred")
+	out := nativeSetupPost(t, s, "claude/setup", cookie, csrf, "connect", r.Name)
+	if out.URL != "http://localhost/custom-claude/" || len(s.snap.routes) != 1 || !reflect.DeepEqual(s.snap.config.Routes[0], r) {
+		t.Fatalf("custom route overwritten: %+v want=%+v", s.snap.config.Routes, r)
 	}
+	if got := claudeSetupDBState(t, s, "accounts"); got != before {
+		t.Fatal("existing account changed")
+	}
+	claudeSetupAssertMetadata(t, s, out, r.Name)
 }
 
 func TestClaudeSetupDeviceTargetsSelectedRoute(t *testing.T) {
 	s := testService(t)
-	claudeSetupAccount(t, s, "slot", "claude-code")
+	seedReadyClaudeShared(t, s, "slot", "synthetic-access", "synthetic-refresh")
 	first := claudeSetupRoute("first", "slot")
 	second := claudeSetupRoute("second", "slot")
 	disabled := claudeSetupRoute("disabled", "slot")
@@ -159,7 +155,7 @@ func TestClaudeSetupDeviceTargetsSelectedRoute(t *testing.T) {
 		}
 	}
 	rr := adminRequest(s, "POST", "claude/setup", map[string]any{"revision": s.snap.revision, "route": second.Name}, cookie, csrf)
-	var out claudeSetupReply
+	var out nativeSetupReply
 	if rr.Code != 201 || json.Unmarshal(rr.Body.Bytes(), &out) != nil || out.URL != "http://localhost/second/" {
 		t.Fatalf("setup did not target selected route: %d %s", rr.Code, rr.Body.String())
 	}
@@ -169,7 +165,7 @@ func TestClaudeSetupDeviceTargetsSelectedRoute(t *testing.T) {
 	}
 }
 
-func TestClaudeSetupCollisionsAndSlotReuse(t *testing.T) {
+func TestClaudeSetupAvoidsRouteAndAccountCollisions(t *testing.T) {
 	s := testService(t)
 	claudeSetupAccount(t, s, "claude-code", "chatgpt")
 	other := Route{Name: "claude-code", Account: "claude-code", LocalPrefix: "/claude-code/", Upstream: "https://chatgpt.com/backend-api/codex", Enabled: true}
@@ -188,29 +184,11 @@ func TestClaudeSetupCollisionsAndSlotReuse(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(before, after) {
 		t.Fatalf("non-Claude account adopted: %+v %v", after, err)
 	}
-	claudeSetupPost(t, s, cookie, csrf)
-	if len(s.snap.routes) != 3 {
-		t.Fatal("repeat duplicated collision-safe route")
+	created := s.snap.routes[2]
+	next := nativeSetupPost(t, s, "claude/setup", cookie, csrf, "connect", created.Name)
+	if next.URL != out.URL || len(s.snap.routes) != 3 {
+		t.Fatal("reconnect duplicated collision-safe route")
 	}
-
-	t.Run("existing slot wrong upstream", func(t *testing.T) {
-		s := testService(t)
-		a := claudeSetupAccount(t, s, "existing", "claude-code")
-		a.operator.Origins = []string{"https://api.anthropic.com:443", "https://example.test:443"}
-		a.Generation++
-		if err := s.store.replaceAccount(context.Background(), a, 1); err != nil {
-			t.Fatal(err)
-		}
-		wrong := claudeSetupRoute("wrong", a.Name)
-		wrong.Upstream = "https://example.test"
-		configure(t, s, Config{Routes: []Route{wrong}}, nil)
-		before := claudeSetupDBState(t, s, "accounts")
-		cookie, csrf := loginAdmin(t, s)
-		claudeSetupPost(t, s, cookie, csrf)
-		if len(s.snap.routes) != 2 || s.snap.routes[1].Account != a.Name || s.snap.routes[0].Upstream != wrong.Upstream || claudeSetupDBState(t, s, "accounts") != before {
-			t.Fatal("wrong upstream adopted or existing slot duplicated")
-		}
-	})
 }
 
 func otherWithDefaultAuth(r Route) Route {
@@ -270,7 +248,7 @@ func TestClaudeSetupURLUsesTrustedBrowserOrigin(t *testing.T) {
 	r.AddCookie(cookie)
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
-	var out claudeSetupReply
+	var out nativeSetupReply
 	if err := json.Unmarshal(w.Body.Bytes(), &out); w.Code != 201 || err != nil || out.URL != "https://proxy.example.test"+s.snap.routes[0].LocalPrefix {
 		t.Fatalf("untrusted origin: %d %s err=%v", w.Code, w.Body.String(), err)
 	}

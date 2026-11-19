@@ -193,8 +193,7 @@ func TestAllListedModelsHaveContextLimits(t *testing.T) {
 		// cursor-bin models are account-dependent and Cursor manages context itself.
 		"auto-smart": true, "composer-2.5": true, "claude-sonnet-5": true,
 		// agy-bin models and limits are subscription/catalog dependent.
-		"gemini-3.6-flash-high": true, "gemini-3.6-flash-medium": true, "gemini-3.6-flash-low": true,
-		"gemini-3.5-flash-high": true, "gemini-3.1-pro-high": true,
+		"gemini-3.6-flash": true, "gemini-3.5-flash": true, "gemini-3.1-pro": true,
 		// vibe-bin aliases are account-dependent and Vibe manages context itself.
 		"mistral-large-4-0-3": true, "mistral-medium-3.5": true, "glm-5-3": true, "zai-glm-5-3-flash": true,
 		// OpenRouter routes among free models; limits come from the live catalog.

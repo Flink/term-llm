@@ -1223,6 +1223,16 @@ Restore legacy connector-owned Claude settings without overwriting unrelated set
 
 Run a native client with process-local proxy settings
 
+### `term-llm proxy run agy`
+
+Run Antigravity behind the credential proxy
+
+| Flag | Type | Description |
+|---|---|---|
+| `--agy-command` | string | Antigravity executable to launch |
+| `--token` | string | Scoped proxy client token for --url (never a Antigravity vendor credential) |
+| `--url` | string | Exact scoped Antigravity proxy binding root (default: configured agy-bin binding) |
+
 ### `term-llm proxy run claude`
 
 Run Claude Code behind the credential proxy

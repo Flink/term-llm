@@ -53,10 +53,9 @@ func createMachineClient(t *testing.T, s *Service, token, name string, grants []
 	return proxyResponse[issuedMachineClient](t, manageRequest(s, "POST", "clients", token, body), 201)
 }
 
-func seedManageVault(t *testing.T, s *Service, id, route string) {
+func seedManageEnrollment(t *testing.T, s *Service, id, route string) {
 	t.Helper()
-	row := id + "/" + route
-	execProxySQL(t, s.store, `INSERT INTO claude_vault VALUES(?,?,?,'fixture-authority','fixture-account',1,1,?,?,'ready',0,0,x'00')`, row, id, route, "a/"+row, "r/"+row)
+	execProxySQL(t, s.store, `INSERT INTO claude_shared_enrollment(account,caller,route,authority,expires) VALUES(?,?,?,'fixture-authority',0)`, id+"/"+route, id, route)
 }
 
 func fakeManageSocket(t *testing.T, s *Service, id string) context.Context {
@@ -276,7 +275,7 @@ func TestManageAPIRequiresExplicitGrants(t *testing.T) {
 	cookie, csrf := loginAdmin(t, s)
 	key := issueAdminKey(t, s, cookie, csrf, "Automation")
 	c := createMachineClient(t, s, key.Token, "Existing client", []string{"demo"}, "").Client
-	seedManageVault(t, s, c.ID, "demo")
+	seedManageEnrollment(t, s, c.ID, "demo")
 	ws := fakeManageSocket(t, s, c.ID)
 	path := "clients/" + c.ID
 	for _, variant := range []string{"missing", "null"} {
@@ -290,8 +289,8 @@ func TestManageAPIRequiresExplicitGrants(t *testing.T) {
 			proxyResponse[map[string]string](t, manageRequest(s, "POST", "clients", key.Token, create), 400)
 			proxyResponse[map[string]string](t, manageRequest(s, "PUT", path+"/grants", key.Token, regrant), 400)
 			got := proxyResponse[struct{ Client Caller }](t, manageRequest(s, "GET", path, key.Token, nil), 200)
-			if !reflect.DeepEqual(got.Client.Grants, c.Grants) || proxyCount(t, s.store, "SELECT count(*) FROM claude_vault WHERE caller=? AND route='demo'", c.ID) != 1 || ws.Err() != nil {
-				t.Fatal("rejected regrant changed grants, vault custody, or socket state")
+			if !reflect.DeepEqual(got.Client.Grants, c.Grants) || proxyCount(t, s.store, "SELECT count(*) FROM claude_shared_enrollment WHERE caller=? AND route='demo'", c.ID) != 1 || ws.Err() != nil {
+				t.Fatal("rejected regrant changed grants, pending enrollment, or socket state")
 			}
 			if proxyCount(t, s.store, "SELECT count(*) FROM callers") != 1 {
 				t.Fatal("rejected create persisted a caller")
@@ -303,8 +302,8 @@ func TestManageAPIRequiresExplicitGrants(t *testing.T) {
 		t.Fatal("create with explicit empty grants did not return an empty array")
 	}
 	got := proxyResponse[struct{ Client Caller }](t, manageRequest(s, "PUT", path+"/grants", key.Token, map[string]any{"revision": s.snap.revision, "grants": []string{}}), 200)
-	if got.Client.Grants == nil || len(got.Client.Grants) != 0 || proxyCount(t, s.store, "SELECT count(*) FROM claude_vault WHERE caller=?", c.ID) != 0 || !errors.Is(context.Cause(ws), errSocketRevoked) {
-		t.Fatal("explicit empty regrant did not clear grants, vault custody, and sockets")
+	if got.Client.Grants == nil || len(got.Client.Grants) != 0 || proxyCount(t, s.store, "SELECT count(*) FROM claude_shared_enrollment WHERE caller=?", c.ID) != 0 || !errors.Is(context.Cause(ws), errSocketRevoked) {
+		t.Fatal("explicit empty regrant did not clear grants, pending enrollment, and sockets")
 	}
 }
 
@@ -375,19 +374,19 @@ func TestManageAPIClientLifecycle(t *testing.T) {
 		t.Fatal("rejected create changed state")
 	}
 	assertForward("first", 204)
-	seedManageVault(t, s, c.Client.ID, "first")
+	seedManageEnrollment(t, s, c.Client.ID, "first")
 	ws := fakeManageSocket(t, s, c.Client.ID)
 	g := proxyResponse[struct{ Client Caller }](t, manageRequest(s, "PUT", target+"/grants", rot.Token, map[string]any{"revision": rev, "grants": []string{"second"}}), 200)
-	if !reflect.DeepEqual(g.Client.Grants, []string{"second"}) || !errors.Is(context.Cause(ws), errSocketRevoked) || proxyCount(t, s.store, "SELECT count(*) FROM claude_vault") != 0 {
-		t.Fatal("regrant did not replace grants, clear vault, or cancel socket")
+	if !reflect.DeepEqual(g.Client.Grants, []string{"second"}) || !errors.Is(context.Cause(ws), errSocketRevoked) || proxyCount(t, s.store, "SELECT count(*) FROM claude_shared_enrollment") != 0 {
+		t.Fatal("regrant did not replace grants, clear enrollment, or cancel socket")
 	}
 	assertForward("first", 401)
 	assertForward("second", 204)
 	ws = fakeManageSocket(t, s, c.Client.ID)
-	seedManageVault(t, s, c.Client.ID, "second")
+	seedManageEnrollment(t, s, c.Client.ID, "second")
 	proxyResponse[map[string]bool](t, manageRequest(s, "DELETE", target, rot.Token, nil), 200)
-	if !errors.Is(context.Cause(ws), errSocketRevoked) || proxyCount(t, s.store, "SELECT count(*) FROM claude_vault") != 0 {
-		t.Fatal("revoke did not clear vault or cancel socket")
+	if !errors.Is(context.Cause(ws), errSocketRevoked) || proxyCount(t, s.store, "SELECT count(*) FROM claude_shared_enrollment") != 0 {
+		t.Fatal("revoke did not clear enrollment or cancel socket")
 	}
 	assertForward("second", 401)
 	proxyResponse[map[string]string](t, manageRequest(s, "DELETE", target, rot.Token, nil), 409)
@@ -396,10 +395,10 @@ func TestManageAPIClientLifecycle(t *testing.T) {
 	if replacement.Client.ID == c.Client.ID {
 		t.Fatal("external ID not reused by new client")
 	}
-	seedManageVault(t, s, c.Client.ID, "stray")
+	seedManageEnrollment(t, s, c.Client.ID, "stray")
 	proxyResponse[map[string]bool](t, manageRequest(s, "DELETE", target+"?purge=1", rot.Token, nil), 200)
 	proxyResponse[map[string]string](t, manageRequest(s, "GET", target, rot.Token, nil), 404)
-	if proxyCount(t, s.store, "SELECT count(*) FROM claude_vault") != 0 || proxyCount(t, s.store, "SELECT count(*) FROM grants WHERE caller=?", c.Client.ID) != 0 {
+	if proxyCount(t, s.store, "SELECT count(*) FROM claude_shared_enrollment") != 0 || proxyCount(t, s.store, "SELECT count(*) FROM grants WHERE caller=?", c.Client.ID) != 0 {
 		t.Fatal("purge left dependent rows")
 	}
 }
@@ -527,13 +526,13 @@ func TestCallerRetentionAcrossCreatePaths(t *testing.T) {
 	execProxySQL(t, s.store, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<4096)
  INSERT INTO callers(id,name,hash,created,revoked) SELECT 'old-'||i,'Old','hash-'||i,i,1 FROM n`)
 	execProxySQL(t, s.store, "INSERT INTO grants VALUES('old-1','fixture','fixture-authority'),('old-2','fixture','fixture-authority')")
-	seedManageVault(t, s, "old-1", "fixture")
-	seedManageVault(t, s, "old-2", "fixture")
+	seedManageEnrollment(t, s, "old-1", "fixture")
+	seedManageEnrollment(t, s, "old-2", "fixture")
 	// An invalid grant after automatic deletion must roll back the eviction.
 	if _, _, err := s.store.createCaller("Invalid", []string{"unknown"}, s.snap); err == nil {
 		t.Fatal("invalid grant accepted")
 	}
-	if proxyCount(t, s.store, "SELECT count(*) FROM claude_vault") != 2 {
+	if proxyCount(t, s.store, "SELECT count(*) FROM claude_shared_enrollment") != 2 {
 		t.Fatal("failed create evicted retained caller")
 	}
 	// Claude setup and ordinary browser create use the same cap and ordering.
@@ -554,7 +553,7 @@ func TestCallerRetentionAcrossCreatePaths(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if proxyCount(t, s.store, "SELECT count(*) FROM callers") != maxRetainedCallers || proxyCount(t, s.store, "SELECT count(*) FROM callers WHERE revoked=0") != 1 || proxyCount(t, s.store, "SELECT count(*) FROM grants WHERE caller IN ('old-1','old-2')") != 0 || proxyCount(t, s.store, "SELECT count(*) FROM claude_vault") != 0 {
+	if proxyCount(t, s.store, "SELECT count(*) FROM callers") != maxRetainedCallers || proxyCount(t, s.store, "SELECT count(*) FROM callers WHERE revoked=0") != 1 || proxyCount(t, s.store, "SELECT count(*) FROM grants WHERE caller IN ('old-1','old-2')") != 0 || proxyCount(t, s.store, "SELECT count(*) FROM claude_shared_enrollment") != 0 {
 		t.Fatal("retained rows not bounded or dependents not evicted")
 	}
 	execProxySQL(t, s.store, `UPDATE callers SET revoked=0 WHERE id IN (SELECT id FROM callers WHERE revoked=1 LIMIT 1023)`)

@@ -63,6 +63,7 @@ export function providerLabel(name: string, state?: ProxyState): string {
     chatgpt: 'ChatGPT',
     'claude-code': 'Claude',
     'claude-bin': 'Claude',
+    'agy-bin': 'Antigravity',
     anthropic: 'Claude',
     'grok-bin': 'Grok',
     grok: 'Grok',

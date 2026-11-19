@@ -37,27 +37,64 @@ func expandStagedPrompts(request map[string]any, home string) (bool, error) {
 			continue
 		}
 		parts, _ := content["parts"].([]any)
-		for _, rawPart := range parts {
-			part, _ := rawPart.(map[string]any)
-			text, ok := part["text"].(string)
-			if !ok {
-				continue
-			}
-			restored, expanded, err := expandStagedPromptText(text, home)
-			if err != nil {
-				return false, fmt.Errorf("restore staged agy prompt: %w", err)
-			}
-			if expanded {
-				restoredBytes += len(restored)
-				if restoredBytes > maxRequestBody {
-					return false, errors.New("oversized restored prompt history")
-				}
-				part["text"] = restored
-				changed = true
-			}
+		updated, partChanged, err := expandStagedUserParts(parts, home, &restoredBytes)
+		if err != nil {
+			return false, err
+		}
+		if partChanged {
+			content["parts"] = updated
+			changed = true
 		}
 	}
 	return changed, nil
+}
+
+func expandStagedUserParts(parts []any, home string, restoredBytes *int) ([]any, bool, error) {
+	changed := false
+	var rebuilt []any
+	for i, rawPart := range parts {
+		part, _ := rawPart.(map[string]any)
+		text, ok := part["text"].(string)
+		if !ok {
+			if rebuilt != nil {
+				rebuilt = append(rebuilt, rawPart)
+			}
+			continue
+		}
+		if expandedParts, partBytes, expanded, err := expandStagedPromptParts(text, home); err != nil {
+			return nil, false, fmt.Errorf("restore staged agy prompt parts: %w", err)
+		} else if expanded {
+			*restoredBytes += partBytes
+			if *restoredBytes > maxRequestBody {
+				return nil, false, errors.New("oversized restored prompt history")
+			}
+			if rebuilt == nil {
+				rebuilt = append(make([]any, 0, len(parts)+len(expandedParts)), parts[:i]...)
+			}
+			rebuilt = append(rebuilt, expandedParts...)
+			changed = true
+			continue
+		}
+		restored, expanded, err := expandStagedPromptText(text, home)
+		if err != nil {
+			return nil, false, fmt.Errorf("restore staged agy prompt: %w", err)
+		}
+		if expanded {
+			*restoredBytes += len(restored)
+			if *restoredBytes > maxRequestBody {
+				return nil, false, errors.New("oversized restored prompt history")
+			}
+			part["text"] = restored
+			changed = true
+		}
+		if rebuilt != nil {
+			rebuilt = append(rebuilt, rawPart)
+		}
+	}
+	if rebuilt != nil {
+		return rebuilt, changed, nil
+	}
+	return parts, changed, nil
 }
 
 func expandStagedPromptText(text, home string) (string, bool, error) {

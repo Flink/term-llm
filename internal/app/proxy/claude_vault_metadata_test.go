@@ -7,88 +7,36 @@ import (
 	"testing"
 )
 
-func TestClaudeVaultExchangeAndCachedRefreshPreserveTypedIdentity(t *testing.T) {
-	f := newClaudeForwardFixture(t)
+func TestClaudeSharedEnrollmentPreservesTypedIdentity(t *testing.T) {
+	f := newClaudeForwardProbeFixture(t)
 	f.oauth = func(w http.ResponseWriter, r *http.Request) {
-		var payload map[string]string
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Error(err)
-		}
-		refresh := "metadata-real-refresh"
-		if payload["grant_type"] == "refresh_token" {
-			if payload["refresh_token"] != "metadata-real-refresh" {
-				t.Error("wrong real refresh at issuer")
-			}
-			refresh = "metadata-next-refresh"
-		}
 		json.NewEncoder(w).Encode(map[string]any{
-			"access_token": "synthetic-vendor-access", "refresh_token": refresh, "token_type": "Bearer", "expires_in": 3600, "scope": "user:profile user:inference",
-			"account":      map[string]any{"uuid": "account-fixture-uuid", "email_address": "fixture@example.invalid", "unknown_token": "synthetic-vendor-access", "nested": map[string]string{"refresh_token": refresh}},
-			"organization": map[string]any{"uuid": "organization-fixture-uuid", "name": "Fixture Organization", "unknown_token": refresh, "nested": map[string]string{"access_token": "synthetic-vendor-access"}},
+			"access_token": "synthetic-vendor-access", "refresh_token": "metadata-real-refresh", "token_type": "Bearer", "expires_in": 3600, "scope": claudeTestScope,
+			"account":      map[string]any{"uuid": "account-fixture-uuid", "email_address": "fixture@example.invalid", "unknown_token": "synthetic-vendor-access"},
+			"organization": map[string]any{"uuid": "organization-fixture-uuid", "name": "Fixture Organization", "nested": map[string]string{"refresh_token": "metadata-real-refresh"}},
 		})
 	}
-	initialResponse := claudeVaultDirect(t, f, claudeVaultCodePayload)
-	initial := claudeVaultDecode(t, initialResponse)
-	refreshResponse := claudeVaultDirect(t, f, claudeVaultRefreshPayload(initial.RefreshToken))
-	rotated := claudeVaultDecode(t, refreshResponse)
-	retryResponse := claudeVaultDirect(t, f, claudeVaultRefreshPayload(initial.RefreshToken))
-	retry := claudeVaultDecode(t, retryResponse)
-	for _, reply := range []claudeVaultReply{initial, rotated, retry} {
-		if reply.Account == nil || reply.Account.UUID != "account-fixture-uuid" || reply.Account.EmailAddress != "fixture@example.invalid" || reply.Organization == nil || reply.Organization.UUID != "organization-fixture-uuid" || reply.Organization.Name != "Fixture Organization" {
-			t.Fatal("native identity metadata dropped", reply.Account, reply.Organization)
-		}
+	response := claudeVaultDirect(t, f, claudeVaultCodePayload)
+	reply := claudeVaultDecode(t, response)
+	if reply.Account == nil || reply.Account.UUID != "account-fixture-uuid" || reply.Account.EmailAddress != "fixture@example.invalid" || reply.Organization == nil || reply.Organization.UUID != "organization-fixture-uuid" || reply.Organization.Name != "Fixture Organization" {
+		t.Fatal("native identity metadata dropped", reply.Account, reply.Organization)
 	}
-	for _, body := range []string{initialResponse.Body.String(), refreshResponse.Body.String(), retryResponse.Body.String()} {
-		for _, secret := range []string{"synthetic-vendor-access", "metadata-real-refresh", "metadata-next-refresh", "unknown_token", "nested"} {
-			if strings.Contains(body, secret) {
-				t.Fatal("unknown nested issuer field or real token escaped identity whitelist")
-			}
+	for _, secret := range []string{"synthetic-vendor-access", "metadata-real-refresh", "unknown_token", "nested"} {
+		if strings.Contains(response.Body.String(), secret) {
+			t.Fatal("unknown issuer field or real token escaped whitelist")
 		}
-	}
-	if retry.AccessToken != rotated.AccessToken || retry.RefreshToken != rotated.RefreshToken || f.oauthCalls.Load() != 2 {
-		t.Fatal("metadata preservation bypassed durable cached refresh")
 	}
 }
 
 func TestClaudeVaultIdentityStringsRedactKnownRealTokens(t *testing.T) {
-	f := newClaudeForwardFixture(t)
-	f.oauth = func(w http.ResponseWriter, r *http.Request) {
-		var payload map[string]string
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Error(err)
-		}
-		orgAccess, orgRefresh := "synthetic-vendor-access", "synthetic-vendor-refresh"
-		if payload["grant_type"] == "authorization_code" {
-			orgAccess += "-next"
-			orgRefresh += "-next"
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"access_token": "synthetic-vendor-access-next", "refresh_token": "synthetic-vendor-refresh-next", "token_type": "Bearer", "expires_in": 3600, "scope": "user:profile user:inference",
-			"account":      map[string]any{"uuid": "account/synthetic-vendor-access-next", "email_address": "synthetic-vendor-refresh-next@example.invalid", "unknown": map[string]string{"token": "synthetic-vendor-access-next"}},
-			"organization": map[string]string{"uuid": "organization/" + orgAccess, "name": "Organization/" + orgRefresh},
-		})
+	previous := &claudeVaultRecord{state: "ready", private: claudeVaultPrivate{Access: "fixture-old-access", Refresh: "fixture-old-refresh", Scope: claudeTestScope}}
+	body := []byte(`{"access_token":"fixture-next-access","refresh_token":"fixture-next-refresh","token_type":"Bearer","expires_in":3600,"scope":"user:profile user:inference","account":{"uuid":"account/fixture-next-access","email_address":"fixture-next-refresh@example.invalid"},"organization":{"uuid":"organization/fixture-old-access","name":"Organization/fixture-old-refresh"}}`)
+	reply, err := parseClaudeVaultReplyForRefresh(body, previous)
+	if err != nil {
+		t.Fatal(err)
 	}
-	first := claudeVaultDirect(t, f, claudeVaultRefreshPayload(f.refresh))
-	reply := claudeVaultDecode(t, first)
-	cached := claudeVaultDirect(t, f, claudeVaultRefreshPayload(f.refresh))
-	retry := claudeVaultDecode(t, cached)
-	for _, result := range []claudeVaultReply{reply, retry} {
-		if result.Account == nil || result.Account.UUID != "account/[redacted]" || result.Account.EmailAddress != "[redacted]@example.invalid" || result.Organization == nil || result.Organization.UUID != "organization/[redacted]" || result.Organization.Name != "Organization/[redacted]" {
-			t.Fatal("known current/prior token metadata echo not redacted")
-		}
-	}
-	for _, body := range []string{first.Body.String(), cached.Body.String()} {
-		if strings.Contains(body, "synthetic-vendor") || strings.Contains(body, "unknown") {
-			t.Fatal("known real token escaped metadata redaction")
-		}
-	}
-	if f.oauthCalls.Load() != 1 {
-		t.Fatal("sanitized metadata receipt not cached")
-	}
-	// Code exchange has no prior refresh identity, but must redact its real pair.
-	exchanged := claudeVaultDecode(t, claudeVaultDirect(t, f, claudeVaultCodePayload))
-	if exchanged.Account == nil || exchanged.Account.UUID != "account/[redacted]" || exchanged.Account.EmailAddress != "[redacted]@example.invalid" {
-		t.Fatal("code exchange metadata leaked its real pair")
+	if reply.Account == nil || reply.Account.UUID != "account/[redacted]" || reply.Account.EmailAddress != "[redacted]@example.invalid" || reply.Organization == nil || reply.Organization.UUID != "organization/[redacted]" || reply.Organization.Name != "Organization/[redacted]" {
+		t.Fatal("known current/prior token metadata echo not redacted")
 	}
 }
 

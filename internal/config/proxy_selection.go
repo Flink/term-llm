@@ -63,12 +63,46 @@ func (c *Config) proxyFeatureSelected(profile proxyprofile.Profile, selected map
 	}
 }
 
-func (c *Config) proxyProviderSelection() (map[string]bool, error) {
+func (c *Config) validateProxyProviderSelectionSyntax() error {
+	if c.Proxy.Providers == nil {
+		directSet := make(map[string]bool, len(c.Proxy.Direct))
+		for _, name := range c.Proxy.Direct {
+			directSet[name] = true
+		}
+		for _, id := range []string{"opencode-go-messages", "opencode-go-gemini"} {
+			if directSet[id] && !directSet["opencode-go"] {
+				return fmt.Errorf("proxy.direct must select opencode-go as a whole, not only %s", id)
+			}
+		}
+		return nil
+	}
+	if len(c.Proxy.Direct) != 0 {
+		return fmt.Errorf("proxy.providers cannot be combined with proxy.direct; list the providers to proxy instead")
+	}
+	seen := make(map[string]bool, len(c.Proxy.Providers))
+	for _, name := range c.Proxy.Providers {
+		if legacyOpenCodeProxyRoute(name) {
+			return fmt.Errorf("proxy.providers must select opencode-go as a whole, not %s", name)
+		}
+		if name == "claude-code" {
+			if _, configured := c.Providers[name]; !configured {
+				return fmt.Errorf(`proxy.providers entry "claude-code" is a route name; use "claude-bin"`)
+			}
+		}
+		if seen[name] {
+			return fmt.Errorf("proxy.providers entry %q is duplicated", name)
+		}
+		seen[name] = true
+	}
+	return nil
+}
+
+func (c *Config) proxyProviderSelection(catalog *proxyDiscoveryCatalog) (map[string]bool, error) {
 	if c.Proxy.Providers == nil {
 		return nil, nil
 	}
-	if len(c.Proxy.Direct) != 0 {
-		return nil, fmt.Errorf("proxy.providers cannot be combined with proxy.direct; list the providers to proxy instead")
+	if err := c.validateProxyProviderSelectionSyntax(); err != nil {
+		return nil, err
 	}
 	standalone := make(map[string]bool)
 	for _, profile := range proxyprofile.All() {
@@ -79,11 +113,21 @@ func (c *Config) proxyProviderSelection() (map[string]bool, error) {
 	selected := make(map[string]bool, len(c.Proxy.Providers))
 	for _, name := range c.Proxy.Providers {
 		pc, configured := c.Providers[name]
-		if legacyOpenCodeProxyRoute(name) {
-			return nil, fmt.Errorf("proxy.providers must select opencode-go as a whole, not %s", name)
-		}
+		discovered, hasDiscovered := lookupDiscoveredProvider(catalog, name, "")
 		if _, builtin := BuiltinProvider(name); configured || builtin {
-			if _, ok := proxyprofile.ForProvider(InferProviderType(name, pc.Type)); !ok {
+			kind := InferProviderType(name, pc.Type)
+			if hasDiscovered && discovered.Config != nil && discovered.Config.Type != "" && pc.Type == "" {
+				kind = discovered.Config.Type
+			}
+			if _, ok := proxyprofile.ForProvider(kind); !ok {
+				return nil, fmt.Errorf("proxy.providers entry %q is not a supported proxy provider", name)
+			}
+		} else if hasDiscovered {
+			kind := ProviderTypeOpenAICompat
+			if discovered.Config != nil && discovered.Config.Type != "" {
+				kind = discovered.Config.Type
+			}
+			if _, ok := proxyprofile.ForProvider(kind); !ok {
 				return nil, fmt.Errorf("proxy.providers entry %q is not a supported proxy provider", name)
 			}
 		} else if !standalone[name] {
@@ -92,15 +136,12 @@ func (c *Config) proxyProviderSelection() (map[string]bool, error) {
 			}
 			return nil, fmt.Errorf("proxy.providers entry %q is not a known provider or integration", name)
 		}
-		if selected[name] {
-			return nil, fmt.Errorf("proxy.providers entry %q is duplicated", name)
-		}
 		selected[name] = true
 	}
 	return selected, nil
 }
 
-func (c *Config) directProxyExceptions() (map[string]bool, error) {
+func (c *Config) directProxyExceptions(catalog *proxyDiscoveryCatalog) (map[string]bool, error) {
 	direct := make(map[string]bool, len(c.Proxy.Direct))
 	if len(c.Proxy.Direct) == 0 {
 		return direct, nil
@@ -114,6 +155,11 @@ func (c *Config) directProxyExceptions() (map[string]bool, error) {
 	}
 	for name := range c.Providers {
 		known[name] = true
+	}
+	if catalog != nil {
+		for id := range catalog.Providers {
+			known[id] = true
+		}
 	}
 	for _, name := range c.Proxy.Direct {
 		if !known[name] || direct[name] {

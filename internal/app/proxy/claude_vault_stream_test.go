@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestClaudeVaultNativeSlotStreamsAndRevocationCancels(t *testing.T) {
+func TestClaudeSharedStreamsAndRevocationCancels(t *testing.T) {
 	f := newClaudeForwardFixture(t)
 	vendorDone := make(chan struct{})
 	f.api = func(w http.ResponseWriter, r *http.Request) {
@@ -20,10 +20,10 @@ func TestClaudeVaultNativeSlotStreamsAndRevocationCancels(t *testing.T) {
 		<-r.Context().Done()
 	}
 	account, err := f.service.store.account("claude")
-	if err != nil || account.State != "native_login" || account.credentials.AccessToken != "" {
-		t.Fatal("fixture is not an empty native integration slot", err)
+	if err != nil || account.State != "ready" || account.credentials.AccessToken != "" {
+		t.Fatal("fixture is not a sealed shared account", err)
 	}
-	scope, _ := claudeVaultTestScope(t, f)
+	scope := claudeSharedTestCallerScope(t, f.service, f.service.snap.routes[0], f.token)
 	conn, reader := f.native(t)
 	body := `{"model":"fixture"}`
 	if _, err := fmt.Fprintf(conn, "POST /v1/messages HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", claudeAPIHost, f.access, len(body), body); err != nil {
@@ -35,7 +35,7 @@ func TestClaudeVaultNativeSlotStreamsAndRevocationCancels(t *testing.T) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 || !strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
-		t.Fatal("empty native slot failed SSE admission", response.StatusCode)
+		t.Fatal("shared account failed SSE admission", response.StatusCode)
 	}
 	first := make([]byte, len("event: message_start\n"))
 	if _, err := io.ReadFull(response.Body, first); err != nil || string(first) != "event: message_start\n" {

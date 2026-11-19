@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -38,7 +39,7 @@ func testCIDR(t *testing.T, raw string) *net.IPNet {
 	return network
 }
 
-func testCA(t *testing.T) []byte {
+func testCA(t *testing.T, hosts ...string) []byte {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -49,6 +50,13 @@ func testCA(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	now := time.Now()
+	if len(hosts) == 0 {
+		hosts = []string{"api.anthropic.com", "platform.claude.com"}
+	}
+	var excluded []string
+	for _, host := range hosts {
+		excluded = append(excluded, "."+host)
+	}
 	template := &x509.Certificate{
 		SerialNumber: serial, Subject: pkix.Name{CommonName: "term-llm proxyrun test CA"},
 		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(48 * time.Hour),
@@ -56,8 +64,8 @@ func testCA(t *testing.T) []byte {
 		KeyUsage:                    x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		ExtKeyUsage:                 []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		PermittedDNSDomainsCritical: true,
-		PermittedDNSDomains:         []string{"api.anthropic.com", "platform.claude.com"},
-		ExcludedDNSDomains:          []string{".api.anthropic.com", ".platform.claude.com"},
+		PermittedDNSDomains:         hosts,
+		ExcludedDNSDomains:          excluded,
 		ExcludedIPRanges:            []*net.IPNet{testCIDR(t, "0.0.0.0/0"), testCIDR(t, "::/0")},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)
@@ -147,6 +155,8 @@ exit 0
 		"CLAUDE_CODE_OAUTH_TOKEN=real-oauth-canary", "CLAUDE_CODE_OAUTH_SCOPES=user:inference",
 		"ANTHROPIC_API_KEY=real-key-canary", "ANTHROPIC_CONFIG_DIR=/ambient/anthropic",
 		"ANTHROPIC_PROFILE=real-profile", "CLAUDE_CODE_USE_BEDROCK=1",
+		"HTTPS_PROXY=http://ambient.example.test:8080", "https_proxy=http://ambient.example.test:8080",
+		"CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=0",
 		"NO_PROXY=api.anthropic.com,platform.claude.com,corp.internal",
 	}
 	var out, errOut bytes.Buffer
@@ -182,9 +192,15 @@ exit 0
 	if values["TERM_LLM_CLAUDE_PROXY_ROOT"] != "" {
 		t.Fatal("internal routing marker leaked into the native environment")
 	}
+	if values["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] != "1" {
+		t.Fatal("Claude settings can override the launcher’s proxy")
+	}
+	if _, ok := values["https_proxy"]; ok || values["HTTP_PROXY"] != values["HTTPS_PROXY"] {
+		t.Fatal("competing proxy environment reached the native client")
+	}
 	proxy, err := url.Parse(values["HTTPS_PROXY"])
-	if err != nil || proxy.User == nil || proxy.User.Username() != "claude-code" {
-		t.Fatalf("proxy URL = %q, %v", values["HTTPS_PROXY"], err)
+	if err != nil || proxy.User == nil || proxy.User.Username() != "claude-code" || proxy.Scheme+"://"+proxy.Host != server.URL || proxy.Path != "" {
+		t.Fatal("Claude HTTPS proxy does not point at the scoped proxy origin")
 	}
 	password, _ := proxy.User.Password()
 	if password != testToken {
@@ -249,6 +265,58 @@ func TestRunPropagatesChildExitCodeAndCancellation(t *testing.T) {
 	err = Run(ctx, Options{URL: root, Token: testToken, Command: slow, Out: &bytes.Buffer{}, Err: &bytes.Buffer{}, Env: []string{"PATH=" + os.Getenv("PATH")}})
 	if !errors.As(err, &exitErr) || exitErr.Code != 130 {
 		t.Fatalf("cancellation exit = %v", err)
+	}
+}
+
+func TestRunMalformedSRVFailsBeforeCredentialConfigOrPreparation(t *testing.T) {
+	t.Setenv("EMPTY_PROXY_SRV_TEST_TOKEN", "")
+	for name, run := range map[string]func(context.Context, Options) error{"claude": Run, "agy": RunAgy} {
+		t.Run(name, func(t *testing.T) {
+			err := run(t.Context(), Options{
+				URL: "srv://invalid", Token: "${EMPTY_PROXY_SRV_TEST_TOKEN}", Command: "should-not-run",
+				LoadConfig: func() (*config.Config, error) {
+					t.Fatal("explicit SRV URL must not load config")
+					return nil, nil
+				},
+				Prepare: func(context.Context, *exec.Cmd, string, string, string) (func(), error) {
+					t.Fatal("invalid SRV URL must not prepare a command")
+					return nil, nil
+				},
+			})
+			if err == nil || !strings.Contains(err.Error(), "srv://_service._tcp.domain") {
+				t.Fatalf("expected an SRV validation error before token resolution, got %v", err)
+			}
+		})
+	}
+}
+
+func TestRunClaudePreparedCommandCleanupOffline(t *testing.T) {
+	_, _, work := isolateLauncher(t)
+	for _, tt := range []struct {
+		name, command string
+		success       bool
+	}{
+		{"child exits", fakeClaude(t, work, `printf '%s' "$PREPARED"`), true},
+		{"start fails", filepath.Join(work, "missing"), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			cleaned := false
+			err := Run(t.Context(), Options{
+				URL: "https://proxy.example.test/claude", Token: testToken, Command: tt.command,
+				Out: &out, Env: []string{"PRESERVED=1"},
+				Prepare: func(_ context.Context, cmd *exec.Cmd, _, _, _ string) (func(), error) {
+					cmd.Env = append(cmd.Env, "PREPARED=ready")
+					return func() { cleaned = true }, nil
+				},
+			})
+			if (err == nil) != tt.success || !cleaned {
+				t.Fatalf("launch error = %v; cleaned = %v", err, cleaned)
+			}
+			if tt.success && out.String() != "ready" {
+				t.Fatalf("child output = %q, want prepared environment", out.String())
+			}
+		})
 	}
 }
 

@@ -102,7 +102,7 @@ function setup(overrides: Partial<ProxyState> = {}) {
   return { root, save, announce };
 }
 function choose(root: HTMLElement, label: string) {
-  fireEvent.click(getByRole(root, 'button', { name: 'Add route' }));
+  fireEvent.click(getByRole(root, 'button', { name: 'Add provider' }));
   fireEvent.click(
     getByRole(root.querySelector<HTMLElement>('.route-picker')!, 'button', { name: label }),
   );
@@ -114,24 +114,44 @@ function openManualChatGPT(root: HTMLElement) {
   setup.querySelector<HTMLDetailsElement>(':scope > details')!.open = true;
   fireEvent.click(getByRole(setup, 'button', { name: 'Use an existing account manually' }));
 }
+function openManage(root: HTMLElement, routeName: string) {
+  const line = root.querySelector<HTMLElement>(`[data-focus="route:${routeName}"]`);
+  if (!line) throw new Error(`Missing route line: ${routeName}`);
+  const details = line
+    .closest('article.route-card')
+    ?.querySelector<HTMLDetailsElement>('details.provider-manage');
+  if (!details) throw new Error(`Missing provider Manage: ${routeName}`);
+  details.open = true;
+  return details;
+}
+function settingsFor(root: HTMLElement, routeName: string): HTMLElement {
+  const line = root.querySelector<HTMLElement>(`[data-focus="route:${routeName}"]`);
+  if (!line) throw new Error(`Missing route line: ${routeName}`);
+  const settings = line
+    .closest('article.route-card')
+    ?.querySelector<HTMLElement>('.route-row-settings');
+  if (!settings) throw new Error(`Missing route settings: ${routeName}`);
+  return settings;
+}
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
 
-it('opens one grouped picker from one Add route button', () => {
+it('opens one grouped picker from one Add provider button', () => {
   const { root } = setup({
     presets: featuredPresets.map((preset) => ({
       ...preset,
       group: preset.billing === 'plan' || preset.account_kind ? 'plan' : 'api_key',
     })),
   });
-  const toolbar = root.querySelector<HTMLElement>('.route-cmd-bar')!;
-  expect(toolbar.querySelectorAll('button')).toHaveLength(1);
+  const intro = root.querySelector<HTMLElement>('.providers-intro')!;
+  expect(getByRole(intro, 'heading', { name: 'Providers' })).toBeVisible();
+  expect(intro.querySelectorAll('button')).toHaveLength(1);
   expect(root.querySelector('.route-picker')).toBeNull();
-  fireEvent.click(getByRole(toolbar, 'button', { name: 'Add route' }));
+  fireEvent.click(getByRole(intro, 'button', { name: 'Add provider' }));
   const picker = root.querySelector<HTMLElement>('.route-picker')!;
-  expect(getByRole(picker, 'heading', { name: 'Add a route' })).toHaveFocus();
+  expect(getByRole(picker, 'heading', { name: 'Add a provider' })).toHaveFocus();
   expect(picker.querySelector('details')).toBeNull();
   const groups = [...picker.querySelectorAll('.route-preset-group')].map((group) => [
     group.querySelector('h3')!.textContent,
@@ -156,7 +176,7 @@ it('filters presets by search, hides companions and chooses the first match on E
       ...presets.filter((preset) => preset.id !== 'chatgpt'),
     ],
   });
-  fireEvent.click(getByRole(root, 'button', { name: 'Add route' }));
+  fireEvent.click(getByRole(root, 'button', { name: 'Add provider' }));
   const picker = root.querySelector<HTMLElement>('.route-picker')!;
   expect(queryByRole(picker, 'button', { name: 'ChatGPT plan usage' })).toBeNull();
   const search = getByRole(picker, 'searchbox', { name: 'Search providers' });
@@ -225,7 +245,7 @@ it('keeps Custom endpoint explicit and restores focus on cancel', () => {
   expect(name).toHaveFocus();
   expect(getByLabelText(root, 'Upstream base URL')).toHaveValue('');
   fireEvent.click(getByRole(root, 'button', { name: 'Cancel' }));
-  expect(getByRole(root, 'button', { name: 'Add route' })).toHaveFocus();
+  expect(getByRole(root, 'button', { name: 'Add provider' })).toHaveFocus();
 });
 
 it.each<ProxyRoute['set_headers']>([
@@ -246,14 +266,21 @@ it.each<ProxyRoute['set_headers']>([
       },
     ],
   });
-  const row = root.querySelector('.route-card')!;
+  const row = root.querySelector<HTMLElement>('.route-card')!;
   const needsKey = Object.values(setHeaders).some((rule) => rule.secret);
-  expect(row.querySelector('.route-summary')).toHaveTextContent(
-    needsKey ? 'Provider key needed' : 'Needs client access',
+  expect(row.querySelector('.provider-status')).toHaveTextContent(
+    needsKey ? 'Provider key needed' : 'Configured',
   );
-  expect(row.querySelector('.route-summary')).not.toHaveTextContent('Enabled');
-  expect(getByRole(row as HTMLElement, 'heading', { name: 'Provider setup' })).toBeVisible();
-  expect(getByRole(row as HTMLElement, 'heading', { name: 'Client access' })).toBeVisible();
+  // Client access is a grant, not a provider-health warning on the route line.
+  expect(root).not.toHaveTextContent('Needs client access');
+  const manage = row.querySelector<HTMLDetailsElement>('details.provider-manage')!;
+  expect(manage.open).toBe(false);
+  openManage(root, 'local');
+  expect(manage.open).toBe(true);
+  expect(manage.querySelectorAll('details')).toHaveLength(0);
+  expect(row.querySelector('.provider-route-header')).toHaveTextContent('/local/');
+  expect(getByRole(row, 'heading', { name: 'Client approval' })).toBeVisible();
+  expect(row.querySelector('.route-access-empty')).toHaveTextContent('No clients approved yet.');
 });
 
 it('does not show credentials, queries, fragments, or malformed upstream text in a row', () => {
@@ -273,16 +300,12 @@ it('does not show credentials, queries, fragments, or malformed upstream text in
       { ...base, name: 'broken', local_prefix: '/broken/', upstream: 'sensitive-malformed' },
     ],
   });
-  expect(root.querySelector('[data-focus="route:legacy"] .route-row-settings')).toHaveTextContent(
-    'https://example.com/api',
-  );
-  expect(root.querySelector('[data-focus="route:broken"] .route-row-settings')).toHaveTextContent(
-    'Invalid upstream',
-  );
+  expect(settingsFor(root, 'legacy')).toHaveTextContent('https://example.com/api');
+  expect(settingsFor(root, 'broken')).toHaveTextContent('Invalid upstream');
   expect(root.textContent).not.toContain('sensitive-');
 });
 
-it('reports account readiness separately from client grants', () => {
+it('reports account readiness separately from provider approval', () => {
   const { root } = setup({
     routes: [
       {
@@ -308,17 +331,26 @@ it('reports account readiness separately from client grants', () => {
       },
     ],
   });
-  expect(root.querySelector('.route-summary')).toHaveTextContent('Configured');
-  expect(root.querySelector('.route-connections')).toHaveTextContent('Provider account connected');
+  expect(root.querySelector('.provider-status')).toHaveTextContent('Connected');
+  // The provider card summarizes approval once, not on each route line.
+  const summary = root.querySelector<HTMLElement>('.provider-approval-summary')!;
+  expect(summary).toHaveTextContent('Approved: Client');
+  const line = root.querySelector<HTMLElement>('[data-focus="route:chat"]')!;
+  expect(line).not.toHaveTextContent('Client');
   // The account is managed on the route that uses it, not in a page-level list.
-  const card = root.querySelector<HTMLElement>('[data-focus="route:chat"]')!;
-  expect(card.querySelector('.account-controls summary')).toHaveTextContent(
-    'Manage account home-chat',
-  );
+  const card = root.querySelector<HTMLElement>('.route-card')!;
+  const manage = card.querySelector<HTMLDetailsElement>('details.provider-manage')!;
+  expect(manage.open).toBe(false);
+  openManage(root, 'chat');
+  expect(manage.open).toBe(true);
+  expect(manage.querySelectorAll('details')).toHaveLength(0);
+  expect(card.querySelector('.route-access-client')).toHaveTextContent('Client');
+  expect(card.querySelector('.account-controls-status')).toHaveTextContent('home-chat');
+  expect(card.querySelector('.account-controls-status')).toHaveTextContent('ready');
   expect(root.querySelector('.route-management')).toBeNull();
   // home-grok is not used by any route.
-  expect(root.querySelector('.unused-accounts summary')).toHaveTextContent(
-    'Manage account home-grok',
+  expect(root.querySelector('.unused-accounts .account-controls-status')).toHaveTextContent(
+    'home-grok',
   );
 });
 
@@ -326,15 +358,15 @@ it.each([undefined, false, true])(
   'uses a single empty-state prompt independent of request history: %s',
   (has_requests) => {
     const { root } = setup({ has_requests });
-    expect(getByRole(root, 'heading', { name: 'Start with one route' })).toBeVisible();
-    expect(getByRole(root, 'button', { name: 'Add route' })).toBeVisible();
+    expect(getByRole(root, 'heading', { name: 'Add your first provider' })).toBeVisible();
+    expect(getByRole(root, 'button', { name: 'Add provider' })).toBeVisible();
     expect(root.querySelector('.onboarding')).toBeNull();
   },
 );
 
 it('keeps file-managed route setup read-only', () => {
   const { root } = setup({ mode: 'file' });
-  expect(queryByRole(root, 'button', { name: 'Add route' })).toBeNull();
+  expect(queryByRole(root, 'button', { name: 'Add provider' })).toBeNull();
   expect(root).toHaveTextContent('Routes are file-managed and read-only.');
 });
 
@@ -481,6 +513,7 @@ it('preserves an existing route’s account, transport and admission policy when
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
   // The saved account no longer exists: it must stay selectable and unchanged.
   const { root, save } = setup({ routes: [existing] });
+  openManage(root, 'plan');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit plan' }));
   expect(getByLabelText(root, 'Trusted account')).toHaveValue('retired');
   expect(root.querySelector('.route-form')?.textContent).not.toContain('Upstream headers');
@@ -507,6 +540,7 @@ it('asks before a transport change that drops grants on an existing route', asyn
   };
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
   const { root, save } = setup({ routes: [existing] });
+  openManage(root, 'api');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit api' }));
   expect(queryByLabelText(root, 'Trusted account')).toBeNull();
   fireEvent.click(getByLabelText(root, 'Forward WebSocket upgrades'));
@@ -563,10 +597,11 @@ it.each<ProxyRoute['set_headers']>([
     secrets: [{ name: 'chat-key', origin: 'https://chatgpt.com', source: 'stored' }],
   });
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  openManage(root, 'chat');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit chat' }));
   const form = root.querySelector<HTMLFormElement>('.route-form')!;
-  const advanced = form.querySelector('details')!;
-  expect(advanced.open).toBe(false);
+  expect(form.querySelectorAll('details')).toHaveLength(0);
+  const advanced = form.querySelector<HTMLElement>('.route-form-advanced')!;
   expect(advanced.querySelector('.header-substitution')).not.toBeNull();
   expect(form.textContent).toContain('changes can remove client grants');
   fireEvent.click(getByRole(form, 'button', { name: 'Save route' }));
@@ -574,7 +609,6 @@ it.each<ProxyRoute['set_headers']>([
   expect(save.mock.calls[0][1]).toEqual([existing]);
   expect(confirm).not.toHaveBeenCalled();
 
-  advanced.open = true;
   expect(getByRole(form, 'button', { name: 'Add substitution' })).toBeVisible();
   fireEvent.click(getByRole(form, 'button', { name: 'Remove substitution' }));
   expect(queryByRole(form, 'heading', { name: 'Upstream headers' })).toBeNull();
@@ -612,45 +646,48 @@ it('retains visible credential warnings for literal headers and insecure upstrea
   );
 });
 
-it.each([
-  { auth_mode: 'token_only' as const, state: 'ready' },
-  { auth_mode: 'rotating' as const, state: 'ready' },
-  { auth_mode: 'vault' as const, state: 'native_login' },
-  { auth_mode: 'vault' as const, state: 'ready' },
-])(
-  'keeps Claude device sign-in distinct from stored account readiness: $auth_mode/$state',
-  (metadata) => {
-    const { root } = setup({
-      presets: featuredPresets,
-      accounts: [{ name: 'claude', kind: 'claude-code', generation: 1, updated: 1, ...metadata }],
-      routes: [
-        {
-          name: 'claude',
-          local_prefix: '/claude/',
-          upstream: 'https://api.anthropic.com',
-          enabled: true,
-          allow_insecure_http: false,
-          caller_auth: { header: 'Authorization', prefix: 'Bearer ' },
-          set_headers: {},
-          account: 'claude',
-        },
-      ],
-      callers: [
-        {
-          id: 'client',
-          name: 'Client',
-          created: 1,
-          revoked: false,
-          grants: ['claude'],
-          created_by: '',
-          external_id: '',
-        },
-      ],
-    });
-    expect(root.querySelector('.route-summary')).toHaveTextContent('Native sign-in on each device');
-    expect(root.querySelector('.route-summary')).not.toHaveTextContent('ready');
-    choose(root, 'Claude Code');
-    expect(getByRole(root, 'button', { name: 'Create route & get launcher' })).toBeVisible();
-    expect(queryByLabelText(root, 'Trusted account')).toBeNull();
-  },
-);
+it('keeps pending shared Claude out of the generic credentials form', () => {
+  const { root } = setup({
+    presets: featuredPresets,
+    accounts: [
+      {
+        name: 'claude',
+        kind: 'claude-code',
+        generation: 1,
+        updated: 1,
+        auth_mode: 'shared_vault',
+        state: 'needs_login',
+      },
+    ],
+    routes: [
+      {
+        name: 'claude',
+        local_prefix: '/claude/',
+        upstream: 'https://api.anthropic.com',
+        enabled: true,
+        allow_insecure_http: false,
+        caller_auth: { header: 'Authorization', prefix: 'Bearer ' },
+        set_headers: {},
+        account: 'claude',
+      },
+    ],
+    callers: [
+      {
+        id: 'client',
+        name: 'Client',
+        created: 1,
+        revoked: false,
+        grants: ['claude'],
+        created_by: '',
+        external_id: '',
+      },
+    ],
+  });
+  expect(root.querySelector('.provider-status')).toHaveTextContent('Shared Claude sign-in needed');
+  expect(root.querySelector('.provider-status')).not.toHaveTextContent('ready');
+  choose(root, 'Claude Code');
+  expect(
+    getByRole(root, 'button', { name: 'Create shared route & get sign-in launcher' }),
+  ).toBeVisible();
+  expect(queryByLabelText(root, 'Trusted account')).toBeNull();
+});

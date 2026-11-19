@@ -100,10 +100,10 @@ func TestChatGPTSetupProvisionsRouteAndAccountOnly(t *testing.T) {
 	}
 	bearer := Auth{Header: "Authorization", Prefix: "Bearer "}
 	want := []Route{
-		{Name: "chatgpt", LocalPrefix: "/chatgpt/", Account: "chatgpt", Enabled: true, Upstream: "https://chatgpt.com/backend-api/codex", CallerAuth: bearer, Usage: "auto", Billing: "plan", WebSocket: true},
+		{Name: "chatgpt", Provider: "chatgpt", LocalPrefix: "/chatgpt/", Account: "chatgpt", Enabled: true, Upstream: "https://chatgpt.com/backend-api/codex", CallerAuth: bearer, Usage: "auto", Billing: "plan", WebSocket: true},
 		// Clients bind dictation, usage, embeddings and live by these fixed names.
-		{Name: "chatgpt-backend", LocalPrefix: "/chatgpt-backend/", Account: "chatgpt", Enabled: true, Upstream: "https://chatgpt.com/backend-api", CallerAuth: bearer, Billing: "plan"},
-		{Name: "chatgpt-openai", LocalPrefix: "/chatgpt-openai/", Account: "chatgpt", Enabled: true, Upstream: "https://api.openai.com/v1", CallerAuth: bearer, Billing: "unspecified", WebSocket: true},
+		{Name: "chatgpt-backend", Provider: "chatgpt", LocalPrefix: "/chatgpt-backend/", Account: "chatgpt", Enabled: true, Upstream: "https://chatgpt.com/backend-api", CallerAuth: bearer, Billing: "plan"},
+		{Name: "chatgpt-openai", Provider: "chatgpt", LocalPrefix: "/chatgpt-openai/", Account: "chatgpt", Enabled: true, Upstream: "https://api.openai.com/v1", CallerAuth: bearer, Billing: "unspecified", WebSocket: true},
 	}
 	if got := restarted.snap.config.Routes; !reflect.DeepEqual(got, want) {
 		t.Fatalf("persisted route = %+v", got)

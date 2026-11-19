@@ -2,6 +2,8 @@ package llm
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,15 @@ import (
 // Construction must never prompt, exchange OAuth, read a poisoned credential
 // store or execute an old vendor key command. This is not a wire/vendor test.
 func TestEveryProxyProviderConstructsOrNamesItsExplicitGate(t *testing.T) {
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/_proxy/client/v1/providers" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"revision":1,"providers":[]}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer proxySrv.Close()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
@@ -32,7 +43,7 @@ func TestEveryProxyProviderConstructsOrNamesItsExplicitGate(t *testing.T) {
 	for _, spec := range config.BuiltinProviders() {
 		providers[spec.Name] = map[string]any{"api_key": "$(exit 99)", "headers": map[string]string{"Authorization": "$(exit 98)"}}
 	}
-	data, err := json.Marshal(map[string]any{"provider_discovery": "config", "proxy": map[string]any{"url": "https://factory-proxy-only.example.test", "token": strings.Repeat("p", 40)}, "providers": providers})
+	data, err := json.Marshal(map[string]any{"provider_discovery": "config", "proxy": map[string]any{"url": proxySrv.URL, "token": strings.Repeat("p", 40)}, "providers": providers})
 	if err != nil {
 		t.Fatal(err)
 	}

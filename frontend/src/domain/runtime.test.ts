@@ -124,4 +124,56 @@ describe('runtime request selection', () => {
 
     expect(body).not.toHaveProperty('service_tier');
   });
+
+  it('drops unsupported reasoning_effort when model metadata advertises its supported efforts', () => {
+    const model = {
+      id: 'claude-opus-5-5',
+      name: 'claude-opus-5-5',
+      provider: 'agy-bin',
+      efforts: ['low', 'medium', 'high'],
+    };
+    const body: Record<string, unknown> = {};
+
+    applyRuntimeToRequest(
+      body,
+      {},
+      {
+        provider: 'agy-bin',
+        model: model.id,
+        effort: 'xhigh',
+        reasoningMode: 'standard',
+        fast: false,
+      },
+      model,
+    );
+
+    expect(body.model).toBe('claude-opus-5-5');
+    expect(body).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('preserves supported reasoning_effort when model metadata advertises it', () => {
+    const model = {
+      id: 'gemini-4-neon',
+      name: 'gemini-4-neon',
+      provider: 'agy-bin',
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+    };
+    const body: Record<string, unknown> = {};
+
+    applyRuntimeToRequest(
+      body,
+      {},
+      {
+        provider: 'agy-bin',
+        model: model.id,
+        effort: 'xhigh',
+        reasoningMode: 'standard',
+        fast: false,
+      },
+      model,
+    );
+
+    expect(body.model).toBe('gemini-4-neon');
+    expect(body.reasoning_effort).toBe('xhigh');
+  });
 });

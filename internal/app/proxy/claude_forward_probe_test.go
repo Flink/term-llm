@@ -22,25 +22,18 @@ var claudeForwardProbeTargets = []struct{ host, path string }{
 func newClaudeForwardProbeFixture(t *testing.T) *claudeForwardFixture {
 	t.Helper()
 	f := newClaudeForwardFixture(t)
-	// Simulate a fresh native profile, retaining only the scoped caller/grant.
-	// In particular the fixture's previously issued OAuth placeholders must not
-	// be sufficient to authenticate requests after deleting the vault rows.
-	if _, err := f.service.store.db.Exec("DELETE FROM claude_vault"); err != nil {
-		t.Fatal(err)
-	}
+	// Simulate a fresh operator profile. Its scoped grant permits startup
+	// probes before the shared account has completed enrollment.
+	prepareClaudeSharedEnrollment(t, f)
 	claudeForwardProbeAssertNoLogin(t, f)
 	return f
 }
 
 func claudeForwardProbeAssertNoLogin(t *testing.T, f *claudeForwardFixture) {
 	t.Helper()
-	var rows int
-	if err := f.service.store.db.QueryRow("SELECT count(*) FROM claude_vault").Scan(&rows); err != nil || rows != 0 {
-		t.Fatalf("expected no native OAuth credentials: rows=%d err=%v", rows, err)
-	}
 	account, err := f.service.store.account("claude")
-	if err != nil || account.credentials.AccessToken != "" || account.credentials.RefreshToken != "" {
-		t.Fatalf("unexpected shared account OAuth credentials: %v", err)
+	if err != nil || account.State != "needs_login" || len(account.claudeSharedCipher) != 0 || account.credentials.AccessToken != "" || account.credentials.RefreshToken != "" {
+		t.Fatalf("unexpected shared account OAuth credentials: state=%q err=%v", account.State, err)
 	}
 	if f.vendorCalls.Load() != 0 || f.oauthCalls.Load() != 0 {
 		t.Fatalf("public probe dispatched authenticated traffic: API=%d OAuth=%d", f.vendorCalls.Load(), f.oauthCalls.Load())

@@ -32,8 +32,8 @@ CREATE TABLE requests (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT
 CREATE INDEX requests_time ON requests(started,seq);
 CREATE INDEX requests_caller ON requests(caller,seq);
 CREATE INDEX requests_route ON requests(route,seq);
-` + accountSchema + moneySchema + claudeVaultSchema + adminKeySchemaV6 + `
-PRAGMA user_version=6;`
+` + accountSchema + moneySchema + adminKeySchemaV6 + claudeSharedSchema + `
+PRAGMA user_version=8;`
 
 func openStore(dir string) (*store, error) {
 	if err := fileprivacy.MkdirAll(dir); err != nil {
@@ -145,9 +145,10 @@ func reconcileGrants(tx *sql.Tx, snap *snapshot) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		if _, err := tx.Exec("DELETE FROM claude_vault WHERE route=? AND authority=?", p.name, p.authority); err != nil {
+		if _, err := tx.Exec("DELETE FROM claude_shared_enrollment WHERE route=? AND authority=?", p.name, p.authority); err != nil {
 			return 0, err
 		}
+
 		dropped += n
 	}
 	return dropped, nil

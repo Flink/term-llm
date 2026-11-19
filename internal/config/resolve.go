@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,7 +100,14 @@ func resolveSRV(srvURL string) (string, error) {
 		return "", fmt.Errorf("srv:// URL missing host: %s", srvURL)
 	}
 
-	// Lookup SRV record
+	host, err := lookupSRVAuthority(record)
+	if err != nil {
+		return "", err
+	}
+	return "https://" + host + path, nil
+}
+
+func lookupSRVAuthority(record string) (string, error) {
 	_, addrs, err := lookupSRV("", "", record)
 	if err != nil {
 		return "", fmt.Errorf("SRV lookup failed for %s: %w", record, err)
@@ -108,11 +116,13 @@ func resolveSRV(srvURL string) (string, error) {
 		return "", fmt.Errorf("no SRV records found for %s", record)
 	}
 
-	// Use first record (sorted by priority/weight by Go's DNS resolver)
+	// Go's DNS resolver orders answers by priority and weight. A target of
+	// "." explicitly marks the service unavailable (RFC 2782).
 	addr := addrs[0]
-	host := strings.TrimSuffix(addr.Target, ".")
-
-	return fmt.Sprintf("https://%s:%d%s", host, addr.Port, path), nil
+	if addr == nil || addr.Target == "." || addr.Target == "" || addr.Port == 0 {
+		return "", fmt.Errorf("SRV record for %s has no usable target or port", record)
+	}
+	return net.JoinHostPort(strings.TrimSuffix(addr.Target, "."), strconv.Itoa(int(addr.Port))), nil
 }
 
 func resolveFile(fileURL string) (string, error) {

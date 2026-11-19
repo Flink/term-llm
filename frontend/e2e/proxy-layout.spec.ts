@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import type { ProxyState } from '../src/api/proxy-client';
 
 // Exercise the built standalone bundle without a server, credentials, or upstreams.
@@ -22,6 +22,7 @@ const snapshot: ProxyState = {
   mode: 'ui',
   revision: 1,
   routes: [],
+  providers: [],
   secrets: [],
   callers: [],
   admin_keys: [],
@@ -48,9 +49,29 @@ test.beforeEach(async ({ page }) => {
 });
 
 async function choosePreset(page: Page, name: string) {
-  await page.getByRole('button', { name: 'Add route', exact: true }).click();
+  await page.getByRole('button', { name: 'Add provider', exact: true }).click();
   const picker = page.locator('.route-picker');
   await picker.getByRole('button', { name, exact: true }).click();
+}
+
+function routeLine(page: Page, name: string): Locator {
+  return page.locator(`[data-focus="route:${name}"]`);
+}
+
+function providerCard(page: Page, routeName: string): Locator {
+  return page
+    .locator('article.route-card')
+    .filter({ has: page.locator(`[data-focus="route:${routeName}"]`) });
+}
+
+async function openManage(page: Page, routeName: string): Promise<Locator> {
+  const manage = providerCard(page, routeName).locator('details.provider-manage');
+  await expect(manage).toHaveCount(1);
+  if (!(await manage.evaluate((node) => (node as HTMLDetailsElement).open))) {
+    await manage.locator('> summary').click();
+  }
+  await expect(manage).toHaveAttribute('open', '');
+  return manage;
 }
 
 for (const scheme of ['light', 'dark'] as const) {
@@ -60,9 +81,9 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: scheme });
     await page.goto('http://proxy.test/_proxy/?tab=routes');
     await expect(page.getByRole('heading', { name: 'term-llm Proxy' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Add route', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Add route', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Add a route' })).toBeFocused();
+    await expect(page.getByRole('button', { name: 'Add provider', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Add provider', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Add a provider' })).toBeFocused();
     // The standalone proxy deliberately keeps its existing light palette.
     await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(255, 255, 255)');
     const buttons = await page
@@ -112,7 +133,7 @@ test('proxy mobile layout keeps navigation and the preset picker usable at narro
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 844 });
     await page.goto('http://proxy.test/_proxy/?tab=routes');
-    await page.getByRole('button', { name: 'Add route', exact: true }).click();
+    await page.getByRole('button', { name: 'Add provider', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Custom endpoint', exact: true })).toBeVisible();
     const lastTab = await page.getByRole('button', { name: 'Passkeys', exact: true }).boundingBox();
     expect(lastTab!.x + lastTab!.width).toBeLessThanOrEqual(width);
@@ -477,6 +498,211 @@ test('Clients labels keep legacy bookmarks and API state compatible', async ({ p
   await expect(page.getByRole('button', { name: 'Callers', exact: true })).toHaveCount(0);
 });
 
+test('Clients creates one client for approved providers without per-route controls', async ({
+  page,
+}) => {
+  const routeDefaults = {
+    enabled: true,
+    allow_insecure_http: false,
+    caller_auth: { header: 'Authorization', prefix: 'Bearer ' },
+    set_headers: {},
+  };
+  const routes = [
+    {
+      ...routeDefaults,
+      name: 'alpha',
+      local_prefix: '/alpha/',
+      upstream: 'https://alpha.example.test/v1',
+    },
+    {
+      ...routeDefaults,
+      name: 'alpha-extra',
+      local_prefix: '/alpha-extra/',
+      upstream: 'https://alpha.example.test/extra',
+    },
+    {
+      ...routeDefaults,
+      name: 'beta',
+      local_prefix: '/beta/',
+      upstream: 'https://beta.example.test/v1',
+    },
+  ];
+  const state: ProxyState = {
+    ...snapshot,
+    auth: 'token',
+    revision: 3,
+    routes,
+    providers: [
+      { id: 'alpha', label: 'Alpha', routes: ['alpha', 'alpha-extra'] },
+      { id: 'beta', label: 'Beta', routes: ['beta'] },
+    ],
+    callers: [],
+  };
+  const creations: unknown[] = [];
+  await page.route('http://proxy.test/_proxy/api/**', async (request) => {
+    const url = new URL(request.request().url());
+    if (url.pathname.endsWith('/state')) return request.fulfill({ json: state });
+    if (url.pathname.endsWith('/callers') && request.request().method() === 'POST') {
+      const body = request.request().postDataJSON() as {
+        name: string;
+        providers: string[];
+        revision: number;
+      };
+      creations.push(body);
+      const caller = {
+        id: 'browser-worker',
+        name: body.name,
+        grants: state
+          .providers!.filter((provider) => body.providers.includes(provider.id))
+          .flatMap((provider) => provider.routes),
+        revoked: false,
+        created: 1,
+        created_by: '',
+        external_id: '',
+      };
+      state.callers = [caller];
+      state.revision++;
+      return request.fulfill({
+        status: 201,
+        json: { token: 'provider-client-token', caller },
+      });
+    }
+    return request.fallback();
+  });
+  await page.goto('http://proxy.test/_proxy/?tab=clients');
+  await expect(page.getByRole('heading', { name: 'Clients', exact: true })).toBeVisible();
+  const providerFieldset = page
+    .locator('.client-composer')
+    .getByRole('group', { name: 'Providers' });
+  await expect(providerFieldset).toBeVisible();
+  await expect(providerFieldset.getByText('Alpha', { exact: true })).toBeVisible();
+  await expect(providerFieldset.getByText('Beta', { exact: true })).toBeVisible();
+  await expect(providerFieldset.getByText('alpha', { exact: true })).toHaveCount(0);
+  await expect(providerFieldset.getByText('alpha-extra', { exact: true })).toHaveCount(0);
+  await page.getByLabel('Client name', { exact: true }).fill('Browser worker');
+  await page.locator('[data-provider="alpha"]').check();
+  await page.getByRole('button', { name: 'Create client', exact: true }).click();
+  await expect(page.getByLabel('Client token', { exact: true })).toHaveValue(
+    'provider-client-token',
+  );
+  expect(creations).toEqual([{ name: 'Browser worker', providers: ['alpha'], revision: 3 }]);
+  expect(
+    await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage })),
+  ).not.toContain('provider-client-token');
+});
+
+test('Clients preserves legacy partial approvals and edits only explicit providers', async ({
+  page,
+}) => {
+  const routeDefaults = {
+    enabled: true,
+    allow_insecure_http: false,
+    caller_auth: { header: 'Authorization', prefix: 'Bearer ' },
+    set_headers: {},
+  };
+  const state: ProxyState = {
+    ...snapshot,
+    auth: 'token',
+    revision: 5,
+    routes: [
+      {
+        ...routeDefaults,
+        name: 'alpha',
+        local_prefix: '/alpha/',
+        upstream: 'https://alpha.example.test/v1',
+      },
+      {
+        ...routeDefaults,
+        name: 'alpha-extra',
+        local_prefix: '/alpha-extra/',
+        upstream: 'https://alpha.example.test/extra',
+      },
+      {
+        ...routeDefaults,
+        name: 'beta',
+        local_prefix: '/beta/',
+        upstream: 'https://beta.example.test/v1',
+      },
+    ],
+    providers: [
+      { id: 'alpha', label: 'Alpha', routes: ['alpha', 'alpha-extra'] },
+      { id: 'beta', label: 'Beta', routes: ['beta'] },
+    ],
+    callers: [
+      {
+        id: 'legacy',
+        name: 'Legacy worker',
+        grants: ['alpha'],
+        revoked: false,
+        created: 1,
+        created_by: '',
+        external_id: '',
+      },
+    ],
+  };
+  const changes: unknown[] = [];
+  await page.route('http://proxy.test/_proxy/api/**', async (request) => {
+    const url = new URL(request.request().url());
+    if (url.pathname.endsWith('/state')) return request.fulfill({ json: state });
+    if (url.pathname.endsWith('/callers') && request.request().method() === 'PUT') {
+      const body = request.request().postDataJSON() as {
+        id: string;
+        provider_changes: { id: string; approved: boolean }[];
+        revision: number;
+      };
+      changes.push(body);
+      expect(body).not.toHaveProperty('grants');
+      const caller = state.callers.find((value) => value.id === body.id)!;
+      for (const change of body.provider_changes) {
+        const provider = state.providers!.find((value) => value.id === change.id)!;
+        caller.grants = change.approved
+          ? [...new Set([...caller.grants, ...provider.routes])]
+          : caller.grants.filter((route) => !provider.routes.includes(route));
+      }
+      state.revision++;
+      return request.fulfill({ json: { ok: true } });
+    }
+    return request.fallback();
+  });
+  await page.goto('http://proxy.test/_proxy/?tab=clients');
+  const row = page.locator('[data-focus="caller:legacy"]');
+  await expect(row.locator('.client-grants')).toContainText('Alpha (needs approval)');
+  await expect(row).not.toContainText('alpha-extra');
+  await row.locator('.client-toggle').click();
+  const editor = row.locator('.client-detail form');
+  await expect(editor.getByRole('group', { name: 'Provider approvals' })).toBeVisible();
+  await expect(editor.getByText('alpha-extra', { exact: true })).toHaveCount(0);
+  const alpha = editor.locator('[data-provider="alpha"]');
+  await expect(alpha).not.toBeChecked();
+  expect(await alpha.evaluate((node) => (node as HTMLInputElement).indeterminate)).toBe(true);
+  await alpha.check();
+  await editor.getByRole('button', { name: 'Save approvals', exact: true }).click();
+  expect(changes).toEqual([
+    {
+      id: 'legacy',
+      provider_changes: [{ id: 'alpha', approved: true }],
+      revision: 5,
+    },
+  ]);
+  await expect(row.locator('.client-grants')).toContainText('Alpha');
+  await expect(row.locator('.client-grants')).not.toContainText('needs approval');
+});
+
+test('Providers labels keep legacy route bookmarks and API state compatible', async ({ page }) => {
+  await page.goto('http://proxy.test/_proxy/?tab=routes');
+  await expect(page.getByRole('button', { name: 'Providers', exact: true })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await expect(page.getByRole('heading', { name: 'Providers', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add provider', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Routes', exact: true })).toHaveCount(0);
+  await expect(page).toHaveURL('http://proxy.test/_proxy/?tab=routes');
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Providers', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add provider', exact: true })).toBeVisible();
+});
+
 for (const width of [1440, 320]) {
   test(`request Filters matches Refresh and toggles natively at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
@@ -831,7 +1057,7 @@ test('proxy Debug toggles capture and safely browses bounded payloads on mobile'
   await disable.click();
   await expect(enable).toBeEnabled();
   expect(changes).toBe(2);
-  await page.getByRole('button', { name: 'Routes', exact: true }).click();
+  await page.getByRole('button', { name: 'Providers', exact: true }).click();
   await expect(preview).toHaveCount(0);
 });
 
@@ -845,12 +1071,12 @@ test('Clients stays scoped to generic tokens without a Claude pairing wizard', a
   await expect(page.getByRole('button', { name: 'Create client', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Connect Claude', exact: true })).toHaveCount(0);
   await expect(page.locator('header')).not.toContainText('Connect Claude');
-  await page.getByRole('button', { name: 'Routes', exact: true }).click();
+  await page.getByRole('button', { name: 'Providers', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Connect Claude', exact: true })).toHaveCount(0);
 });
 
 for (const width of [1440, 390]) {
-  test(`Claude route status badges match Venice's compact size at ${width}px`, async ({ page }) => {
+  test(`Provider cards keep one compact status per provider at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1000 });
     let enabled = true;
     await page.route('http://proxy.test/_proxy/api/state', (route) => {
@@ -863,7 +1089,18 @@ for (const width of [1440, 390]) {
       const state: ProxyState = {
         ...snapshot,
         accounts: [
-          { name: 'native', kind: 'claude-code', state: 'native_login', generation: 1, updated: 1 },
+          {
+            name: 'native',
+            kind: 'claude-code',
+            auth_mode: 'shared_vault',
+            state: 'needs_login',
+            generation: 1,
+            updated: 1,
+          },
+        ],
+        providers: [
+          { id: 'native', label: 'Claude Code', routes: ['native'] },
+          { id: 'venice', label: 'Venice', routes: ['venice'] },
         ],
         routes: [
           {
@@ -883,200 +1120,316 @@ for (const width of [1440, 390]) {
       };
       return route.fulfill({ json: state });
     });
-    const claude = page.locator('[data-focus="route:native"]');
-    const venice = page.locator('[data-focus="route:venice"]');
-    for (const status of ['Needs client access', 'Disabled']) {
-      enabled = status !== 'Disabled';
+    for (const disabled of [false, true]) {
+      enabled = !disabled;
       await page.goto('http://proxy.test/_proxy/?tab=routes');
-      const claudeBadge = claude.getByText(status, { exact: true });
-      const veniceBadge = venice.getByText(status, { exact: true });
-      await expect(claudeBadge).toBeVisible();
-      await expect(veniceBadge).toBeVisible();
-      const claudeSize = (await claudeBadge.boundingBox())!;
-      const veniceSize = (await veniceBadge.boundingBox())!;
-      expect(claudeSize.width).toBeCloseTo(veniceSize.width, 0);
+      await expect(page.locator('article.route-card')).toHaveCount(2);
+      const claude = providerCard(page, 'native');
+      const venice = providerCard(page, 'venice');
+      await expect(claude.getByRole('heading', { name: 'Claude Code', exact: true })).toBeVisible();
+      await expect(venice.getByRole('heading', { name: 'Venice', exact: true })).toBeVisible();
+      await expect(claude.locator('details.provider-manage')).toHaveCount(1);
+      await expect(venice.locator('details.provider-manage')).toHaveCount(1);
+      const claudeStatus = claude.locator('.provider-status');
+      const veniceStatus = venice.locator('.provider-status');
+      await expect(claudeStatus).toHaveText('Shared Claude sign-in needed');
+      await expect(veniceStatus).toHaveText('Configured');
+      const claudeSize = (await claudeStatus.boundingBox())!;
+      const veniceSize = (await veniceStatus.boundingBox())!;
       expect(claudeSize.height).toBeCloseTo(veniceSize.height, 0);
-      await expect(claude.getByRole('heading', { name: 'Client access' })).toBeVisible();
-      await expect(venice.getByRole('heading', { name: 'Provider setup' })).toBeVisible();
+      expect(await claudeStatus.evaluate((node) => getComputedStyle(node).fontSize)).toBe(
+        await veniceStatus.evaluate((node) => getComputedStyle(node).fontSize),
+      );
+      // Route-specific conditions stay beside their route, not in the provider status.
+      const claudeWarning = claude.locator('.provider-route-line .provider-route-warning');
+      const veniceWarning = venice.locator('.provider-route-line .provider-route-warning');
+      if (disabled) {
+        await expect(claudeWarning).toHaveText('Disabled');
+        await expect(veniceWarning).toHaveText('Disabled');
+        const claudeWarningSize = (await claudeWarning.boundingBox())!;
+        const veniceWarningSize = (await veniceWarning.boundingBox())!;
+        expect(claudeWarningSize.width).toBeCloseTo(veniceWarningSize.width, 0);
+        expect(claudeWarningSize.height).toBeCloseTo(veniceWarningSize.height, 0);
+      } else {
+        await expect(claudeWarning).toHaveCount(0);
+        await expect(veniceWarning).toHaveCount(0);
+      }
+      await expect(claude.locator('.provider-approval-summary')).toHaveText('No clients approved');
+      await expect(venice.locator('.provider-approval-summary')).toHaveText('No clients approved');
+      expect(await claude.locator('.provider-route-line .provider-route-clients').count()).toBe(0);
+      expect(await venice.locator('.provider-route-line .provider-route-clients').count()).toBe(0);
+      const claudeManage = await openManage(page, 'native');
+      const veniceManage = await openManage(page, 'venice');
+      await expect(claudeManage.locator('details')).toHaveCount(0);
+      await expect(veniceManage.locator('details')).toHaveCount(0);
+      await expect(
+        claudeManage.getByRole('button', { name: 'Delete provider Claude Code', exact: true }),
+      ).toBeVisible();
+      await expect(
+        veniceManage.getByRole('button', { name: 'Delete provider Venice', exact: true }),
+      ).toBeVisible();
+      await expect(
+        claudeManage.getByRole('heading', { name: 'Client approval', exact: true }),
+      ).toBeVisible();
+      await expect(
+        veniceManage.getByRole('heading', { name: 'Client approval', exact: true }),
+      ).toBeVisible();
+      await expect(
+        claudeManage.getByRole('heading', { name: 'Client access', exact: true }),
+      ).toHaveCount(0);
     }
   });
 
-  test(`Claude setup, one-time native copy, another connection and clear at ${width}px`, async ({
-    page,
-  }, testInfo) => {
-    await page.setViewportSize({ width, height: 1000 });
-    await page.addInitScript(() => {
-      const copies: string[] = [];
-      Object.defineProperty(window, 'proxyCopies', { value: copies });
-      Object.defineProperty(navigator, 'clipboard', {
-        value: {
-          writeText: async (text: string) => {
-            copies.push(text);
+  for (const launcherName of ['claude', 'agy'] as const) {
+    const agy = launcherName === 'agy';
+    const kind = agy ? 'agy-bin' : 'claude-code';
+    const provider = agy ? 'Antigravity' : 'Claude Code';
+    const shortName = agy ? 'Antigravity' : 'Claude';
+    const presetChoice = agy ? 'Antigravity personal subscription' : provider;
+    const upstream = agy
+      ? 'https://daily-cloudcode-pa.googleapis.com'
+      : 'https://api.anthropic.com';
+    const prefix = `/${kind}/`;
+    test(`${provider} shared setup, one-time operator and worker launchers, and clear at ${width}px`, async ({
+      page,
+    }, testInfo) => {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.addInitScript(() => {
+        const copies: string[] = [];
+        Object.defineProperty(window, 'proxyCopies', { value: copies });
+        Object.defineProperty(navigator, 'clipboard', {
+          value: {
+            writeText: async (text: string) => {
+              copies.push(text);
+            },
           },
-        },
+        });
       });
-    });
-    const state: ProxyState = {
-      ...snapshot,
-      auth: 'token',
-      accounts: [],
-      callers: [],
-      presets: [
-        {
-          id: 'claude-code',
-          label: 'Claude Code plan',
-          upstream: 'https://api.anthropic.com',
-          auth: { header: 'Authorization', prefix: 'Bearer ' },
-          account_kind: 'claude-code',
-        },
-        {
-          id: 'openai',
-          label: 'OpenAI API',
-          upstream: 'https://api.openai.com/v1',
-          auth: { header: 'Authorization', prefix: 'Bearer ' },
-        },
-      ],
-    };
-    const mutations: { method: string; body: unknown }[] = [];
-    const legacyCalls: string[] = [];
-    let connections = 0;
-    await page.route('http://proxy.test/_proxy/api/**', async (request) => {
-      const path = new URL(request.request().url()).pathname;
-      if (path.endsWith('/state')) return request.fulfill({ json: state });
-      if (path === '/_proxy/api/claude/setup') {
-        const method = request.request().method();
-        mutations.push({ method, body: request.request().postDataJSON() });
-        state.revision++;
-        if (method === 'DELETE') {
-          state.accounts = [];
-          state.routes = [];
-          state.callers.forEach((caller) => {
-            caller.revoked = true;
-            caller.grants = [];
-          });
-          return request.fulfill({ status: 204 });
-        }
-        connections++;
-        state.accounts = [
-          { name: 'native', kind: 'claude-code', state: 'native_login', generation: 1, updated: 1 },
-        ];
-        state.routes = [
+      const state: ProxyState = {
+        ...snapshot,
+        auth: 'token',
+        accounts: [],
+        callers: [],
+        presets: [
           {
-            name: 'native',
-            account: 'native',
-            local_prefix: '/claude-code/',
-            upstream: 'https://api.anthropic.com',
-            enabled: true,
-            allow_insecure_http: false,
-            caller_auth: { header: 'Authorization', prefix: 'Bearer ' },
-            set_headers: {},
+            id: kind,
+            label: presetChoice,
+            upstream,
+            auth: { header: 'Authorization', prefix: 'Bearer ' },
+            account_kind: kind,
           },
-        ];
-        state.callers.push({
-          id: `client-${connections}`,
-          name: `Claude connection ${connections}`,
-          grants: ['native'],
-          revoked: false,
-          created: 1,
-          created_by: '',
-          external_id: '',
-        });
-        return request.fulfill({
-          json: {
-            revision: state.revision,
-            url: 'https://proxy.example.test/claude-code/',
-            token: `scoped-browser-canary-${connections}`,
-            caller_id: `client-${connections}`,
+          {
+            id: 'openai',
+            label: 'OpenAI API',
+            upstream: 'https://api.openai.com/v1',
+            auth: { header: 'Authorization', prefix: 'Bearer ' },
           },
-        });
-      }
-      if (path.includes('/connect/') || path.includes('/accounts')) legacyCalls.push(path);
-      return request.fallback();
-    });
-    await page.goto('http://proxy.test/_proxy/?tab=routes');
-    await choosePreset(page, 'Claude Code');
-    await expect(page.getByRole('heading', { name: 'Set up Claude Code' })).toBeVisible();
-    await page.getByRole('button', { name: 'Create route & get launcher', exact: true }).click();
-    const command = page.getByLabel('Launcher command', { exact: true });
-    await expect(command).toHaveValue(
-      "term-llm proxy run claude --url 'https://proxy.example.test/claude-code/' --token 'scoped-browser-canary-1'",
-    );
-    await expect(command).toBeFocused();
-    await expect(page.getByRole('button', { name: 'Copy launcher command' })).toHaveClass(
-      'primary',
-    );
-    await page.getByRole('button', { name: 'Copy launcher command' }).click();
-    await expect(page.getByRole('status')).toContainText('Launcher command copied');
-    await expect(page.getByLabel('Provider YAML')).toBeHidden();
-    await page.getByText('Optional term-llm integration', { exact: true }).click();
-    await page.getByRole('button', { name: 'Copy provider YAML' }).click();
-    const copies = await page.evaluate(
-      () => (window as unknown as { proxyCopies: string[] }).proxyCopies,
-    );
-    expect(copies).toEqual([
-      "term-llm proxy run claude --url 'https://proxy.example.test/claude-code/' --token 'scoped-browser-canary-1'",
-      "providers:\n  claude-bin:\n    proxy:\n      url: 'https://proxy.example.test/claude-code/'\n      token: 'scoped-browser-canary-1'\n",
-    ]);
-    expect(
-      await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage })),
-    ).not.toContain('scoped-browser-canary');
-    expect(page.url()).not.toContain('scoped-browser-canary');
-    page.once('dialog', (dialog) => dialog.dismiss());
-    await page.getByRole('button', { name: 'Refresh state', exact: true }).click();
-    await expect(command).toHaveValue(/scoped-browser-canary-1/);
-    await page.getByRole('button', { name: 'I saved it — dismiss' }).click();
-    const row = page.locator('[data-focus="route:native"]');
-    await expect(row.getByRole('heading', { name: 'native' })).toBeVisible();
-    await expect(row.locator('.route-summary code')).toHaveText('/claude-code/');
-    await expect(row).toContainText('Native sign-in on each device');
-    await expect(row.getByText('https://api.anthropic.com', { exact: true })).toBeHidden();
-    await expect(row).not.toContainText('scoped-browser-canary');
-    await expect(page.locator('.account-controls', { hasText: 'native' })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Clients', exact: true }).click();
-    await expect(page.getByText('Claude connection 1', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Routes', exact: true }).click();
-    await row.getByText('Add device', { exact: true }).click();
-    await row.getByRole('button', { name: 'Create device launcher', exact: true }).click();
-    await expect(command).toHaveValue(/scoped-browser-canary-2/);
-    await page.getByRole('button', { name: 'Add route', exact: true }).click();
-    await expect(command).toHaveValue(/scoped-browser-canary-2/);
-    await expect(page.locator('.route-picker')).toHaveCount(0);
-    await page.screenshot({
-      path: testInfo.outputPath(`claude-setup-${width}.png`),
-      fullPage: true,
-    });
-    await page.getByRole('button', { name: 'I saved it — dismiss' }).click();
-    await expect(command).toHaveCount(0);
-    await page.locator('.claude-settings > summary').first().click();
-    const clear = page.getByRole('button', { name: 'Clear all Claude setup', exact: true });
-    page.once('dialog', async (dialog) => {
-      expect(dialog.message()).toContain(
-        'Remove all Claude proxy routes, device access, and saved proxy sign-ins',
+        ],
+      };
+      const mutations: { method: string; body: unknown }[] = [];
+      const legacyCalls: string[] = [];
+      const url = `https://proxy.example.test${prefix}`;
+      const operatorToken = 'scoped-browser-canary-operator';
+      const workerToken = 'scoped-browser-canary-worker';
+      await page.route('http://proxy.test/_proxy/api/**', async (request) => {
+        const path = new URL(request.request().url()).pathname;
+        if (path.endsWith('/state')) return request.fulfill({ json: state });
+        if (path === `/_proxy/api/${launcherName}/setup`) {
+          const method = request.request().method();
+          const body = request.request().postDataJSON() as { shared_action?: string };
+          mutations.push({ method, body });
+          state.revision++;
+          if (method === 'DELETE') {
+            state.accounts = [];
+            state.routes = [];
+            state.providers = [];
+            state.callers.forEach((caller) => {
+              caller.revoked = true;
+              caller.grants = [];
+            });
+            return request.fulfill({ status: 204 });
+          }
+          const operator = body.shared_action === 'create';
+          if (operator) {
+            state.accounts = [
+              {
+                name: 'native',
+                kind,
+                auth_mode: 'shared_vault',
+                state: 'needs_login',
+                generation: 1,
+                updated: 1,
+              },
+            ];
+            state.routes = [
+              {
+                name: 'native',
+                account: 'native',
+                local_prefix: prefix,
+                upstream,
+                enabled: true,
+                allow_insecure_http: false,
+                caller_auth: { header: 'Authorization', prefix: 'Bearer ' },
+                set_headers: {},
+              },
+            ];
+            state.providers = [{ id: 'native', label: provider, routes: ['native'] }];
+          }
+          const caller = {
+            id: operator ? 'operator' : 'worker',
+            name: operator ? `${provider} sign-in launcher` : `${shortName} worker`,
+            grants: ['native'],
+            revoked: false,
+            created: 1,
+            created_by: '',
+            external_id: '',
+          };
+          state.callers.push(caller);
+          return request.fulfill({
+            status: 201,
+            json: {
+              revision: state.revision,
+              url,
+              token: operator ? operatorToken : workerToken,
+              caller_id: caller.id,
+            },
+          });
+        }
+        if (path.includes('/connect/') || path.includes('/accounts')) legacyCalls.push(path);
+        return request.fallback();
+      });
+      await page.goto('http://proxy.test/_proxy/?tab=routes');
+      await choosePreset(page, presetChoice);
+      const heading = page.getByRole('heading', { name: `Set up ${presetChoice}`, exact: true });
+      await expect(heading).toBeVisible();
+      const setup = page.locator('section').filter({ has: heading });
+      const setupActions = setup.getByRole('button').filter({ hasNotText: /^Cancel$/ });
+      await expect(setupActions).toHaveText(['Create shared route & get sign-in launcher']);
+      await expect(
+        setup.getByRole('button', {
+          name: 'Create route & get launcher',
+          exact: true,
+          includeHidden: true,
+        }),
+      ).toHaveCount(0);
+      await setupActions.click();
+
+      const launcher = (token: string) =>
+        `term-llm proxy run ${launcherName} --url '${url}' --token '${token}'`;
+      const operatorLauncher = `${launcher(operatorToken)}${agy ? ' -- acp --login' : ''}`;
+      const operatorCommand = page.getByLabel('Operator sign-in launcher command', { exact: true });
+      const workerCommand = page.getByLabel('Launcher command', { exact: true });
+      await expect(operatorCommand).toHaveValue(operatorLauncher);
+      await expect(operatorCommand).toBeFocused();
+      await expect(setup).toContainText('Keep this operator launcher private.');
+      await expect(workerCommand).toHaveCount(0);
+      await expect(page.getByLabel('Provider YAML')).toHaveCount(0);
+      const copyOperator = page.getByRole('button', { name: 'Copy operator launcher command' });
+      await expect(copyOperator).toHaveClass('primary');
+      await copyOperator.click();
+      await expect(page.getByRole('status')).toContainText(
+        'Operator sign-in launcher command copied',
       );
-      expect(dialog.message()).toContain('your normal Claude setup are unchanged');
-      await dialog.dismiss();
+      expect(
+        await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage })),
+      ).not.toContain('scoped-browser-canary');
+      expect(page.url()).not.toContain('scoped-browser-canary');
+      page.once('dialog', (dialog) => dialog.dismiss());
+      await page.getByRole('button', { name: 'Refresh state', exact: true }).click();
+      await expect(operatorCommand).toHaveValue(operatorLauncher);
+      await page.getByRole('button', { name: 'I saved it — dismiss' }).click();
+      await expect(operatorCommand).toHaveCount(0);
+
+      const card = providerCard(page, 'native');
+      const line = routeLine(page, 'native');
+      await expect(card.getByRole('heading', { name: provider, exact: true })).toBeVisible();
+      await expect(line.locator('code')).toHaveText(prefix);
+      await expect(card.locator('.provider-status')).toHaveText(
+        `Shared ${shortName} sign-in needed`,
+      );
+      await expect(card.locator('.provider-route-clients')).toHaveCount(0);
+      await expect(page.getByText(upstream, { exact: true })).toBeHidden();
+      await expect(card).not.toContainText('scoped-browser-canary');
+      await expect(page.locator('.account-controls', { hasText: 'native' })).toHaveCount(0);
+
+      const manage = await openManage(page, 'native');
+      await expect(manage.locator('details')).toHaveCount(0);
+      await expect(
+        manage.getByRole('button', { name: 'Get operator sign-in launcher', exact: true }),
+      ).toBeVisible();
+      const addDevice = manage.getByRole('button', { name: 'Add device', exact: true });
+      await expect(addDevice).toHaveCount(0);
+      // The operator finishes sign-in outside this browser UI.
+      state.accounts![0].state = 'ready';
+      await page.getByRole('button', { name: 'Refresh state', exact: true }).click();
+      await expect(card.locator('.provider-status')).toHaveText(
+        `Shared ${shortName} subscription ready`,
+      );
+      await openManage(page, 'native');
+      await addDevice.click();
+      await expect(workerCommand).toHaveValue(launcher(workerToken));
+      await expect(operatorCommand).toHaveCount(0);
+      await expect(manage).toContainText('does not open a browser');
+      await page.getByRole('button', { name: 'Copy launcher command', exact: true }).click();
+      await expect(page.getByRole('status')).toContainText('Launcher command copied');
+      await expect(manage.locator('.native-integration').getByLabel('Provider YAML')).toBeVisible();
+      await expect(manage.locator('details')).toHaveCount(0);
+      await page.getByRole('button', { name: 'Copy provider YAML' }).click();
+      const copies = await page.evaluate(
+        () => (window as unknown as { proxyCopies: string[] }).proxyCopies,
+      );
+      expect(copies).toEqual([
+        operatorLauncher,
+        launcher(workerToken),
+        `providers:\n  ${launcherName}-bin:\n    proxy:\n      url: '${url}'\n      token: '${workerToken}'\n`,
+      ]);
+      await page.getByRole('button', { name: 'Add provider', exact: true }).click();
+      await expect(workerCommand).toHaveValue(launcher(workerToken));
+      await expect(page.locator('.route-picker')).toHaveCount(0);
+      await page.screenshot({
+        path: testInfo.outputPath(`native-${launcherName}-setup-${width}.png`),
+        fullPage: true,
+      });
+      await page.getByRole('button', { name: 'I saved it — dismiss' }).click();
+      await expect(workerCommand).toHaveCount(0);
+      await expect(card.locator('.provider-approval-summary')).toContainText(`${shortName} worker`);
+      await page.getByRole('button', { name: 'Clients', exact: true }).click();
+      await expect(page.getByText(`${shortName} worker`, { exact: true })).toBeVisible();
+      await page.getByRole('button', { name: 'Providers', exact: true }).click();
+      await openManage(page, 'native');
+      const removeProvider = manage.getByRole('button', {
+        name: `Delete provider native`,
+        exact: true,
+      });
+      page.once('dialog', async (dialog) => {
+        expect(dialog.message()).toContain(
+          `Removes all ${shortName} proxy routes, device access, and saved proxy sign-ins`,
+        );
+        expect(dialog.message()).toContain(`your normal ${shortName} setup are unchanged`);
+        await dialog.dismiss();
+      });
+      await removeProvider.click();
+      expect(mutations).toHaveLength(2);
+      await expect(line).toBeVisible();
+      page.once('dialog', (dialog) => dialog.accept());
+      await removeProvider.click();
+      await expect(
+        page.getByRole('heading', { name: 'Add your first provider', exact: true }),
+      ).toBeVisible();
+      await expect(page.getByRole('status')).toContainText(`${shortName} proxy setup cleared`);
+      expect(mutations).toEqual([
+        { method: 'POST', body: { revision: 1, shared_action: 'create' } },
+        { method: 'POST', body: { revision: 2, route: 'native' } },
+        { method: 'DELETE', body: { revision: 3 } },
+      ]);
+      expect(legacyCalls).toEqual([]);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+        ),
+      ).toBe(true);
     });
-    await clear.click();
-    expect(mutations).toHaveLength(2);
-    await expect(row).toBeVisible();
-    page.once('dialog', (dialog) => dialog.accept());
-    await clear.click();
-    await expect(
-      page.getByRole('heading', { name: 'Start with one route', exact: true }),
-    ).toBeVisible();
-    await expect(page.getByRole('status')).toContainText('Claude proxy setup cleared.');
-    expect(mutations).toEqual([
-      { method: 'POST', body: { revision: 1 } },
-      { method: 'POST', body: { revision: 2, route: 'native' } },
-      { method: 'DELETE', body: { revision: 3 } },
-    ]);
-    expect(legacyCalls).toEqual([]);
-    expect(
-      await page.evaluate(
-        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
-      ),
-    ).toBe(true);
-  });
+  }
 }
 
 function configuredClaudeState(mode: ProxyState['mode'] = 'ui'): ProxyState {
@@ -1097,7 +1450,14 @@ function configuredClaudeState(mode: ProxyState['mode'] = 'ui'): ProxyState {
       },
     ],
     accounts: [
-      { name: 'manual-slot', kind: 'claude-code', state: 'ready', generation: 1, updated: 1 },
+      {
+        name: 'manual-slot',
+        kind: 'claude-code',
+        auth_mode: 'shared_vault',
+        state: 'ready',
+        generation: 1,
+        updated: 1,
+      },
     ],
     routes: [
       {
@@ -1150,26 +1510,27 @@ for (const status of [409, 503]) {
       return request.fallback();
     });
     await page.goto('http://proxy.test/_proxy/?tab=routes');
-    const row = page.locator('[data-focus="route:manual-claude"]');
-    await row.getByText('Add device', { exact: true }).click();
-    await row.getByRole('button', { name: 'Create device launcher', exact: true }).click();
+    const line = routeLine(page, 'manual-claude');
+    const manage = await openManage(page, 'manual-claude');
+    await manage.getByRole('button', { name: 'Add device', exact: true }).click();
     const command = page.getByLabel('Launcher command', { exact: true });
     await expect(command).toHaveValue(/scoped-failure-canary/);
-    await page.locator('.claude-settings > summary').first().click();
-    const clear = page.getByRole('button', { name: 'Clear all Claude setup', exact: true });
-    await clear.click();
-    await expect(page.getByRole('status')).toContainText('Save or dismiss');
+    const removeProvider = manage.getByRole('button', {
+      name: 'Delete provider manual-claude',
+      exact: true,
+    });
+    await removeProvider.click();
+    await expect(page.getByRole('status')).toContainText('Finish saving or dismissing');
     await expect(command).toHaveValue(/scoped-failure-canary/);
     expect(deletes).toBe(0);
     await page.getByRole('button', { name: 'I saved it — dismiss' }).click();
     await expect(command).toHaveCount(0);
-    await page.locator('.claude-settings > summary').first().click();
     page.once('dialog', (dialog) => dialog.accept());
-    await clear.click();
+    await removeProvider.click();
     await expect(page.getByRole('status')).toContainText(
       status === 409 ? 'Claude clear unavailable.' : '503',
     );
-    await expect(row).toBeVisible();
+    await expect(line).toBeVisible();
     await expect(page.getByRole('status')).not.toContainText('cleared');
     expect(deletes).toBe(1);
   });
@@ -1184,10 +1545,10 @@ for (const width of [1440, 390]) {
       request.fulfill({ json: configuredClaudeState('file') }),
     );
     await page.goto('http://proxy.test/_proxy/?tab=routes');
-    const claude = page.locator('[data-focus="route:manual-claude"]');
+    const claude = routeLine(page, 'manual-claude');
     await expect(page.getByText(/Routes are file-managed and read-only/)).toBeVisible();
     await expect(claude.getByText('Add device', { exact: true })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Add route', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Add provider', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Edit manual-claude', exact: true })).toHaveCount(
       0,
     );
@@ -1215,7 +1576,7 @@ for (const width of [1440, 390]) {
           name: 'claude',
           kind: 'claude-code',
           state: 'ready',
-          auth_mode: 'token_only',
+          auth_mode: 'shared_vault',
           generation: 1,
           updated: 1,
         },
@@ -1252,7 +1613,7 @@ for (const width of [1440, 390]) {
       route.fulfill({ json: configured }),
     );
     await page.goto('http://proxy.test/_proxy/?tab=routes');
-    await expect(page.getByRole('heading', { name: 'Routes', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Providers', exact: true })).toBeVisible();
     await expect(page.locator('.onboarding')).toHaveCount(0);
     await expect(page.locator('.preset-pill')).toHaveCount(0);
     const navigationWidths = await page
@@ -1263,18 +1624,15 @@ for (const width of [1440, 390]) {
       );
     for (const size of navigationWidths) expect(size.content).toBeLessThanOrEqual(size.visible + 1);
     await expect(page.getByRole('button', { name: 'Download routes.yaml' })).toHaveCount(0);
+    const manage = await openManage(page, 'claude');
+    await expect(manage.locator('details')).toHaveCount(0);
     await expect(
-      page.getByRole('button', { name: 'Clear all Claude setup', exact: true }),
-    ).toHaveCount(0);
-    await page.locator('.claude-settings > summary').first().click();
-    await expect(
-      page.getByRole('button', { name: 'Clear all Claude setup', exact: true }),
+      manage.getByRole('button', { name: 'Delete provider claude', exact: true }),
     ).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Manage', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Edit claude', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Add Claude account', exact: true })).toHaveCount(
-      0,
-    );
+    await expect(manage.getByRole('button', { name: 'Edit claude', exact: true })).toBeVisible();
+    await expect(
+      manage.getByRole('button', { name: 'Add Claude account', exact: true }),
+    ).toHaveCount(0);
     await choosePreset(page, 'OpenAI');
     await expect(page.getByLabel('Name', { exact: true })).toHaveValue('openai');
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -1311,9 +1669,7 @@ for (const width of [1440, 390]) {
   });
 }
 
-test('ChatGPT sign-in creates a route before granting an existing client access', async ({
-  page,
-}) => {
+test('ChatGPT sign-in creates a route before approving the provider', async ({ page }) => {
   const chatGPTRoute = {
     name: 'chatgpt',
     local_prefix: '/chatgpt/',
@@ -1357,7 +1713,7 @@ test('ChatGPT sign-in creates a route before granting an existing client access'
     ],
   };
   let approved = false;
-  const grants: unknown[] = [];
+  const approvals: unknown[] = [];
   await page.route('http://proxy.test/_proxy/api/**', async (request) => {
     const url = new URL(request.request().url());
     const method = request.request().method();
@@ -1376,6 +1732,7 @@ test('ChatGPT sign-in creates a route before granting an existing client access'
       expect(url.searchParams.get('id')).toBe('mock-attempt');
       if (!approved) return request.fulfill({ json: { status: 'pending' } });
       state.routes.push({ ...chatGPTRoute, account: 'chatgpt-account' });
+      state.providers = [{ id: 'chatgpt', label: 'ChatGPT', routes: ['chatgpt'] }];
       state.accounts = [
         { name: 'chatgpt-account', kind: 'chatgpt', state: 'ready', generation: 1, updated: 1 },
       ];
@@ -1383,10 +1740,18 @@ test('ChatGPT sign-in creates a route before granting an existing client access'
       return request.fulfill({ json: { status: 'connected', route: chatGPTRoute.name } });
     }
     if (url.pathname.endsWith('/callers') && method === 'PUT') {
-      grants.push(request.request().postDataJSON());
-      state.callers[0].grants.push(chatGPTRoute.name);
+      const body = request.request().postDataJSON() as {
+        id: string;
+        provider_changes: { id: string; approved: boolean }[];
+        revision: number;
+      };
+      approvals.push(body);
+      expect(body.provider_changes).toEqual([{ id: 'chatgpt', approved: true }]);
+      expect(body).not.toHaveProperty('grants');
+      if (!state.callers[0].grants.includes(chatGPTRoute.name))
+        state.callers[0].grants.push(chatGPTRoute.name);
       state.revision = 3;
-      return request.fulfill({ status: 204 });
+      return request.fulfill({ json: { ok: true } });
     }
     return request.fallback();
   });
@@ -1399,24 +1764,381 @@ test('ChatGPT sign-in creates a route before granting an existing client access'
     'href',
     'https://auth.openai.com/codex/device',
   );
-  const row = page.locator('[data-focus="route:chatgpt"]');
+  const row = routeLine(page, 'chatgpt');
   await expect(row).toHaveCount(0);
   approved = true;
-  await expect(row.getByRole('heading', { name: 'chatgpt', exact: true })).toBeFocused();
-  await expect(row).toContainText('Needs client access');
+  await expect(row).toBeFocused();
+  const card = providerCard(page, 'chatgpt');
+  await expect(card.getByRole('heading', { name: 'ChatGPT', exact: true })).toBeVisible();
+  await expect(card.locator('.provider-status')).toHaveText('Connected');
+  await expect(card.locator('.provider-approval-summary')).toHaveCount(1);
+  await expect(card.locator('.provider-approval-summary')).toHaveText('No clients approved');
+  await expect(row.locator('.provider-route-clients')).toHaveCount(0);
   await expect(code).toHaveCount(0);
-  expect(grants).toEqual([]);
-  await row.getByRole('button', { name: 'Grant access for route chatgpt', exact: true }).click();
-  await row.getByLabel('Client', { exact: true }).selectOption('desktop');
-  await row.getByRole('button', { name: 'Grant access', exact: true }).click();
-  await expect(
-    row.getByRole('button', { name: 'Manage access for route chatgpt', exact: true }),
-  ).toBeVisible();
-  await expect(row.locator('.route-summary')).toContainText('Configured');
-  expect(grants).toEqual([{ id: 'desktop', grants: ['legacy', 'chatgpt'], revision: 2 }]);
+  expect(approvals).toEqual([]);
+  const manage = await openManage(page, 'chatgpt');
+  await manage.getByLabel('Client', { exact: true }).selectOption('desktop');
+  await manage.getByRole('button', { name: 'Approve access', exact: true }).click();
+  await expect(card.locator('.provider-approval-summary')).toHaveText('Approved: Desktop');
+  await expect(row).not.toContainText('Desktop');
+  await expect(row.locator('.provider-route-clients')).toHaveCount(0);
+  expect(approvals).toEqual([
+    {
+      id: 'desktop',
+      provider_changes: [{ id: 'chatgpt', approved: true }],
+      revision: 2,
+    },
+  ]);
 });
 
-test('Routes consistently offers one Add route action before and after recorded requests', async ({
+test('Provider approval creates one show-once client for every current route', async ({ page }) => {
+  const routeDefaults = {
+    enabled: true,
+    allow_insecure_http: false,
+    caller_auth: { header: 'Authorization', prefix: 'Bearer ' },
+    set_headers: {},
+  };
+  const routes = [
+    {
+      ...routeDefaults,
+      name: 'alpha',
+      local_prefix: '/alpha/',
+      upstream: 'https://alpha.example.test/v1',
+    },
+    {
+      ...routeDefaults,
+      name: 'alpha-extra',
+      local_prefix: '/alpha-extra/',
+      upstream: 'https://alpha.example.test/extra',
+    },
+  ];
+  const state: ProxyState = {
+    ...snapshot,
+    auth: 'token',
+    revision: 4,
+    routes,
+    providers: [{ id: 'alpha', label: 'Alpha', routes: ['alpha', 'alpha-extra'] }],
+    callers: [],
+  };
+  const creations: unknown[] = [];
+  await page.route('http://proxy.test/_proxy/api/**', async (request) => {
+    const url = new URL(request.request().url());
+    const method = request.request().method();
+    if (url.pathname.endsWith('/state')) return request.fulfill({ json: state });
+    if (url.pathname.endsWith('/callers') && method === 'POST') {
+      const body = request.request().postDataJSON() as {
+        name: string;
+        providers: string[];
+        revision: number;
+      };
+      creations.push(body);
+      const caller = {
+        id: 'worker',
+        name: body.name,
+        grants: [...routes.map((route) => route.name)],
+        revoked: false,
+        created: 1,
+        created_by: '',
+        external_id: '',
+      };
+      state.callers = [caller];
+      state.revision++;
+      return request.fulfill({
+        status: 201,
+        json: { token: 'provider-show-once-token', caller },
+      });
+    }
+    return request.fallback();
+  });
+  await page.goto('http://proxy.test/_proxy/?tab=routes');
+  const card = providerCard(page, 'alpha');
+  await expect(card.locator('.provider-approval-summary')).toHaveCount(1);
+  await expect(card.locator('.provider-approval-summary')).toHaveText('No clients approved');
+  await expect(card.locator('.provider-route-clients')).toHaveCount(0);
+  const manage = await openManage(page, 'alpha');
+  await expect(manage.locator('details')).toHaveCount(0);
+  await expect(manage.locator('.provider-route-management .route-access')).toHaveCount(0);
+  await expect(manage.getByRole('heading', { name: 'Client access', exact: true })).toHaveCount(0);
+  await manage.getByLabel('Client name', { exact: true }).fill('Worker');
+  await manage.getByRole('button', { name: 'Create client', exact: true }).click();
+  const token = manage.getByLabel('Client token', { exact: true });
+  await expect(token).toHaveValue('provider-show-once-token');
+  await expect(token).toBeFocused();
+  await expect(page.getByRole('status')).toContainText('shown once');
+  expect(creations).toEqual([{ name: 'Worker', providers: ['alpha'], revision: 4 }]);
+  await expect(manage.getByRole('button', { name: 'Create client', exact: true })).toHaveCount(0);
+  await manage.getByRole('button', { name: 'I saved it — dismiss' }).click();
+  await expect(token).toHaveCount(0);
+  await expect(card.locator('.provider-approval-summary')).toHaveText('Approved: Worker');
+});
+
+test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API routes separate', async ({
+  page,
+}, testInfo) => {
+  const routeDefaults = {
+    enabled: true,
+    allow_insecure_http: false,
+    caller_auth: { header: 'Authorization', prefix: 'Bearer ' },
+    set_headers: {},
+  };
+  const chatgptRoutes = [
+    {
+      ...routeDefaults,
+      name: 'chatgpt',
+      account: 'chatgpt-work',
+      local_prefix: '/chatgpt/',
+      upstream: 'https://chatgpt.com/backend-api/codex',
+      billing: 'plan' as const,
+    },
+    {
+      ...routeDefaults,
+      name: 'chatgpt-backend',
+      account: 'chatgpt-work',
+      local_prefix: '/chatgpt-backend/',
+      upstream: 'https://chatgpt.com/backend-api',
+      billing: 'plan' as const,
+    },
+    {
+      ...routeDefaults,
+      name: 'chatgpt-openai',
+      account: 'chatgpt-work',
+      local_prefix: '/chatgpt-openai/',
+      upstream: 'https://api.openai.com/v1',
+      billing: 'unspecified' as const,
+    },
+  ];
+  const openaiRoute = {
+    ...routeDefaults,
+    name: 'openai',
+    local_prefix: '/openai/',
+    upstream: 'https://api.openai.com/v1',
+    billing: 'pay_as_you_go' as const,
+    set_headers: { Authorization: { secret: 'openai-key', prefix: 'Bearer ' } },
+  };
+  const state: ProxyState = {
+    ...snapshot,
+    auth: 'token',
+    revision: 7,
+    accounts: [
+      { name: 'chatgpt-work', kind: 'chatgpt', state: 'ready', generation: 1, updated: 1 },
+    ],
+    routes: [...chatgptRoutes, openaiRoute],
+    providers: [
+      {
+        id: 'chatgpt',
+        label: 'ChatGPT',
+        routes: ['chatgpt', 'chatgpt-backend', 'chatgpt-openai'],
+      },
+      { id: 'openai', label: 'OpenAI API', routes: ['openai'] },
+    ],
+    secrets: [{ name: 'openai-key', origin: 'https://api.openai.com', source: 'stored' }],
+    callers: [
+      {
+        id: 'jarvis',
+        name: 'jarvis',
+        grants: ['chatgpt', 'chatgpt-backend'],
+        revoked: false,
+        created: 1,
+        created_by: '',
+        external_id: '',
+      },
+      {
+        id: 'forge',
+        name: 'forge',
+        grants: ['openai'],
+        revoked: false,
+        created: 1,
+        created_by: '',
+        external_id: '',
+      },
+    ],
+    presets: [
+      {
+        id: 'chatgpt',
+        label: 'ChatGPT plan',
+        upstream: 'https://chatgpt.com/backend-api/codex',
+        auth: { header: 'Authorization', prefix: 'Bearer ' },
+        account_kind: 'chatgpt',
+        billing: 'plan',
+        companions: ['chatgpt-backend', 'chatgpt-openai'],
+      },
+      {
+        id: 'chatgpt-backend',
+        label: 'ChatGPT plan usage and dictation',
+        upstream: 'https://chatgpt.com/backend-api',
+        auth: { header: 'Authorization', prefix: 'Bearer ' },
+        account_kind: 'chatgpt',
+        billing: 'plan',
+      },
+      {
+        id: 'chatgpt-openai',
+        label: 'ChatGPT OAuth embeddings and live (billing unspecified)',
+        upstream: 'https://api.openai.com/v1',
+        auth: { header: 'Authorization', prefix: 'Bearer ' },
+        account_kind: 'chatgpt',
+        billing: 'unspecified',
+      },
+      {
+        id: 'openai',
+        label: 'OpenAI API',
+        upstream: 'https://api.openai.com/v1',
+        auth: { header: 'Authorization', prefix: 'Bearer ' },
+        billing: 'pay_as_you_go',
+      },
+    ],
+  };
+  const approvals: {
+    id: string;
+    provider_changes: { id: string; approved: boolean }[];
+    revision: number;
+  }[] = [];
+  await page.route('http://proxy.test/_proxy/api/**', async (request) => {
+    const url = new URL(request.request().url());
+    const method = request.request().method();
+    if (url.pathname.endsWith('/state')) return request.fulfill({ json: state });
+    if (url.pathname.endsWith('/callers') && method === 'PUT') {
+      const body = request.request().postDataJSON() as {
+        id: string;
+        provider_changes: { id: string; approved: boolean }[];
+        revision: number;
+      };
+      approvals.push(body);
+      expect(body).not.toHaveProperty('grants');
+      const caller = state.callers.find((value) => value.id === body.id)!;
+      for (const change of body.provider_changes) {
+        const provider = state.providers!.find((value) => value.id === change.id)!;
+        caller.grants = change.approved
+          ? [...new Set([...caller.grants, ...provider.routes])]
+          : caller.grants.filter((route) => !provider.routes.includes(route));
+      }
+      state.revision++;
+      return request.fulfill({ json: { ok: true } });
+    }
+    return request.fallback();
+  });
+  await page.goto('http://proxy.test/_proxy/?tab=routes');
+  await expect(page.getByRole('button', { name: 'Providers', exact: true })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await expect(page.getByRole('heading', { name: 'Providers', exact: true })).toBeVisible();
+  const cards = page.locator('article.route-card');
+  await expect(cards).toHaveCount(2);
+  await expect(cards.nth(0).getByRole('heading', { name: 'ChatGPT' })).toBeVisible();
+  await expect(cards.nth(1).getByRole('heading', { name: 'OpenAI API' })).toBeVisible();
+  const chatgpt = cards.nth(0);
+  const openai = cards.nth(1);
+  const lines = chatgpt.locator('.provider-route-line');
+  await expect(lines).toHaveCount(3);
+  await expect(lines.nth(0)).toHaveAttribute('data-focus', 'route:chatgpt');
+  await expect(lines.nth(1)).toHaveAttribute('data-focus', 'route:chatgpt-backend');
+  await expect(lines.nth(2)).toHaveAttribute('data-focus', 'route:chatgpt-openai');
+  await expect(lines.nth(0).locator('code')).toHaveText('/chatgpt/');
+  await expect(lines.nth(1).locator('code')).toHaveText('/chatgpt-backend/');
+  await expect(lines.nth(2).locator('code')).toHaveText('/chatgpt-openai/');
+  await expect(lines.nth(0)).toContainText('Chat, models, images & realtime call setup');
+  await expect(lines.nth(1)).toContainText('Usage & dictation');
+  await expect(lines.nth(2)).toContainText('Embeddings & realtime sideband');
+  // Route lines are informational only: approval belongs to the provider.
+  await expect(chatgpt.locator('.provider-route-clients')).toHaveCount(0);
+  await expect(openai.locator('.provider-route-clients')).toHaveCount(0);
+  for (const line of [lines.nth(0), lines.nth(1), lines.nth(2)]) {
+    await expect(line).not.toContainText('jarvis');
+    await expect(line).not.toContainText('forge');
+  }
+  // Legacy partial grants stay partial and are summarized once per provider.
+  await expect(chatgpt.locator('.provider-approval-summary')).toHaveCount(1);
+  await expect(chatgpt.locator('.provider-approval-summary')).toHaveText(
+    'No clients approved · 1 client needs approval',
+  );
+  await expect(openai.locator('.provider-approval-summary')).toHaveCount(1);
+  await expect(openai.locator('.provider-approval-summary')).toHaveText('Approved: forge');
+  // One native disclosure per provider, and it starts closed.
+  const chatgptManage = chatgpt.locator('details.provider-manage');
+  const openaiManage = openai.locator('details.provider-manage');
+  await expect(chatgptManage).toHaveCount(1);
+  await expect(openaiManage).toHaveCount(1);
+  await expect(chatgptManage.locator('> summary')).toHaveText('Manage');
+  await expect(openaiManage.locator('> summary')).toHaveText('Manage');
+  await expect(chatgptManage).not.toHaveAttribute('open', '');
+  await expect(openaiManage).not.toHaveAttribute('open', '');
+  // The OAuth account is represented once even though three routes use it.
+  await openManage(page, 'chatgpt');
+  await expect(chatgptManage.locator('details')).toHaveCount(0);
+  await expect(chatgptManage.getByRole('heading', { name: 'Account', exact: true })).toHaveCount(1);
+  await expect(chatgptManage.locator('.account-controls')).toHaveCount(1);
+  await expect(chatgptManage.locator('.account-controls-status')).toContainText('chatgpt-work');
+  await expect(
+    chatgptManage.getByRole('button', { name: 'Reconnect ChatGPT', exact: true }),
+  ).toHaveCount(1);
+  await expect(chatgptManage.locator('.route-access')).toHaveCount(1);
+  await expect(
+    chatgptManage.getByRole('heading', { name: 'Client approval', exact: true }),
+  ).toHaveCount(1);
+  const panels = chatgptManage.locator('.provider-route-management');
+  await expect(panels).toHaveCount(3);
+  await expect(panels.nth(0)).toHaveAttribute('data-route', 'chatgpt');
+  await expect(panels.nth(1)).toHaveAttribute('data-route', 'chatgpt-backend');
+  await expect(panels.nth(2)).toHaveAttribute('data-route', 'chatgpt-openai');
+  for (const panel of [panels.nth(0), panels.nth(1), panels.nth(2)]) {
+    await expect(panel.getByRole('heading', { name: 'Client access', exact: true })).toHaveCount(0);
+    await expect(panel.locator('.route-access')).toHaveCount(0);
+    await expect(panel.locator('.provider-route-header code')).toBeVisible();
+  }
+  await expect(
+    chatgptManage.getByRole('button', { name: 'Edit chatgpt', exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    chatgptManage.getByRole('button', { name: 'Edit chatgpt-backend', exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    chatgptManage.getByRole('button', { name: 'Edit chatgpt-openai', exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    chatgptManage.getByRole('button', { name: 'Delete provider ChatGPT', exact: true }),
+  ).toBeVisible();
+  // A partial legacy grant is directly listed as needing approval.
+  const current = chatgptManage.locator('.route-access-current');
+  await expect(current).toContainText('jarvis');
+  await expect(current).toContainText('Needs approval');
+  const grantForm = chatgptManage.locator('.route-access-grant');
+  await grantForm.getByLabel('Client', { exact: true }).selectOption('jarvis');
+  await grantForm.getByRole('button', { name: 'Approve access', exact: true }).click();
+  expect(approvals).toEqual([
+    {
+      id: 'jarvis',
+      provider_changes: [{ id: 'chatgpt', approved: true }],
+      revision: 7,
+    },
+  ]);
+  await expect(chatgpt.locator('.provider-approval-summary')).toHaveText('Approved: jarvis');
+  // Approval covers every current ChatGPT route and never the OpenAI API provider.
+  for (const line of [lines.nth(0), lines.nth(1), lines.nth(2)]) {
+    await expect(line).not.toContainText('jarvis');
+  }
+  await expect(openai.locator('.provider-approval-summary')).toHaveText('Approved: forge');
+  // The single OpenAI API route has no shared OAuth account controls.
+  await openManage(page, 'openai');
+  await expect(openaiManage.locator('details')).toHaveCount(0);
+  await expect(openaiManage.locator('.account-controls')).toHaveCount(0);
+  await expect(
+    openaiManage.getByRole('button', { name: 'Reconnect ChatGPT', exact: true }),
+  ).toHaveCount(0);
+  await expect(openaiManage.getByRole('button', { name: 'Configure API key' })).toHaveCount(1);
+  await expect(
+    openaiManage.getByRole('button', { name: 'Delete provider OpenAI API', exact: true }),
+  ).toBeVisible();
+  await expect(chatgptManage).toHaveAttribute('open', '');
+  await expect(chatgptManage.locator('.provider-route-management')).toHaveCount(3);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('providers-grouped.png'), fullPage: true });
+});
+
+test('Providers consistently offers one Add provider action before and after recorded requests', async ({
   page,
 }) => {
   let hasRequests = false;
@@ -1424,13 +2146,13 @@ test('Routes consistently offers one Add route action before and after recorded 
     route.fulfill({ json: { ...snapshot, has_requests: hasRequests } }),
   );
   await page.goto('http://proxy.test/_proxy/?tab=routes');
-  const add = page.getByRole('button', { name: 'Add route', exact: true });
+  const add = page.getByRole('button', { name: 'Add provider', exact: true });
   await expect(add).toHaveCount(1);
   await expect(page.locator('.onboarding')).toHaveCount(0);
   hasRequests = true;
   await page.getByRole('button', { name: 'Refresh state', exact: true }).click();
   await expect(add).toHaveCount(1);
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Routes', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Providers', exact: true })).toBeVisible();
   await expect(add).toHaveCount(1);
 });

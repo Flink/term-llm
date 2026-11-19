@@ -47,6 +47,7 @@ export interface ProxyRouteRule {
   allow?: string[];
 }
 export interface ProxyRoute {
+  provider?: string;
   billing?: ProxyBilling;
   account?: string;
   websocket?: boolean;
@@ -78,7 +79,8 @@ export type ProxyChatGPTSetupStatus =
   | { status: 'pending' }
   | { status: 'connected'; route?: string }
   | { status: 'failed'; error?: string };
-export interface ProxyClaudeConnection {
+export type ProxyNativeLauncher = 'claude' | 'agy';
+export interface ProxyNativeConnection {
   revision: number;
   url: string;
   token: string;
@@ -125,10 +127,10 @@ export interface ProxyPreset {
 }
 export interface ProxyAccount {
   name: string;
-  kind: 'chatgpt' | 'grok' | 'copilot' | 'claude-code' | 'aws-sigv4';
+  kind: 'chatgpt' | 'grok' | 'copilot' | 'claude-code' | 'agy-bin' | 'aws-sigv4';
   state: string;
   generation: number;
-  auth_mode?: 'token_only' | 'rotating' | 'vault';
+  auth_mode?: 'token_only' | 'rotating' | 'vault' | 'shared_vault';
   expires_at?: number;
   updated: number;
 }
@@ -150,8 +152,61 @@ export interface ProxyAccountInput {
     scopes?: string[];
   };
 }
+export type ProxyProviderClientModel =
+  | string
+  | {
+      id?: string;
+      alias?: string;
+      context_window?: number;
+      max_output_tokens?: number;
+      parse_reasoning?: boolean;
+      include_reasoning?: boolean;
+      thinking_param?: string;
+      reasoning_efforts?: string[];
+      default_reasoning_effort?: string;
+      vision_via?: string;
+    };
+
+export interface ProxyProviderClientConfig {
+  type?: string;
+  model?: string;
+  fast_model?: string;
+  fast_provider?: string;
+  service_tier?: string;
+  allowed_models?: string[];
+  models?: ProxyProviderClientModel[];
+  reasoning?: string;
+  vision_via?: string;
+  context_window?: number;
+  max_output_tokens?: number;
+  vllm_thinking_param?: string;
+  thinking_param?: string;
+  parse_reasoning?: boolean;
+  include_reasoning?: boolean;
+  no_stream_options?: boolean;
+  use_websocket?: boolean;
+  region?: string;
+}
+
+export interface ProxyParsedProviderConfig {
+  name?: string;
+  upstream?: string;
+  config: ProxyProviderClientConfig;
+  config_yaml: string;
+  stripped?: string[];
+}
+
+export interface ProxyProvider {
+  id: string;
+  label: string;
+  routes: string[];
+  config?: ProxyProviderClientConfig;
+  config_yaml?: string;
+}
+
 export interface ProxyState {
   accounts?: ProxyAccount[];
+  providers?: ProxyProvider[];
   money?: ProxyMoneySettings;
   presets?: ProxyPreset[];
   auth: 'passkey' | 'token';
@@ -539,14 +594,45 @@ export class ProxyClient {
   cancelChatGPTSetup(id: string): Promise<void> {
     return this.request(`chatgpt/setup?id=${encodeURIComponent(id)}`, 'DELETE');
   }
-  setupClaude(revision: number, route?: string): Promise<ProxyClaudeConnection> {
-    return this.request('claude/setup', 'POST', { revision, ...(route ? { route } : {}) });
+  // Operator launchers create or reconnect a shared route; worker launchers require an existing route.
+  setupNative(
+    ...args:
+      | [launcher: ProxyNativeLauncher, revision: number, route: string]
+      | [launcher: ProxyNativeLauncher, revision: number, route: undefined, sharedAction: 'create']
+      | [launcher: ProxyNativeLauncher, revision: number, route: string, sharedAction: 'connect']
+  ): Promise<ProxyNativeConnection> {
+    const [launcher, revision, route, sharedAction] = args;
+    return this.request(`${launcher}/setup`, 'POST', {
+      revision,
+      ...(route ? { route } : {}),
+      ...(sharedAction ? { shared_action: sharedAction } : {}),
+    });
   }
-  clearClaude(revision: number): Promise<void> {
-    return this.request('claude/setup', 'DELETE', { revision });
+  clearNative(launcher: ProxyNativeLauncher, revision: number): Promise<void> {
+    return this.request(`${launcher}/setup`, 'DELETE', { revision });
   }
-  config(revision: number, routes: ProxyRoute[]): Promise<void> {
-    return this.request('config', 'PUT', { revision, routes });
+  config(
+    revision: number,
+    routes: ProxyRoute[],
+    providerConfigYAML?: Record<string, string>,
+  ): Promise<void> {
+    return this.request('config', 'PUT', {
+      revision,
+      routes,
+      ...(providerConfigYAML && Object.keys(providerConfigYAML).length
+        ? { provider_config_yaml: providerConfigYAML }
+        : {}),
+    });
+  }
+  updateProviderConfig(
+    revision: number,
+    provider: string,
+    yaml: string,
+  ): Promise<{ revision: number; config?: ProxyProviderClientConfig; config_yaml?: string }> {
+    return this.request('provider-config', 'PUT', { revision, provider, yaml });
+  }
+  parseProviderConfig(yaml: string): Promise<ProxyParsedProviderConfig> {
+    return this.request('provider-config/parse', 'POST', { yaml });
   }
   debug(): Promise<ProxyDebugState> {
     return this.request('debug');
@@ -608,6 +694,20 @@ export class ProxyClient {
   }
   updateCaller(id: string, grants: string[], revision: number): Promise<void> {
     return this.request('callers', 'PUT', { id, grants, revision });
+  }
+  createProviderCaller(
+    name: string,
+    providers: string[],
+    revision: number,
+  ): Promise<{ token: string; caller: ProxyCaller }> {
+    return this.request('callers', 'POST', { name, providers, revision });
+  }
+  updateProviderApprovals(
+    id: string,
+    changes: { id: string; approved: boolean }[],
+    revision: number,
+  ): Promise<void> {
+    return this.request('callers', 'PUT', { id, provider_changes: changes, revision });
   }
   revokeCaller(id: string): Promise<void> {
     return this.request('callers', 'DELETE', { id });

@@ -234,7 +234,10 @@ export function mountProxy(
           (node) => node.dataset.focus === key,
         )
       : undefined;
-    (row?.querySelector('h2') ?? content.querySelector('h2'))?.focus();
+    (
+      row?.querySelector('h2') ??
+      (row?.hasAttribute('tabindex') ? row : content.querySelector('h2'))
+    )?.focus();
   }
   function login() {
     if (disposed) return;
@@ -308,7 +311,7 @@ export function mountProxy(
     if (!tabs.includes(tab)) tab = 'Home';
     writeTab();
     for (const name of tabs) {
-      const item = button(name, () => context.navigate(name));
+      const item = button(name === 'Routes' ? 'Providers' : name, () => context.navigate(name));
       if (name === tab) item.setAttribute('aria-current', 'page');
       nav.append(item);
     }

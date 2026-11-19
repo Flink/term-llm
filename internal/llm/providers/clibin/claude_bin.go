@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/term-llm/term-llm/internal/mcphttp"
-	"github.com/term-llm/term-llm/internal/procutil"
 	"github.com/term-llm/term-llm/internal/runtimeoutput"
 )
 
@@ -719,35 +718,6 @@ func shellQuote(s string) string {
 		return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 	}
 	return s
-}
-
-func (p *ClaudeBinProvider) prepareClaudeCommand(ctx context.Context, args []string, effort, workingDir string) (*exec.Cmd, io.WriteCloser, *procutil.Command, error) {
-	cmd, err := newCLICommand(ctx, "claude", args, workingDir)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("prepare claude command: %w", err)
-	}
-	cmd.WaitDelay = claudeCommandWaitDelay
-	cmd.Env = p.buildCommandEnv(effort)
-	auditedEnv, wireAudit, err := startCLIWireAuditContext(ctx, "claude-bin", cmd.Env)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	cmd.Env = auditedEnv
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		stopCLIWireAudit(wireAudit)
-		return nil, nil, nil, fmt.Errorf("failed to get stdin pipe: %w", err)
-	}
-
-	owned, err := procutil.PrepareCommand(cmd)
-	if err != nil {
-		_ = stdin.Close()
-		stopCLIWireAudit(wireAudit)
-		return nil, nil, nil, fmt.Errorf("failed to prepare claude command: %w", err)
-	}
-	owned.SetCloseHook(func() { stopCLIWireAudit(wireAudit) })
-	return cmd, stdin, owned, nil
 }
 
 func (p *ClaudeBinProvider) executeClaudeCommand(ctx context.Context, args []string, effort, userPrompt, workingDir string, debug bool, send eventSender, ephemeral, exposeToolBridge bool) error {

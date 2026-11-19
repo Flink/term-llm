@@ -44,9 +44,9 @@ func TestChatGPTOpenAIAncillaryBillingIsNotClaimedAsPlan(t *testing.T) {
 
 // A CLI provider reaches the proxy only through its adapter marker. Grok CLI is
 // ungated on real-executable fixture evidence and shares the native Grok plan
-// account; Cursor, Antigravity and Vibe stay gated.
-func TestCLIProfilesNameTheirAdapterMarkerAndStayGated(t *testing.T) {
-	gated := map[providerspec.Type]bool{providerspec.TypeCursorBin: true, providerspec.TypeAgyBin: true, providerspec.TypeVibeBin: true}
+// account; Antigravity is ungated for personal subscriptions, and Cursor and Vibe stay gated.
+func TestCLIProfilesNameTheirAdapterMarkerAndGateUnverifiedClients(t *testing.T) {
+	gated := map[providerspec.Type]bool{providerspec.TypeCursorBin: true, providerspec.TypeVibeBin: true}
 	for _, kind := range []providerspec.Type{providerspec.TypeClaudeBin, providerspec.TypeCursorBin, providerspec.TypeGrokBin, providerspec.TypeAgyBin, providerspec.TypeVibeBin} {
 		p, ok := ForProvider(kind)
 		if !ok || !strings.HasPrefix(p.CLIRootEnv, "TERM_LLM_") || !strings.HasSuffix(p.CLIRootEnv, "_PROXY_ROOT") {
@@ -66,5 +66,14 @@ func TestCLIProfilesNameTheirAdapterMarkerAndStayGated(t *testing.T) {
 		if p.CLIRootEnv != "" && p.Provider == "" {
 			t.Errorf("%s names an adapter marker without a provider", p.ID)
 		}
+	}
+}
+
+func TestAntigravityPersonalCLIProfile(t *testing.T) {
+	p, ok := ForProvider(providerspec.TypeAgyBin)
+	if !ok || p.ID != "agy-bin" || p.Account != "agy-bin" || p.Upstream != "https://daily-cloudcode-pa.googleapis.com" ||
+		p.Header != "Authorization" || p.Prefix != "Bearer " || p.Billing != "plan" || p.WebSocket ||
+		p.CLIRootEnv != "TERM_LLM_AGY_PROXY_ROOT" || p.Gate != "" || p.Label != "Antigravity personal subscription" {
+		t.Fatalf("unexpected Personal Antigravity profile: %+v", p)
 	}
 }

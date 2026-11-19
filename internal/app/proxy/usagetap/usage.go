@@ -349,6 +349,13 @@ func (p *Parser) message(o object) {
 	}
 }
 func (p *Parser) gemini(o object) {
+	if p.geminiWrapped {
+		o = obj(o["response"])
+		if o == nil {
+			p.MarkUnknown()
+			return
+		}
+	}
 	p.observeModel(o, "modelVersion")
 	raw, ok := o["usageMetadata"]
 	if !ok {

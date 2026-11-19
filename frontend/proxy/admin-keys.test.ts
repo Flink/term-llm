@@ -107,7 +107,7 @@ it('issues without a second passkey prompt, protects the pending and shown token
     body: JSON.stringify({ name: key.name }),
   });
   expect(browserLeave()).toBe(true);
-  click('Routes');
+  click('Providers');
   expect(confirm).not.toHaveBeenCalled();
   expect(window.location.search).toBe('?tab=admin');
   expect(queryByLabelText(root, 'API key token')).toBeNull();
@@ -126,7 +126,7 @@ it('issues without a second passkey prompt, protects the pending and shown token
     expect(command).toContain('Authorization: Bearer $TERM_LLM_PROXY_ADMIN_KEY');
     expect(command).not.toContain(token);
   }
-  click('Routes');
+  click('Providers');
   expect(confirm).toHaveBeenCalledOnce();
   expect(shown).toBeVisible();
   click('Copy token');

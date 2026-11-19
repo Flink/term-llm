@@ -59,10 +59,9 @@ func (s *Service) ensureAccount(ctx context.Context, name string, rejected int64
 	if err != nil {
 		return a, errAccountUnavailable
 	}
-	if a.Kind == "claude-code" {
-		// A Claude slot holds no proxy credential: native login keeps its OAuth
-		// tokens in the client-side vault. Shared-account dispatch and renewal
-		// therefore fail closed instead of serving a superseded credential.
+	if nativeProviderForKind(a.Kind) != nil {
+		// Native subscription accounts use the encrypted account vault and
+		// fixed provider-specific OAuth exchange, not this generic loader.
 		return a, errAccountUnavailable
 	}
 	if a.Kind == "copilot" && a.State == "refreshing" {

@@ -26,10 +26,11 @@ const (
 
 // claudeForwarder is deliberately separate from request admission: retaining a
 // normal forwarding slot during CONNECT would deadlock MaxConcurrent=1.
-// Service owns one pointer, claudeNative *claudeForwarder, guarded by s.mu.
+// Service owns one forwarder per provider, guarded by s.mu.
 // All long-lived work is registered in the existing socket cancellation set.
 type claudeForwarder struct {
 	ca           *claudeForwardCA
+	provider     *nativeProxyProvider
 	slots        chan struct{}
 	certificates claudeForwardCertificates
 }
@@ -38,19 +39,27 @@ type claudeForwarder struct {
 // authenticate and take a short-lived request slot before invoking it. There is
 // no process-global cache or installation into the operating system trust store.
 func (s *Service) claudeForwarder() (*claudeForwarder, error) {
+	return s.nativeForwarder(claudeProxyProvider)
+}
+
+func (s *Service) nativeForwarder(provider *nativeProxyProvider) (*claudeForwarder, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closing {
 		return nil, fmt.Errorf("proxy shutting down")
 	}
-	if s.claudeNative == nil {
-		ca, err := openClaudeForwardCA(s.opts.StateDir)
+	slot := &s.claudeNative
+	if provider == agyProxyProvider {
+		slot = &s.agyNative
+	}
+	if *slot == nil {
+		ca, err := provider.openCA(s.opts.StateDir)
 		if err != nil {
 			return nil, err
 		}
-		s.claudeNative = &claudeForwarder{ca: ca, slots: make(chan struct{}, cap(s.slots))}
+		*slot = &claudeForwarder{ca: ca, provider: provider, slots: make(chan struct{}, cap(s.slots))}
 	}
-	return s.claudeNative, nil
+	return *slot, nil
 }
 
 // claudeForward runs before ordinary ServeHTTP dispatch. It consumes all
@@ -63,11 +72,13 @@ func (s *Service) claudeForward(w http.ResponseWriter, r *http.Request) bool {
 		s.claudeForwardConnect(w, r)
 		return true
 	}
-	if !strings.HasSuffix(r.URL.Path, "/"+claudeForwardDiscovery) {
-		return false
+	for _, provider := range nativeProxyProviders {
+		if strings.HasSuffix(r.URL.Path, "/"+provider.discovery) {
+			s.claudeForwardBootstrap(w, r, provider)
+			return true
+		}
 	}
-	s.claudeForwardBootstrap(w, r)
-	return true
+	return false
 }
 
 func (s *Service) claudeForwardRequestSlot(w http.ResponseWriter) bool {
@@ -84,6 +95,10 @@ func (s *Service) claudeForwardRequestSlot(w http.ResponseWriter) bool {
 // The service lock must cover authorization and socket registration, matching
 // the lifecycle fence in websocket.go and ordinary forwarding.
 func (s *Service) claudeForwardRouteLocked(name, token string) (activeRoute, Caller, error) {
+	return s.nativeForwardRouteLocked(name, token, claudeProxyProvider)
+}
+
+func (s *Service) nativeForwardRouteLocked(name, token string, provider *nativeProxyProvider) (activeRoute, Caller, error) {
 	if s.closing || token == "" || len(token) > 16<<10 || subtle.ConstantTimeCompare([]byte(hashToken(token)), []byte(s.adminHash)) == 1 {
 		return activeRoute{}, Caller{}, fmt.Errorf("unauthorized")
 	}
@@ -91,14 +106,14 @@ func (s *Service) claudeForwardRouteLocked(name, token string) (activeRoute, Cal
 		if ar.Name != name || !ar.Enabled {
 			continue
 		}
-		if ar.Upstream != "https://"+claudeAPIHost && ar.Upstream != "https://"+claudeAPIHost+"/" {
+		if ar.Upstream != "https://"+provider.apiHost && ar.Upstream != "https://"+provider.apiHost+"/" {
 			break
 		}
 		if ar.Account == "" {
 			break
 		}
 		account, err := s.store.account(ar.Account)
-		if err != nil || account.Kind != "claude-code" {
+		if err != nil || account.Kind != provider.kind || !account.claudeShared() {
 			break
 		}
 		caller, err := s.store.authorize(token, ar)
@@ -110,7 +125,7 @@ func (s *Service) claudeForwardRouteLocked(name, token string) (activeRoute, Cal
 	return activeRoute{}, Caller{}, fmt.Errorf("unauthorized or route not granted")
 }
 
-func (s *Service) claudeForwardBootstrap(w http.ResponseWriter, r *http.Request) {
+func (s *Service) claudeForwardBootstrap(w http.ResponseWriter, r *http.Request, provider *nativeProxyProvider) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.Method != http.MethodGet {
@@ -128,7 +143,7 @@ func (s *Service) claudeForwardBootstrap(w http.ResponseWriter, r *http.Request)
 	s.mu.RLock()
 	var name, token string
 	for _, ar := range s.snap.routes {
-		if r.URL.EscapedPath() != ar.LocalPrefix+claudeForwardDiscovery {
+		if r.URL.EscapedPath() != ar.LocalPrefix+provider.discovery {
 			continue
 		}
 		values := r.Header.Values(ar.CallerAuth.Header)
@@ -137,7 +152,11 @@ func (s *Service) claudeForwardBootstrap(w http.ResponseWriter, r *http.Request)
 		}
 		break
 	}
-	_, _, err := s.claudeForwardRouteLocked(name, token)
+	ar, caller, err := s.nativeForwardRouteLocked(name, token, provider)
+	var account accountRecord
+	if err == nil {
+		account, err = s.store.account(ar.Account)
+	}
 	s.mu.RUnlock()
 	if err != nil {
 		http.Error(w, "unauthorized or route not granted", 401)
@@ -152,12 +171,16 @@ func (s *Service) claudeForwardBootstrap(w http.ResponseWriter, r *http.Request)
 	// Only the service's trusted origin is advertised. Never trust forwarded
 	// headers, retain an admin mount, or put the scoped token into a URL.
 	proxyURL := (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
-	f, err := s.claudeForwarder()
+	f, err := s.nativeForwarder(provider)
 	if err != nil {
-		http.Error(w, "Claude proxy trust unavailable", 503)
+		http.Error(w, provider.label+" proxy trust unavailable", 503)
 		return
 	}
-	jsonReply(w, 200, map[string]any{"certificate_pem": f.ca.certificatePEM, "proxy_url": proxyURL, "route": name, "protocol_version": 2, "token_mode": "vault", "hosts": []string{claudeAPIHost, claudeOAuthHost}})
+	metadata := map[string]any{"certificate_pem": f.ca.certificatePEM, "proxy_url": proxyURL, "route": name, "protocol_version": 2, "token_mode": "vault", "hosts": provider.hosts}
+	if !s.claudeSharedBootstrap(w, r, f, account, nativeForwardScope(ar, caller, account, provider), metadata) {
+		return
+	}
+	jsonReply(w, 200, metadata)
 }
 
 type claudeNativeTunnel struct {
@@ -169,10 +192,11 @@ type claudeNativeTunnel struct {
 }
 
 func (s *Service) claudeForwardAdmit(w http.ResponseWriter, r *http.Request) *claudeNativeTunnel {
-	if r.ProtoMajor != 1 || r.ProtoMinor != 1 || !claudeForwardAuthority(r.Host) || r.URL.Host != r.Host ||
+	provider := nativeProviderForAuthority(r.Host)
+	if r.ProtoMajor != 1 || r.ProtoMinor != 1 || provider == nil || r.URL.Host != r.Host ||
 		r.URL.Scheme != "" || r.URL.User != nil || r.URL.Path != "" || r.URL.RawQuery != "" || r.URL.Fragment != "" ||
 		r.ContentLength > 0 || len(r.TransferEncoding) > 0 || len(r.Header.Values("Upgrade")) > 0 {
-		http.Error(w, "only exact Claude HTTPS authorities are supported", 400)
+		http.Error(w, "only exact native HTTPS authorities are supported", 400)
 		return nil
 	}
 	values := r.Header.Values("Proxy-Authorization")
@@ -193,26 +217,26 @@ func (s *Service) claudeForwardAdmit(w http.ResponseWriter, r *http.Request) *cl
 	}
 	defer func() { <-s.slots }()
 	s.mu.RLock()
-	_, _, err := s.claudeForwardRouteLocked(name, token)
+	_, _, err := s.nativeForwardRouteLocked(name, token, provider)
 	s.mu.RUnlock()
 	if err != nil {
 		w.Header().Set("Proxy-Authenticate", `Basic realm="term-llm Claude"`)
 		http.Error(w, "proxy authentication required", 407)
 		return nil
 	}
-	f, err := s.claudeForwarder()
+	f, err := s.nativeForwarder(provider)
 	if err != nil {
-		http.Error(w, "Claude proxy trust unavailable", 503)
+		http.Error(w, provider.label+" proxy trust unavailable", 503)
 		return nil
 	}
 	select {
 	case f.slots <- struct{}{}:
 	default:
-		http.Error(w, "Claude tunnel concurrency limit", 503)
+		http.Error(w, provider.label+" tunnel concurrency limit", 503)
 		return nil
 	}
 	s.mu.Lock()
-	ar, caller, err := s.claudeForwardRouteLocked(name, token)
+	ar, caller, err := s.nativeForwardRouteLocked(name, token, provider)
 	if err != nil {
 		s.mu.Unlock()
 		<-f.slots
@@ -221,7 +245,7 @@ func (s *Service) claudeForwardAdmit(w http.ResponseWriter, r *http.Request) *cl
 	}
 	ctx, lifetimeCancel := context.WithTimeout(r.Context(), claudeForwardLifetime)
 	ctx, cancel := context.WithCancelCause(ctx)
-	id := randomToken("claude_")
+	id := randomToken("native_")
 	s.sockets.Store(id, &activeSocket{caller: caller.ID, route: ar.Name, authority: ar.authority, account: ar.Account, cancel: cancel})
 	s.socketWG.Add(1)
 	s.mu.Unlock()
@@ -313,7 +337,8 @@ func (s *Service) claudeForwardNative(w http.ResponseWriter, r *http.Request, tu
 		return
 	}
 	s.mu.RLock()
-	ar, caller, err := s.claudeForwardRouteLocked(tunnel.route, tunnel.token)
+	provider := tunnel.forwarder.nativeProvider()
+	ar, caller, err := s.nativeForwardRouteLocked(tunnel.route, tunnel.token, provider)
 	var account accountRecord
 	if err == nil {
 		account, err = s.store.account(ar.Account)
@@ -323,13 +348,13 @@ func (s *Service) claudeForwardNative(w http.ResponseWriter, r *http.Request, tu
 		http.Error(w, "unauthorized or route not granted", 401)
 		return
 	}
-	scope := claudeForwardScope{route: ar.Name, authority: ar.authority, caller: caller.ID, account: ar.Account, identity: account.identityVersion}
-	if claudeNativeProbe(tunnel.host, r) {
+	scope := nativeForwardScope(ar, caller, account, provider)
+	if provider == claudeProxyProvider && claudeNativeProbe(tunnel.host, r) {
 		s.claudeForwardProbe(w, r, tunnel.host)
 		return
 	}
-	if tunnel.host == claudeOAuthHost {
-		if r.URL.EscapedPath() != "/v1/oauth/token" || r.URL.RawQuery != "" || r.Method != http.MethodPost {
+	if tunnel.host != provider.apiHost && tunnel.host != agyProfileHost {
+		if "https://"+tunnel.host+r.URL.EscapedPath() != provider.tokenURL || r.URL.RawQuery != "" || r.URL.ForceQuery || r.Method != http.MethodPost {
 			http.Error(w, "unsupported native OAuth request", 403)
 			return
 		}
@@ -342,10 +367,19 @@ func (s *Service) claudeForwardNative(w http.ResponseWriter, r *http.Request, tu
 		return
 	}
 	scope.access = strings.TrimPrefix(values[0], "Bearer ")
-	if _, err := s.store.claudeVaultAccess(r.Context(), tunnel.forwarder.ca.vaultKey, scope); err != nil {
-		http.Error(w, "native login required", 401)
+	if (account.State != "ready" && account.State != "refreshing") || !validClaudeSharedAlias(tunnel.forwarder.ca.vaultKey, account, scope, provider.accessPrefix) {
+		http.Error(w, "native login required", http.StatusUnauthorized)
 		return
 	}
+	if provider == agyProxyProvider && tunnel.host == agyProfileHost {
+		s.agyNativeProfile(w, r, tunnel.forwarder.ca.vaultKey, scope)
+		return
+	}
+	if !provider.allowsNativeAPI(r) {
+		http.Error(w, "unsupported "+provider.label+" API request", http.StatusForbidden)
+		return
+	}
+
 	// Both native paths and the joined local mount are validated, without cleaning
 	// or decoding away escapes. Ordinary forward retains its policy/ledger/body
 	// limits; account transport resolves this scoped vault placeholder to OAuth.
@@ -377,10 +411,15 @@ type claudeForwardScopeKey struct{}
 type claudeForwardScope struct {
 	route, authority, caller, account, access string
 	identity                                  int64
+	provider                                  *nativeProxyProvider
+}
+
+func nativeForwardScope(ar activeRoute, caller Caller, account accountRecord, provider *nativeProxyProvider) claudeForwardScope {
+	return claudeForwardScope{route: ar.Name, authority: ar.authority, caller: caller.ID, account: ar.Account, identity: account.identityVersion, provider: provider}
 }
 
 func claudeForwardAuthority(authority string) bool {
-	return authority == claudeAPIHost+":443" || authority == claudeOAuthHost+":443"
+	return nativeProviderForAuthority(authority) == claudeProxyProvider
 }
 
 type claudeForwardBufferedConn struct {

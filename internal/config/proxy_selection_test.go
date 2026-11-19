@@ -10,6 +10,7 @@ import (
 )
 
 func TestProxyProvidersOnlyRoutesListedProviders(t *testing.T) {
+	stubEmptyProxyDiscovery(t)
 	tests := []struct {
 		name, list     string
 		want, notBound []string
@@ -82,6 +83,7 @@ image:
 }
 
 func TestProxyProvidersNamedProviderDoesNotSelectStandaloneFeature(t *testing.T) {
+	stubEmptyProxyDiscovery(t)
 	cfg := Config{
 		Proxy:     ProxyConfig{URL: "https://proxy-named-feature.example.test", Token: strings.Repeat("s", 40), Providers: []string{"gemini-live"}},
 		Providers: map[string]ProviderConfig{"gemini-live": {Type: ProviderTypeOpenAICompat}},
@@ -99,6 +101,7 @@ func TestProxyProvidersNamedProviderDoesNotSelectStandaloneFeature(t *testing.T)
 }
 
 func TestProxyProvidersRejectsInvalidSelection(t *testing.T) {
+	stubEmptyProxyDiscovery(t)
 	for _, tc := range []struct{ yaml, want string }{
 		{"providers: [a-typo]", "not a known provider"},
 		{"providers: [claude-code]", `use "claude-bin"`},
@@ -142,6 +145,7 @@ func TestProxyProvidersSavePreservesSelection(t *testing.T) {
 }
 
 func TestProxyProvidersRefusesToSaveMaterializedFeatureCredentials(t *testing.T) {
+	stubEmptyProxyDiscovery(t)
 	cfg := Config{Proxy: ProxyConfig{URL: "https://proxy-save-feature.example.test", Token: strings.Repeat("s", 40), Providers: []string{"elevenlabs"}}}
 	if err := cfg.materializeProxy(nil); err != nil {
 		t.Fatal(err)

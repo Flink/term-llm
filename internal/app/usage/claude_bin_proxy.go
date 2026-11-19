@@ -2,8 +2,8 @@ package usage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"os"
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/app/proxyrun"
@@ -26,13 +26,10 @@ func configuredClaudeUsageProxy() (proxyrun.Connection, bool, error) {
 	return connection, configured, nil
 }
 
-// prepareClaudeUsageEnvironment prepares a process-local native Claude
-// environment for the same explicit proxy connection. Live limits come from
-// the native get_usage control request through the Claude-only TLS tunnel; the
-// scoped token headers used for the control connection are produced by the
-// shared client helper. A preparation failure is terminal and never falls back
-// to a worker's installed vendor login.
-func prepareClaudeUsageEnvironment(ctx context.Context, connection proxyrun.Connection) ([]string, error) {
+// fetchClaudeBinProxiedUsage sends get_usage through the same scoped tunnel as
+// inference. A broken binding or launch is terminal: no installed vendor login
+// may be used as a fallback.
+func fetchClaudeBinProxiedUsage(ctx context.Context, binary string, connection proxyrun.Connection) (json.RawMessage, error) {
 	if strings.TrimSpace(connection.Root) == "" || strings.TrimSpace(connection.Token) == "" {
 		return nil, errors.New("Claude usage requires a scoped proxy connection (no direct fallback)")
 	}
@@ -40,5 +37,17 @@ func prepareClaudeUsageEnvironment(ctx context.Context, connection proxyrun.Conn
 	if err != nil {
 		return nil, err
 	}
-	return proxyclient.PrepareClaudeNativeEnvironment(ctx, connection.Root, connection.Token, stateDir, os.Environ())
+	cmd := newClaudeUsageCommand(ctx, binary)
+	cleanup, err := proxyclient.PrepareClaudeNativeCommand(ctx, cmd, connection.Root, connection.Token, stateDir)
+	if err != nil {
+		return nil, err
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	raw, err := runClaudeUsageCommand(ctx, cmd)
+	if err != nil {
+		return nil, claudeProxiedUsageError(ctx)
+	}
+	return raw, nil
 }

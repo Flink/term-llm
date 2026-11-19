@@ -209,7 +209,7 @@ function RuntimePicker() {
           <SelectControl
             class="runtime-popover-select"
             aria-label="Reasoning effort"
-            value={store.selectedEffort.value}
+            value={efforts.includes(store.selectedEffort.value) ? store.selectedEffort.value : ''}
             onChange={(event) => store.setPreference('effort', event.currentTarget.value)}
           >
             {efforts.map((entry) => (

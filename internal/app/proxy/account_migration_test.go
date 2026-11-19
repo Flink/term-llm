@@ -36,7 +36,7 @@ func TestAccountSchema2MigrationPreservesGrantsAndHistoryRollback(t *testing.T) 
 		t.Fatal(err)
 	}
 	// Faithful schema2 shape: all pre-account tables/indexes are unchanged.
-	if _, err := s.store.db.Exec(removeProxyV6 + "DROP TABLE claude_vault; DROP TABLE accounts; DROP TABLE money_history; DROP TABLE money_settings; PRAGMA user_version=2;"); err != nil {
+	if _, err := s.store.db.Exec(removeProxyV7 + removeProxyV6 + "DROP TABLE accounts; DROP TABLE money_history; DROP TABLE money_settings; PRAGMA user_version=2;"); err != nil {
 		t.Fatal(err)
 	}
 	failure := errors.New("synthetic failure after schema and marker writes")

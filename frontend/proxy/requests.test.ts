@@ -150,7 +150,7 @@ describe('first-page polling', () => {
     hidden.mockReturnValue(false);
     await vi.advanceTimersByTimeAsync(1000);
     expect(requests).toHaveBeenCalledTimes(6);
-    fireEvent.click(getByRole(root, 'button', { name: 'Routes' }));
+    fireEvent.click(getByRole(root, 'button', { name: 'Providers' }));
     await vi.advanceTimersByTimeAsync(2000);
     expect(requests).toHaveBeenCalledTimes(6);
   });

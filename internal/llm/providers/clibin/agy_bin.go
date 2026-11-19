@@ -35,6 +35,7 @@ var errAgyConversationMismatch = errors.New("agy conversation continuation misma
 
 type AgyBinProvider struct {
 	model                  string
+	effort                 string
 	extraEnv               map[string]string
 	realHome               string
 	agyHome                string
@@ -49,6 +50,7 @@ type AgyBinProvider struct {
 	mcpBridge              cliMCPBridge
 	isolation              agyToolIsolation
 	wireAudit              *cliwire.Server
+	proxyEnv               []string // isolated environment for the current bound worker
 	cliToolBridgeState
 	tempFileTracker
 	streamMu          sync.Mutex // Serializes stream admission and conversation cleanup.
@@ -109,7 +111,8 @@ type agyUsage struct {
 
 func NewAgyBinProvider(model string, env map[string]string) *AgyBinProvider {
 	home, _ := os.UserHomeDir()
-	p := &AgyBinProvider{model: strings.TrimSpace(model), realHome: home, isolation: newAgyToolIsolation()}
+	actualModel, effort := parseAgyEffort(model)
+	p := &AgyBinProvider{model: actualModel, effort: effort, realHome: home, isolation: newAgyToolIsolation()}
 	p.tempFileTracker.logName = "agy-bin"
 	p.SetEnv(env)
 	return p
@@ -128,6 +131,12 @@ func ValidateAgyBinModel(model string) error {
 	if strings.ContainsAny(model, "\r\n") {
 		return fmt.Errorf("agy-bin model contains a newline")
 	}
+	trimmed := strings.TrimSpace(model)
+	for _, effort := range agyEffortLevels {
+		if strings.EqualFold(trimmed, effort) {
+			return fmt.Errorf("agy-bin model %q is an effort level, not a model", model)
+		}
+	}
 	return nil
 }
 
@@ -145,7 +154,13 @@ func validAgyConversationID(id string) bool {
 
 func (p *AgyBinProvider) Name() string {
 	if p.model == "" {
+		if p.effort != "" {
+			return fmt.Sprintf("agy CLI (effort=%s)", p.effort)
+		}
 		return "agy CLI"
+	}
+	if p.effort != "" {
+		return fmt.Sprintf("agy CLI (%s, effort=%s)", p.model, p.effort)
 	}
 	return "agy CLI (" + p.model + ")"
 }
@@ -235,7 +250,7 @@ func (p *AgyBinProvider) ImportProviderState(data []byte) error {
 		return errors.New("decode agy-bin provider state: invalid session state")
 	}
 
-	home, existed, err := validateAgyHomeState(state.AgyHome)
+	home, existed, err := p.validateAgyHomeState(state.AgyHome)
 	if err != nil {
 		return fmt.Errorf("decode agy-bin provider state: %w", err)
 	}
@@ -273,7 +288,7 @@ func (p *AgyBinProvider) ImportProviderState(data []byte) error {
 }
 
 func (p *AgyBinProvider) Stream(ctx context.Context, req core.Request) (core.Stream, error) {
-	return newEventStream(ctx, func(ctx context.Context, send eventSender) error {
+	return newEventStream(ctx, func(ctx context.Context, send eventSender) (retErr error) {
 		if !p.beginStream() {
 			return errors.New("agy-bin provider already has an active stream")
 		}
@@ -281,15 +296,20 @@ func (p *AgyBinProvider) Stream(ctx context.Context, req core.Request) (core.Str
 		p.stateMu.Lock()
 		defer p.stateMu.Unlock()
 
-		// Check the binary before creating a home or copying credentials.
+		binding, err := p.nativeProxyBinding()
+		if err != nil {
+			return err
+		}
 		if err := p.resolveBinary(); err != nil {
 			return err
 		}
-		if err := p.ensureSupportedVersion(ctx); err != nil {
-			return err
+		if binding == nil {
+			if err := p.ensureSupportedVersion(ctx); err != nil {
+				return err
+			}
 		}
 		previousHome := p.agyHome
-		if err := p.prepareHome(req.Ephemeral); err != nil {
+		if err := p.prepareHome(req.Ephemeral, binding != nil); err != nil {
 			if req.Ephemeral {
 				p.agyHome = previousHome
 			}
@@ -303,6 +323,20 @@ func (p *AgyBinProvider) Stream(ctx context.Context, req core.Request) (core.Str
 				_ = os.RemoveAll(ephemeralHome)
 			}
 		}()
+		var finish func() error
+		if binding != nil {
+			finish, err = p.startNativeProxyWorker(ctx, binding)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				if finish != nil {
+					retErr = errors.Join(retErr, finish())
+				}
+			}()
+		} else if err := p.startDirectAgyIsolation(); err != nil {
+			return err
+		}
 		workspaceDir := agyWorkspaceDir(req.WorkingDir)
 		plan, err := p.planTurn(req, workspaceDir)
 		if err != nil {
@@ -323,27 +357,19 @@ func (p *AgyBinProvider) Stream(ctx context.Context, req core.Request) (core.Str
 		if err := p.writeAgentConfig(); err != nil {
 			return err
 		}
-		if err := rejectAgyProxyEnvironment(p.buildCommandEnv()); err != nil {
-			return err
-		}
-		wireAudit, err := startCLIWireServer("agy-bin", p.buildCommandEnv())
-		if err != nil {
-			return err
-		}
-		p.wireAudit = wireAudit
-		if wireAudit != nil {
-			p.isolation.SetUpstream(wireAudit.ProxyURL(), wireAudit.CAPath())
-		} else {
-			p.isolation.SetUpstream("", "")
-		}
-		if err := p.isolation.EnsureStarted(p.agyHome); err != nil {
-			return fmt.Errorf("start agy native-tool isolation: %w", err)
-		}
+
 		p.isolation.BeginTurn(exposeBridge)
-		state, err := p.runCommand(ctx, p.buildArgs(req, plan.ResumeID), plan.Prompt, workspaceDir, plan.ResumeID, req.Debug || req.DebugRaw, send, exposeBridge)
+		state, err := p.runCommandWithParts(ctx, p.buildArgs(req, plan.ResumeID), plan.Prompt, plan.PromptParts, workspaceDir, plan.ResumeID, req.Debug || req.DebugRaw, send, exposeBridge)
 		if err != nil {
 			p.invalidateResumeAfterFailedTurn(req, plan, err)
 			return err
+		}
+		if finish != nil {
+			err := finish()
+			finish = nil
+			if err != nil {
+				return err
+			}
 		}
 		if err := p.requireFilteredGeneration(plan.ResumeID); err != nil {
 			return err
@@ -388,6 +414,26 @@ func buildAgyPrompt(messages []core.Message, workspaceDir string) string {
 	return strings.TrimSpace(strings.Join(parts, "\n\n"))
 }
 
+func (p *AgyBinProvider) resolveModelEffort(req core.Request) (string, string) {
+	reqModel := strings.TrimSpace(req.Model)
+	model := reqModel
+	if model == "" {
+		model = p.model
+	}
+	model, suffixEffort := parseAgyEffort(model)
+	effort := ""
+	if reqModel == "" || strings.EqualFold(model, p.model) {
+		effort = p.effort
+	}
+	if suffixEffort != "" {
+		effort = suffixEffort
+	}
+	if requested := strings.TrimSpace(req.ReasoningEffort); requested != "" {
+		effort = requested
+	}
+	return model, normalizeAgyEffort(effort)
+}
+
 func (p *AgyBinProvider) buildArgs(req core.Request, resumeID string) []string {
 	// Prompt content never travels on argv: the complete assembled prompt is one
 	// NDJSON user event on stdin (see agy_bin_transport.go), which avoids the
@@ -396,9 +442,12 @@ func (p *AgyBinProvider) buildArgs(req core.Request, resumeID string) []string {
 	// process, so a wall-clock cap would abort long agentic turns. Context
 	// cancellation stops agy instead.
 	args := []string{"--dangerously-skip-permissions", "--disable-slash-commands", "--input-format", "stream-json", "--output-format", "stream-json", "--agent", agyAgentName}
-	model := strings.TrimSpace(core.ChooseModel(req.Model, p.model))
+	model, effort := p.resolveModelEffort(req)
 	if model != "" {
 		args = append(args, "--model", model)
+	}
+	if effort != "" {
+		args = append(args, "--effort", effort)
 	}
 	if resumeID = strings.TrimSpace(resumeID); resumeID != "" && !req.Ephemeral {
 		args = append(args, "--conversation", resumeID)
@@ -489,7 +538,7 @@ func (p *AgyBinProvider) commandError(waitErr error, stderrTail, stdoutTail []st
 func (p *AgyBinProvider) prepareMCPBridge(ctx context.Context, req core.Request) (cliMCPEndpoint, error) {
 	return p.mcpBridge.prepare(ctx, req, cliMCPBridgeOptions{
 		name: "agy-bin", enabled: p.toolExecutorConfigured, specs: agyMCPToolSpecs,
-		executor: p.cliToolBridgeState.wrappedExecutor(p.formatToolOutput),
+		executor: p.cliToolBridgeState.wrappedResultExecutor(p.formatToolResultForAgy),
 	})
 }
 
@@ -504,9 +553,9 @@ func agyMCPToolSpecs(tools []core.ToolSpec) []mcphttp.ToolSpec {
 	return specs
 }
 
-func (p *AgyBinProvider) prepareHome(ephemeral bool) error {
+func (p *AgyBinProvider) prepareHome(ephemeral, bound bool) error {
 	if !ephemeral {
-		return p.ensureAgyHome()
+		return p.ensureAgyHome(bound)
 	}
 	home, err := os.MkdirTemp("", "term-llm-agy-home-")
 	if err != nil {
@@ -518,17 +567,19 @@ func (p *AgyBinProvider) prepareHome(ephemeral bool) error {
 		p.agyHome = ""
 		return err
 	}
-	if err := p.copyCredentials(); err != nil {
-		_ = os.RemoveAll(home)
-		p.agyHome = ""
-		return err
+	if !bound {
+		if err := p.copyCredentials(); err != nil {
+			_ = os.RemoveAll(home)
+			p.agyHome = ""
+			return err
+		}
 	}
 	return nil
 }
 
-func (p *AgyBinProvider) ensureAgyHome() error {
+func (p *AgyBinProvider) ensureAgyHome(bound bool) error {
 	if p.agyHome == "" {
-		base, err := agyBinCacheBase()
+		base, err := p.agyHomeBase()
 		if err != nil {
 			return err
 		}
@@ -541,7 +592,7 @@ func (p *AgyBinProvider) ensureAgyHome() error {
 		}
 		p.agyHome = filepath.Join(base, id)
 	} else {
-		home, _, err := validateAgyHomeState(p.agyHome)
+		home, _, err := p.validateAgyHomeState(p.agyHome)
 		if err != nil {
 			return err
 		}
@@ -550,8 +601,10 @@ func (p *AgyBinProvider) ensureAgyHome() error {
 	if err := ensureAgyHomeLayout(p.agyHome); err != nil {
 		return err
 	}
-	if err := p.copyCredentials(); err != nil {
-		return err
+	if !bound {
+		if err := p.copyCredentials(); err != nil {
+			return err
+		}
 	}
 	p.touchAgyHome()
 	p.gcAgyHomes()
@@ -562,12 +615,16 @@ func ensureAgyHomeLayout(home string) error {
 	for _, dir := range []string{
 		home,
 		filepath.Join(home, "cwd"),
+		filepath.Join(home, ".gemini"),
 		filepath.Join(home, ".gemini", "config"),
 		filepath.Join(home, ".gemini", "config", "agents"),
 		filepath.Join(home, ".gemini", "antigravity-cli"),
 	} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("create agy home layout: %w", err)
+		}
+		if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+			return errors.New("agy home layout requires non-symlink directories")
 		}
 		if err := os.Chmod(dir, 0o700); err != nil {
 			return fmt.Errorf("secure agy home layout: %w", err)
@@ -718,8 +775,8 @@ func agyBinCacheBase() (string, error) {
 
 func isAgyHomeID(id string) bool { return isGrokHomeID(id) }
 
-func validateAgyHomeState(home string) (string, bool, error) {
-	base, err := agyBinCacheBase()
+func (p *AgyBinProvider) validateAgyHomeState(home string) (string, bool, error) {
+	base, err := p.agyHomeBase()
 	if err != nil {
 		return "", false, err
 	}
@@ -759,7 +816,7 @@ func (p *AgyBinProvider) touchAgyHome() {
 }
 
 func (p *AgyBinProvider) gcAgyHomes() {
-	base, err := agyBinCacheBase()
+	base, err := p.agyHomeBase()
 	if err != nil {
 		return
 	}
@@ -767,6 +824,7 @@ func (p *AgyBinProvider) gcAgyHomes() {
 }
 
 func (p *AgyBinProvider) cleanupRuntime() {
+	p.proxyEnv = nil
 	if p.isolation != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), agyIsolationStopTimeout)
 		_ = p.isolation.Stop(ctx)

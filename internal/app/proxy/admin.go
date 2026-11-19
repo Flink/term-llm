@@ -234,21 +234,28 @@ func (s *Service) adminAPI(w http.ResponseWriter, r *http.Request, path string, 
 	case path == "chatgpt/setup" && (r.Method == http.MethodPost || r.Method == http.MethodGet || r.Method == http.MethodDelete):
 		s.chatgptSetupAPI(w, r, sess)
 	case path == "claude/setup" && (r.Method == http.MethodPost || r.Method == http.MethodDelete):
-		s.claudeSetupAPI(w, r, sess)
+		s.nativeSetupAPI(w, r, claudeSetup)
+	case path == "agy/setup" && (r.Method == http.MethodPost || r.Method == http.MethodDelete):
+		s.nativeSetupAPI(w, r, agySetup)
 	case path == "accounts" && (r.Method == "GET" || r.Method == "POST" || r.Method == "PUT" || r.Method == "DELETE"):
 		s.accountsAPI(w, r, sess)
 	case path == "admin-keys" && r.Method == http.MethodPost:
 		s.createAdminKey(w, r, sess)
 	case path == "admin-keys" && r.Method == http.MethodDelete:
 		s.revokeAdminKey(w, r, sess)
+	case path == "provider-config" && r.Method == http.MethodPut:
+		s.updateProviderConfig(w, r)
+	case path == "provider-config/parse" && r.Method == http.MethodPost:
+		s.parseProviderConfig(w, r)
 	case path == "state" && r.Method == "GET":
 		s.state(w, sess)
 	case path == "config" && r.Method == "PUT":
 		var in struct {
-			Revision int64                `json:"revision"`
-			Routes   []Route              `json:"routes"`
-			Secrets  map[string]SecretRef `json:"secrets"`
-			Money    *MoneySettings       `json:"money,omitempty"`
+			Revision           int64                `json:"revision"`
+			Routes             []Route              `json:"routes"`
+			Secrets            map[string]SecretRef `json:"secrets"`
+			Money              *MoneySettings       `json:"money,omitempty"`
+			ProviderConfigYAML map[string]string    `json:"provider_config_yaml,omitempty"`
 		}
 		if readJSON(w, r, &in) {
 			money, err := s.currentMoneySettings(r.Context())
@@ -259,7 +266,7 @@ func (s *Service) adminAPI(w http.ResponseWriter, r *http.Request, path string, 
 			if in.Money != nil {
 				money = *in.Money
 			}
-			s.updateConfig(w, Config{Routes: in.Routes, Secrets: in.Secrets, Money: money}, in.Revision)
+			s.updateConfigWithProviders(w, Config{Routes: in.Routes, Secrets: in.Secrets, Money: money}, in.Revision, in.ProviderConfigYAML)
 		}
 	case path == "import" && r.Method == "POST":
 		var in struct {
@@ -395,9 +402,15 @@ func (s *Service) state(w http.ResponseWriter, sess session) {
 		fail(w, 503, "Money settings unavailable")
 		return
 	}
-	jsonReply(w, 200, map[string]any{"has_requests": hasRequests, "accounts": accounts, "money": money, "mode": mode, "auth": s.opts.Auth, "revision": s.snap.revision, "routes": s.snap.config.Routes, "secrets": secrets, "callers": callers, "admin_keys": adminKeys, "csrf": sess.csrf, "retention_days": s.opts.RetentionDays, "presets": routePresets})
+	jsonReply(w, 200, map[string]any{"has_requests": hasRequests, "accounts": accounts, "money": money, "mode": mode, "auth": s.opts.Auth, "revision": s.snap.revision, "routes": s.snap.config.Routes, "providers": attachProviderConfigs(providerGroups(s.snap.config.Routes, accounts), s.snap.config.Providers), "secrets": secrets, "callers": callers, "admin_keys": adminKeys, "csrf": sess.csrf, "retention_days": s.opts.RetentionDays, "presets": routePresets})
 }
 func (s *Service) updateConfig(w http.ResponseWriter, c Config, revision int64) {
+	s.commitConfig(w, c, revision, false, nil)
+}
+func (s *Service) updateConfigWithProviders(w http.ResponseWriter, c Config, revision int64, providerUpdates map[string]string) {
+	s.commitConfig(w, c, revision, true, providerUpdates)
+}
+func (s *Service) commitConfig(w http.ResponseWriter, c Config, revision int64, mergeProviders bool, providerUpdates map[string]string) {
 	if len(c.Accounts) > 0 {
 		fail(w, 400, "Account bootstrap references are operator-file-only")
 		return
@@ -411,6 +424,14 @@ func (s *Service) updateConfig(w http.ResponseWriter, c Config, revision int64) 
 	if revision != s.snap.revision {
 		fail(w, 409, "Configuration changed in another tab; refresh before saving")
 		return
+	}
+	if mergeProviders {
+		providers, err := mergeProviderConfigUpdates(s.snap.config.Providers, providerUpdates, c.Routes)
+		if err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+		c.Providers = providers
 	}
 	stored, err := s.store.materials()
 	if err != nil {
@@ -481,43 +502,6 @@ func (s *Service) reload(w http.ResponseWriter) {
 	s.reconcileSockets(next)
 	s.snap = next
 	jsonReply(w, 200, map[string]int64{"revision": next.revision})
-}
-func (s *Service) changeCaller(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		ID       string   `json:"id,omitempty"`
-		Name     string   `json:"name,omitempty"`
-		Grants   []string `json:"grants"`
-		Revision *int64   `json:"revision,omitempty"`
-	}
-	if !readJSON(w, r, &in) {
-		return
-	}
-	in.Name = strings.TrimSpace(in.Name)
-	if len(in.Grants) > 128 || (r.Method == "POST" && (len(in.Name) < 1 || len(in.Name) > 80)) {
-		fail(w, 400, "Enter a client name (1–80 characters) and at most 128 explicit route grants")
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if in.Revision != nil && *in.Revision != s.snap.revision {
-		fail(w, 409, "Route configuration changed; refresh before granting access")
-		return
-	}
-	if r.Method == "PUT" {
-		if err := s.store.updateGrants(in.ID, in.Grants, s.snap); err != nil {
-			callerFailure(w, err)
-			return
-		}
-		s.cancelCallerSockets(in.ID)
-		jsonReply(w, 200, map[string]bool{"ok": true})
-		return
-	}
-	caller, token, err := s.store.createCaller(in.Name, in.Grants, s.snap)
-	if err != nil {
-		callerFailure(w, err)
-		return
-	}
-	jsonReply(w, 201, map[string]any{"caller": caller, "token": token})
 }
 func callerFailure(w http.ResponseWriter, err error) {
 	if safe, ok := err.(inputError); ok {
@@ -600,7 +584,7 @@ func (s *Service) changeSecret(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, err.Error())
 		return
 	}
-	next, err := compile(s.snap.config, s.snap.revision+1, secrets)
+	next, err := s.snap.recompile(s.snap.config, secrets)
 	if err != nil {
 		fail(w, 400, err.Error())
 		return

@@ -103,14 +103,7 @@ func runClaudeBinUsage(parent context.Context, cmdOut io.Writer, jsonOutput bool
 	defer cancel()
 	var raw json.RawMessage
 	if proxied {
-		env, envErr := prepareClaudeUsageEnvironment(ctx, connection)
-		if envErr != nil {
-			return envErr
-		}
-		raw, err = fetchClaudeBinUsageWithEnv(ctx, binary, env)
-		if err != nil {
-			return claudeProxiedUsageError(ctx)
-		}
+		raw, err = fetchClaudeBinProxiedUsage(ctx, binary, connection)
 	} else {
 		raw, err = fetchClaudeBinUsage(ctx, binary)
 	}
@@ -141,13 +134,12 @@ func runClaudeBinUsage(parent context.Context, cmdOut io.Writer, jsonOutput bool
 // Claude Code's established environment except for ANTHROPIC_API_KEY, whose
 // presence would force API-key auth instead of the user's subscription login.
 var fetchClaudeBinUsage = func(ctx context.Context, binary string) (json.RawMessage, error) {
-	return fetchClaudeBinUsageWithEnv(ctx, binary, withoutEnvironmentVariable(os.Environ(), "ANTHROPIC_API_KEY"))
+	cmd := newClaudeUsageCommand(ctx, binary)
+	cmd.Env = withoutEnvironmentVariable(os.Environ(), "ANTHROPIC_API_KEY")
+	return runClaudeUsageCommand(ctx, cmd)
 }
 
-// fetchClaudeBinUsageWithEnv runs the native get_usage control request with an
-// explicit environment. proxy-bound usage supplies the shared helper's scoped,
-// process-local environment and never merges vendor credentials here.
-func fetchClaudeBinUsageWithEnv(ctx context.Context, binary string, env []string) (json.RawMessage, error) {
+func newClaudeUsageCommand(ctx context.Context, binary string) *exec.Cmd {
 	request := fmt.Sprintf(`{"type":"control_request","request_id":%q,"request":{"subtype":"get_usage"}}`+"\n", claudeBinUsageRequestID)
 	command := exec.CommandContext(ctx, binary,
 		"-p",
@@ -159,8 +151,10 @@ func fetchClaudeBinUsageWithEnv(ctx context.Context, binary string, env []string
 		"--no-session-persistence",
 	)
 	command.Stdin = strings.NewReader(request)
-	command.Env = env
+	return command
+}
 
+func runClaudeUsageCommand(ctx context.Context, command *exec.Cmd) (json.RawMessage, error) {
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr

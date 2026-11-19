@@ -70,7 +70,10 @@ func TestRoutePresetsProjectProfiles(t *testing.T) {
 		if p.Account == "claude-code" && (!strings.Contains(preset.Note, "Set up Claude") || strings.Contains(preset.Note, "choose it below")) {
 			t.Errorf("Claude must use its simple setup, not account plumbing: %q", preset.Note)
 		}
-		if p.Account != "" && p.Account != "claude-code" && !strings.Contains(preset.Note, "trusted "+p.Account+" account") {
+		if p.Account == "agy-bin" && (!strings.Contains(preset.Note, "Personal subscriptions only") || !strings.Contains(preset.Note, "proxy run agy -- acp --login") || strings.Contains(preset.Note, "choose it below")) {
+			t.Errorf("Antigravity must use its personal native setup, not account plumbing: %q", preset.Note)
+		}
+		if p.Account != "" && p.Account != "claude-code" && p.Account != "agy-bin" && !strings.Contains(preset.Note, "trusted "+p.Account+" account") {
 			t.Errorf("%s note omits its account requirement", p.ID)
 		}
 	}

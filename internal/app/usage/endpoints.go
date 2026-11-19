@@ -13,9 +13,13 @@ func refuseLocalProxyAllowance(provider string) error {
 	if err != nil {
 		return fmt.Errorf("load proxy usage configuration: %w", err)
 	}
-	if cfg != nil && cfg.Proxy.URL != "" {
-		if pc, ok := cfg.Providers[provider]; ok && pc.ProxyBinding != "" {
-			return fmt.Errorf("%s vendor allowance is not available in this proxy mode; open %s/_proxy/ for measured activity (allowance and possible plan overage remain unknown)", provider, cfg.Proxy.URL)
+	if cfg != nil {
+		if pc := cfg.GetProviderConfig(provider); pc != nil && pc.ProxyBinding != "" {
+			dashboard := "the credential proxy dashboard"
+			if cfg.Proxy.URL != "" {
+				dashboard = cfg.Proxy.URL + "/_proxy/"
+			}
+			return fmt.Errorf("%s vendor allowance is not available in this proxy mode; open %s for measured activity (allowance and possible plan overage remain unknown)", provider, dashboard)
 		}
 	}
 	return nil

@@ -160,6 +160,10 @@ func accountRequestAllowed(a accountRecord, req *http.Request, r activeRoute) bo
 	if !strings.HasPrefix(p, base) || !accountPolicyAllows(a, r.Route, req.Method, "/"+strings.TrimPrefix(p, base)) {
 		return false
 	}
+	if provider := nativeProviderForKind(a.Kind); provider != nil {
+		scope, bound := req.Context().Value(claudeForwardScopeKey{}).(claudeForwardScope)
+		return bound && scope.nativeProvider() == provider && a.claudeShared() && provider.allowsNativeAPI(req)
+	}
 	if len(a.operator.Origins) > 0 {
 		return len(r.Allow) > 0
 	}
@@ -177,9 +181,6 @@ func accountRequestAllowed(a accountRecord, req *http.Request, r activeRoute) bo
 		rules = []string{"POST /v1/responses", "POST /v1/chat/completions", "GET /v1/models", "GET /v1/billing"}
 	case "copilot":
 		rules = []string{"POST /responses", "POST /chat/completions", "GET /models"}
-	case "claude-code":
-		_, native := req.Context().Value(claudeForwardScopeKey{}).(claudeForwardScope)
-		return native
 	case "aws-sigv4":
 		return req.Method == "POST" && validAWSModelPath(p)
 	}

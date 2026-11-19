@@ -2,50 +2,84 @@ package clibin
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"os/exec"
 	"strings"
 
+	"github.com/term-llm/term-llm/internal/cliwire"
+	"github.com/term-llm/term-llm/internal/procutil"
 	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 const claudeProxyRootEnv = "TERM_LLM_CLAUDE_PROXY_ROOT"
 
-// prepareClaudeProxyEnvironment replaces the final child environment of every
-// claude-bin inference and model-listing launch with a native proxy-bound one.
-// The shared client bootstrap fetches the process-local CA and proxy origin;
-// this wrapper owns only the provider marker and scoped binding checks. Failures
-// happen before exec, so a bound provider can never fall back to a local
-// Claude login or vendor credential.
-func prepareClaudeProxyEnvironment(ctx context.Context, env []string) ([]string, error) {
-	root := envValue(env, claudeProxyRootEnv)
+func (p *ClaudeBinProvider) prepareClaudeCommand(ctx context.Context, args []string, effort, workingDir string) (*exec.Cmd, io.WriteCloser, *procutil.Command, error) {
+	cmd, err := newCLICommand(ctx, "claude", args, workingDir)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("prepare claude command: %w", err)
+	}
+	cmd.WaitDelay = claudeCommandWaitDelay
+	cmd.Env = p.buildCommandEnv(effort)
+	cleanup, err := prepareClaudeLaunch(ctx, "claude-bin", cmd)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		cleanup()
+		return nil, nil, nil, fmt.Errorf("failed to get stdin pipe: %w", err)
+	}
+	owned, err := procutil.PrepareCommand(cmd)
+	if err != nil {
+		_ = stdin.Close()
+		cleanup()
+		return nil, nil, nil, fmt.Errorf("failed to prepare claude command: %w", err)
+	}
+	owned.SetCloseHook(cleanup)
+	return cmd, stdin, owned, nil
+}
+
+// prepareClaudeLaunch applies the final proxy environment and the credential
+// descriptor to the command used for inference, compaction, or model listing.
+func prepareClaudeLaunch(ctx context.Context, provider string, cmd *exec.Cmd) (func(), error) {
+	cleanup, err := prepareClaudeProxyCommand(ctx, cmd)
+	if err != nil {
+		return nil, err
+	}
+	if cleanup != nil {
+		// Wire audit replaces the CONNECT proxy instead of chaining through it.
+		// A shared placeholder must never be routed away from its scoped proxy.
+		if strings.TrimSpace(envValue(cmd.Env, cliwire.TraceRootEnv)) != "" {
+			cleanup()
+			return nil, errors.New("wire audit cannot be chained with the shared Claude proxy; unset " + cliwire.TraceRootEnv + " (no direct fallback)")
+		}
+		return cleanup, nil
+	}
+	wireAudit, err := startCLIWireServer(provider, cmd.Env)
+	if err != nil {
+		return nil, err
+	}
+	if wireAudit != nil {
+		cmd.Env = forceCLIWireEnvironment(cmd.Env, wireAudit.Environment())
+	}
+	return func() { stopCLIWireAudit(wireAudit) }, nil
+}
+
+func prepareClaudeProxyCommand(ctx context.Context, cmd *exec.Cmd) (func(), error) {
+	root := envValue(cmd.Env, claudeProxyRootEnv)
 	if root == "" {
-		return env, nil
+		return nil, nil
 	}
 	binding, ok := proxyclient.Lookup(root)
 	if !ok || binding.Kind != "claude-code" || !proxyclient.SameRoot(binding.Root, root) ||
 		proxyclient.ValidateClaudeNativeToken(binding.Token) != nil {
-		return nil, fmt.Errorf("claude-bin proxy root has no scoped credential binding")
+		return nil, errors.New("claude-bin proxy root has no scoped credential binding")
 	}
 	stateDir, err := proxyclient.ClaudeNativeStateDir(binding.Root, binding.Token)
 	if err != nil {
 		return nil, err
 	}
-	out, err := proxyclient.PrepareClaudeNativeEnvironment(ctx, binding.Root, binding.Token, stateDir, env)
-	if err != nil {
-		return nil, err
-	}
-	return withoutClaudeProxyMarker(out), nil
-}
-
-// withoutClaudeProxyMarker removes the internal routing marker so neither the
-// native process nor a resumed session can select the proxy environment twice.
-func withoutClaudeProxyMarker(env []string) []string {
-	marker := claudeProxyRootEnv + "="
-	out := make([]string, 0, len(env))
-	for _, entry := range env {
-		if !strings.HasPrefix(entry, marker) {
-			out = append(out, entry)
-		}
-	}
-	return out
+	return proxyclient.PrepareClaudeNativeCommand(ctx, cmd, binding.Root, binding.Token, stateDir)
 }

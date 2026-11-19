@@ -1,6 +1,6 @@
-import type { ProxyBilling, ProxyPreset, ProxyRoute, ProxyState } from '../src/api/proxy-client';
-import { badge, disclosure, el, sameOrigin } from './dom';
-import { presetLabel } from './route-presets';
+import type { ProxyBilling, ProxyRoute, ProxyState } from '../src/api/proxy-client';
+import { badge, el, sameOrigin } from './dom';
+import { isSharedNativeAccount, legacyNativeNotice, nativeProvider } from './native';
 import { authLabel, routeRules, routeUpstreams } from './route-rules';
 
 const billingLabels: Record<ProxyBilling, string> = {
@@ -21,19 +21,12 @@ function displayEndpoint(value: string): string {
   return '';
 }
 
-export function routeSummary(route: ProxyRoute, state: ProxyState, preset?: ProxyPreset) {
+export function routeSummary(route: ProxyRoute, state: ProxyState) {
   const rules = routeRules(route);
   const account = state.accounts?.find((item) => item.name === route.account);
-  const providerName = preset
-    ? presetLabel(preset)
-    : account?.kind === 'claude-code'
-      ? 'Claude Code'
-      : account?.kind === 'chatgpt'
-        ? 'ChatGPT plan'
-        : 'Custom endpoint';
-  const clients = state.callers.filter(
-    (caller) => !caller.revoked && caller.grants.includes(route.name),
-  ).length;
+  const native = nativeProvider(account?.kind);
+  const shared = isSharedNativeAccount(account);
+  const legacy = native && !shared;
   const destinations = rules.length ? rules : [route];
   const keyNames = new Map<string, Set<string>>();
   const literalHeaders = new Set<string>();
@@ -50,49 +43,43 @@ export function routeSummary(route: ProxyRoute, state: ProxyState, preset?: Prox
       } else if (config.value !== undefined) literalHeaders.add(header);
     }
   }
-  const nativeLogin = account?.kind === 'claude-code';
+  const signInLabel = shared && native ? `Shared ${native.shortName}` : 'Provider';
   const providerIssue =
     !account && route.account
       ? 'Provider account unavailable'
-      : account && !nativeLogin && account.state !== 'ready'
-        ? account.state === 'refreshing'
-          ? 'Provider sign-in refreshing'
-          : 'Provider sign-in needed'
-        : account?.auth_mode === 'token_only' &&
-            account.expires_at &&
-            account.expires_at <= Date.now() / 1000
-          ? 'Provider sign-in needed'
-          : missingKey
-            ? 'Provider key needed'
-            : undefined;
-  const status = !route.enabled
-    ? badge('Disabled', 'muted')
-    : providerIssue
-      ? badge(providerIssue, 'caution')
-      : !clients
-        ? badge('Needs client access', 'caution')
-        : nativeLogin
-          ? badge('Native sign-in on each device')
-          : badge('Configured');
-  const title = el('h2', route.name);
-  title.tabIndex = -1;
-  const meta = el('div', badge(providerName), status);
-  meta.className = 'route-badges';
-  if (routeUpstreams(route).some((upstream) => upstream.toLowerCase().startsWith('http:')))
-    meta.append(badge('HTTP · unencrypted', 'caution'));
-  const summary = el('div', title, el('code', route.local_prefix), meta);
-  summary.className = 'route-summary';
+      : legacy
+        ? 'Shared subscription migration needed'
+        : account && account.state !== 'ready'
+          ? `${signInLabel} sign-in ${account.state === 'refreshing' ? 'refreshing' : 'needed'}`
+          : account?.auth_mode === 'token_only' &&
+              account.expires_at &&
+              account.expires_at <= Date.now() / 1000
+            ? 'Provider sign-in needed'
+            : missingKey
+              ? 'Provider key needed'
+              : undefined;
+  const status =
+    providerIssue ??
+    (shared ? `${signInLabel} subscription ready` : account ? 'Connected' : 'Configured');
+  const warnings = [
+    !route.enabled ? 'Disabled' : '',
+    routeUpstreams(route).some((upstream) => upstream.toLowerCase().startsWith('http:'))
+      ? 'HTTP · unencrypted'
+      : '',
+  ].filter(Boolean);
   const provider = el(
     'p',
-    providerIssue
-      ? providerIssue + '.'
-      : nativeLogin
-        ? 'Sign in inside Claude Code after running the device launcher.'
-        : account
-          ? 'Provider account connected.'
-          : keyNames.size
-            ? 'Stored provider key configured.'
-            : 'No stored provider credentials needed.',
+    legacy
+      ? legacyNativeNotice
+      : providerIssue
+        ? providerIssue + '.'
+        : shared
+          ? 'The proxy is signed in. Workers use their own authorized launcher without signing in.'
+          : account
+            ? 'Provider account connected.'
+            : keyNames.size
+              ? 'Stored provider key configured.'
+              : 'No stored provider credentials needed.',
   );
   const settings = el('div', badge(billingLabels[route.billing || 'unspecified']));
   settings.className = 'route-badges';
@@ -130,8 +117,8 @@ export function routeSummary(route: ProxyRoute, state: ProxyState, preset?: Prox
     );
   }
   if (route.account) lines.append(el('div', el('small', `Provider account: ${route.account}`)));
-  const advanced = disclosure(
-    'Advanced',
+  const advanced = el(
+    'div',
     ...(rules.length
       ? [el('p', `${rules.length} subpath ${rules.length === 1 ? 'rule' : 'rules'}`)]
       : []),
@@ -139,5 +126,5 @@ export function routeSummary(route: ProxyRoute, state: ProxyState, preset?: Prox
     settings,
   );
   advanced.className = 'route-row-settings';
-  return { summary, provider, advanced };
+  return { status, providerIssue, warnings, provider, advanced };
 }

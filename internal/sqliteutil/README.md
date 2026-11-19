@@ -76,3 +76,15 @@ Unknown unversioned schemas fail closed with a structural description and recove
   unique external ID for active clients. Existing callers stay browser-managed.
   The v5 binary rejects v6 for read-write use. Stop older writers before
   upgrading and restore a protected v5 backup to downgrade.
+
+- Proxy v7 adds shared Claude operator enrollment. Existing native logins stay
+  caller-scoped and are not promoted to shared logins. The v6 binary rejects
+  the v7 marker; stop it before upgrading and restore a protected v6 backup
+  to downgrade.
+
+- Proxy v8 makes native subscription custody account-owned for Claude Code and
+  Antigravity. It drops the caller-owned vault and retains existing routes,
+  client tokens, grants, and shared Claude logins. Accounts that previously
+  required a sign-in per device need one new operator sign-in after upgrade.
+  Stop older writers before upgrading and restore a protected v7 backup to
+  downgrade.

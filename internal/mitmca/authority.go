@@ -110,26 +110,10 @@ func (a *Authority) Leaf(host string) (tls.Certificate, error) {
 	return cert, nil
 }
 
-// BundleWithSystemRoots returns a PEM bundle containing system roots, the
-// supplied additional certificates, and this authority's public certificate.
-func (a *Authority) BundleWithSystemRoots(additional ...[]byte) ([]byte, error) {
-	candidates := []string{
-		"/etc/ssl/certs/ca-certificates.crt",
-		"/etc/ssl/cert.pem",
-		"/etc/pki/tls/certs/ca-bundle.crt",
-		"/etc/ssl/ca-bundle.pem",
-		"/etc/pki/tls/cacert.pem",
-		"/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
-	}
-	var roots []byte
-	for _, path := range candidates {
-		data, err := os.ReadFile(path)
-		if err == nil && len(data) > 0 {
-			roots = data
-			break
-		}
-	}
-	bundle := append([]byte(nil), roots...)
+// SystemRootsBundle returns a standard system CA bundle when present, plus
+// any provided certificate PEM. It ignores inherited trust overrides.
+func SystemRootsBundle(additional ...[]byte) []byte {
+	bundle := systemRootsPEM()
 	appendPEM := func(data []byte) {
 		if len(data) == 0 {
 			return
@@ -142,8 +126,31 @@ func (a *Authority) BundleWithSystemRoots(additional ...[]byte) ([]byte, error) 
 	for _, data := range additional {
 		appendPEM(data)
 	}
-	appendPEM(a.CertPEM())
-	return bundle, nil
+	return bundle
+}
+
+// BundleWithSystemRoots returns a PEM bundle containing system roots, the
+// supplied additional certificates, and this authority's public certificate.
+func (a *Authority) BundleWithSystemRoots(additional ...[]byte) ([]byte, error) {
+	return SystemRootsBundle(append(additional, a.CertPEM())...), nil
+}
+
+func systemRootsPEM() []byte {
+	candidates := []string{
+		"/etc/ssl/certs/ca-certificates.crt",
+		"/etc/ssl/cert.pem",
+		"/etc/pki/tls/certs/ca-bundle.crt",
+		"/etc/ssl/ca-bundle.pem",
+		"/etc/pki/tls/cacert.pem",
+		"/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+	}
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err == nil && len(data) > 0 {
+			return data
+		}
+	}
+	return nil
 }
 
 func randomSerial() (*big.Int, error) {

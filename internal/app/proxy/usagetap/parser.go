@@ -80,6 +80,7 @@ type Parser struct {
 	eventBytes, lineBytes                  int
 	skip, bad, finished, evidence, partial bool
 	afterCR                                bool
+	geminiWrapped                          bool // Cloud Code wraps each Gemini reply in a response field.
 	usage                                  Usage
 	responses                              map[string]Usage
 	wsStarts                               map[string]struct{}
@@ -128,7 +129,9 @@ func ForResponse(path, contentType string) *Parser {
 	case "application/x-ndjson", "application/ndjson":
 		format = NDJSON
 	}
-	return New(protocol, format)
+	p := New(protocol, format)
+	p.geminiWrapped = path == "/v1internal:streamGenerateContent" || path == "/v1internal:generateContent"
+	return p
 }
 
 // MarkUnknown records a permanent loss of observability (for example compressed

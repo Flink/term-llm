@@ -2,6 +2,7 @@ package clibin
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -97,3 +98,20 @@ func (i *agyProxyToolIsolation) Stop(ctx context.Context) error {
 }
 
 const agyIsolationStopTimeout = 5 * time.Second
+
+func (p *AgyBinProvider) startDirectAgyIsolation() error {
+	wireAudit, err := startCLIWireServer("agy-bin", p.buildCommandEnv())
+	if err != nil {
+		return err
+	}
+	p.wireAudit = wireAudit
+	if wireAudit != nil {
+		p.isolation.SetUpstream(wireAudit.ProxyURL(), wireAudit.CAPath())
+	} else {
+		p.isolation.SetUpstream("", "")
+	}
+	if err := p.isolation.EnsureStarted(p.agyHome); err != nil {
+		return fmt.Errorf("start agy native-tool isolation: %w", err)
+	}
+	return nil
+}

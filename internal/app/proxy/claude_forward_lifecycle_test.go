@@ -203,18 +203,12 @@ func TestClaudeForwardBootstrapSecurityAndEligibility(t *testing.T) {
 			case "disabled":
 				ar.Enabled = false
 			case "wrong kind":
-				a, err := f.service.store.account("claude")
-				if err != nil {
-					t.Fatal(err)
-				}
-				originalKind := a.Kind
-				a.Kind = "chatgpt"
-				if err := f.service.store.replaceAccount(context.Background(), a, a.Generation); err != nil {
+				// Account kind is immutable through the normal store API.
+				if _, err := f.service.store.db.Exec("UPDATE accounts SET kind='chatgpt' WHERE name='claude'"); err != nil {
 					t.Fatal(err)
 				}
 				defer func() {
-					a.Kind = originalKind
-					if err := f.service.store.replaceAccount(context.Background(), a, a.Generation); err != nil {
+					if _, err := f.service.store.db.Exec("UPDATE accounts SET kind='claude-code' WHERE name='claude'"); err != nil {
 						t.Error("restore account kind:", err)
 					}
 				}()

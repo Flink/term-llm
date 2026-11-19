@@ -14,7 +14,7 @@ import (
 	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
-const claudeChildWaitDelay = 2 * time.Second
+const childWaitDelay = 2 * time.Second
 
 // Connection is one exact scoped proxy binding root. It never holds a vendor
 // credential: the token is a proxy client token used only for metadata and
@@ -24,7 +24,7 @@ type Connection struct {
 	Token string
 }
 
-// Options configures one native Claude launch. Injectable fields exist for
+// Options configures one native client launch. Injectable fields exist for
 // focused tests; production callers use the terminal, environment and config.
 type Options struct {
 	URL, Token, Command string
@@ -33,15 +33,28 @@ type Options struct {
 	Out, Err            io.Writer
 	Env                 []string
 	LoadConfig          func() (*config.Config, error)
-	Prepare             func(context.Context, string, string, string, []string) ([]string, error)
+	Prepare             func(context.Context, *exec.Cmd, string, string, string) (func(), error)
 }
 
 // ChildExitError reports that the native client ran and exited non-zero. The
 // command adapter translates it to the process exit code without reprinting the
 // child's own diagnostics.
-type ChildExitError struct{ Code int }
+type ChildExitError struct {
+	Code   int
+	client string
+}
 
-func (e *ChildExitError) Error() string { return fmt.Sprintf("claude exited with status %d", e.Code) }
+func (e *ChildExitError) Error() string {
+	return fmt.Sprintf("%s exited with status %d", e.client, e.Code)
+}
+
+type clientSpec struct {
+	label, executable, provider string
+	validateToken               func(string) error
+	configuredConnection        func(*config.Config) (Connection, bool, error)
+}
+
+var claudeClient = clientSpec{"Claude", "claude", "claude-bin", proxyclient.ValidateClaudeNativeToken, ResolveConfiguredConnection}
 
 // ResolveConfiguredConnection returns the explicitly bound claude-bin route, if
 // any. A configured but invalid binding is an error: it never falls back to a
@@ -73,7 +86,7 @@ func Run(ctx context.Context, opts Options) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	root, token, err := resolve(opts)
+	root, token, err := claudeClient.resolve(opts)
 	if err != nil {
 		return err
 	}
@@ -83,33 +96,37 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	prepare := opts.Prepare
 	if prepare == nil {
-		prepare = proxyclient.PrepareClaudeNativeEnvironment
+		prepare = proxyclient.PrepareClaudeNativeCommand
 	}
-	env := opts.Env
-	if env == nil {
-		env = os.Environ()
-	}
-	prepared, err := prepare(ctx, root, token, stateDir, env)
+	cmd := nativeCommand(ctx, opts, opts.Env, claudeClient.executable, "")
+	cleanup, err := prepare(ctx, cmd, root, token, stateDir)
 	if err != nil {
 		return fmt.Errorf("prepare Claude proxy environment: %w", err)
 	}
-	return launch(ctx, opts, prepared)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	return runNativeCommand(ctx, cmd, claudeClient.executable)
 }
 
-func resolve(opts Options) (string, string, error) {
+func (s clientSpec) resolve(opts Options) (string, string, error) {
 	root, token := strings.TrimSpace(opts.URL), opts.Token
 	if root != "" || token != "" {
 		if root == "" || token == "" {
-			return "", "", errors.New("Claude proxy run requires both --url and --token, or neither")
+			return "", "", fmt.Errorf("%s proxy run requires both --url and --token, or neither", s.label)
+		}
+		resolvedRoot, err := config.ResolveProxySRV(root)
+		if err != nil {
+			return "", "", fmt.Errorf("resolve %s proxy URL: %w", s.label, err)
 		}
 		resolved, err := config.Cred(token).Resolve()
 		if err != nil || resolved == "" {
-			return "", "", errors.New("Claude proxy token could not be resolved; check the credential reference")
+			return "", "", fmt.Errorf("%s proxy token could not be resolved; check the credential reference", s.label)
 		}
-		if err := proxyclient.ValidateClaudeNativeToken(resolved); err != nil {
-			return "", "", errors.New("Claude proxy token must be a scoped proxy client token, not a vendor credential")
+		if err := s.validateToken(resolved); err != nil {
+			return "", "", fmt.Errorf("%s proxy token must be a scoped proxy client token, not a vendor credential", s.label)
 		}
-		return root, resolved, nil
+		return resolvedRoot, resolved, nil
 	}
 	load := opts.LoadConfig
 	if load == nil {
@@ -117,22 +134,26 @@ func resolve(opts Options) (string, string, error) {
 	}
 	cfg, err := load()
 	if err != nil {
-		return "", "", fmt.Errorf("load config for Claude proxy run: %w", err)
+		return "", "", fmt.Errorf("load config for %s proxy run: %w", s.label, err)
 	}
-	connection, configured, err := ResolveConfiguredConnection(cfg)
+	connection, configured, err := s.configuredConnection(cfg)
 	if err != nil {
 		return "", "", err
 	}
 	if !configured {
-		return "", "", errors.New("Claude proxy run requires --url and --token or a configured claude-bin proxy binding; direct native login is not used")
+		return "", "", fmt.Errorf("%s proxy run requires --url and --token or a configured %s proxy binding; direct native login is not used", s.label, s.provider)
 	}
 	return connection.Root, connection.Token, nil
 }
 
-func launch(ctx context.Context, opts Options, env []string) error {
+func launch(ctx context.Context, opts Options, env []string, client, dir string) error {
+	return runNativeCommand(ctx, nativeCommand(ctx, opts, env, client, dir), client)
+}
+
+func nativeCommand(ctx context.Context, opts Options, env []string, client, dir string) *exec.Cmd {
 	command := strings.TrimSpace(opts.Command)
 	if command == "" {
-		command = "claude"
+		command = client
 	}
 	in, out, errOut := opts.In, opts.Out, opts.Err
 	if in == nil {
@@ -146,8 +167,12 @@ func launch(ctx context.Context, opts Options, env []string) error {
 	}
 	cmd := exec.CommandContext(ctx, command, opts.Args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errOut
-	cmd.Env = env
-	cmd.WaitDelay = claudeChildWaitDelay
+	cmd.Env, cmd.Dir = env, dir
+	cmd.WaitDelay = childWaitDelay
+	return cmd
+}
+
+func runNativeCommand(ctx context.Context, cmd *exec.Cmd, client string) error {
 	err := cmd.Run()
 	if err == nil {
 		return nil
@@ -161,10 +186,10 @@ func launch(ctx context.Context, opts Options, env []string) error {
 		if code < 0 {
 			code = 130
 		}
-		return &ChildExitError{Code: code}
+		return &ChildExitError{Code: code, client: client}
 	}
 	if ctx.Err() != nil {
-		return &ChildExitError{Code: 130}
+		return &ChildExitError{Code: 130, client: client}
 	}
-	return fmt.Errorf("run Claude Code: %w", err)
+	return fmt.Errorf("run %s: %w", client, err)
 }

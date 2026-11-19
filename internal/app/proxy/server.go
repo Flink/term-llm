@@ -61,6 +61,7 @@ type Service struct {
 	accountRejected   sync.Map
 	accountRedactions sync.Map
 	claudeNative      *claudeForwarder
+	agyNative         *claudeForwarder
 	chatgptSetup      chatGPTSetups
 	socketWG          sync.WaitGroup
 	closing           bool
@@ -224,6 +225,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/_proxy/client/v1/whoami" {
 		s.whoami(w, r)
+		return
+	}
+	if r.URL.Path == "/_proxy/client/v1/providers" {
+		s.clientProviders(w, r)
 		return
 	}
 	if r.URL.Path == "/healthz" {

@@ -102,22 +102,22 @@ func TestBrowserAdminKeyCascadeIsSelectiveAndAtomic(t *testing.T) {
 	}
 	proxyResponse[map[string]bool](t, manageRequest(s, "DELETE", "clients/"+old.ID, key.Token, nil), 200)
 	for _, c := range []Caller{a, b, keep, manual} {
-		seedManageVault(t, s, c.ID, "fixture")
+		seedManageEnrollment(t, s, c.ID, "fixture")
 	}
 	revokedSocket := fakeManageSocket(t, s, a.ID)
 	keptSocket := fakeManageSocket(t, s, keep.ID)
-	execProxySQL(t, s.store, `CREATE TRIGGER fail_cascade BEFORE DELETE ON claude_vault WHEN OLD.caller = '`+b.ID+`' BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;`)
+	execProxySQL(t, s.store, `CREATE TRIGGER fail_cascade BEFORE DELETE ON claude_shared_enrollment WHEN OLD.caller = '`+b.ID+`' BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;`)
 	revoke := map[string]any{"id": key.Key.ID, "revoke_clients": true}
 	proxyResponse[map[string]string](t, adminRequest(s, "DELETE", "admin-keys", revoke, cookie, csrf), 503)
 	proxyResponse[map[string]any](t, manageRequest(s, "GET", "clients", key.Token, nil), 200)
-	if proxyCount(t, s.store, "SELECT count(*) FROM callers WHERE id IN (?,?) AND revoked=0", a.ID, b.ID) != 2 || proxyCount(t, s.store, "SELECT count(*) FROM claude_vault") != 4 || revokedSocket.Err() != nil {
+	if proxyCount(t, s.store, "SELECT count(*) FROM callers WHERE id IN (?,?) AND revoked=0", a.ID, b.ID) != 2 || proxyCount(t, s.store, "SELECT count(*) FROM claude_shared_enrollment") != 4 || revokedSocket.Err() != nil {
 		t.Fatal("failed cascade changed access")
 	}
 	execProxySQL(t, s.store, "DROP TRIGGER fail_cascade")
 	result := proxyResponse[struct {
 		RevokedClients int `json:"revoked_clients"`
 	}](t, adminRequest(s, "DELETE", "admin-keys", revoke, cookie, csrf), 200)
-	if result.RevokedClients != 2 || proxyCount(t, s.store, "SELECT count(*) FROM callers WHERE revoked=0") != 2 || proxyCount(t, s.store, "SELECT count(*) FROM claude_vault") != 2 || !errors.Is(context.Cause(revokedSocket), errSocketRevoked) || keptSocket.Err() != nil {
+	if result.RevokedClients != 2 || proxyCount(t, s.store, "SELECT count(*) FROM callers WHERE revoked=0") != 2 || proxyCount(t, s.store, "SELECT count(*) FROM claude_shared_enrollment") != 2 || !errors.Is(context.Cause(revokedSocket), errSocketRevoked) || keptSocket.Err() != nil {
 		t.Fatalf("cascade overreached or failed: %+v", result)
 	}
 }

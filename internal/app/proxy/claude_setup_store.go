@@ -10,7 +10,7 @@ import (
 
 // All inputs are prepared under s.mu before entering accountWrite: the store
 // has one SQLite connection, so no db-level helper may run inside this callback.
-func (s *store) createClaudeSetup(ctx context.Context, next *snapshot, account *accountRecord, route, id, token string) error {
+func (s *store) createNativeSetup(ctx context.Context, next *snapshot, account *accountRecord, route Route, id, token, callerName string, operator bool, grants []string) error {
 	return s.accountWrite(ctx, func(tx *sql.Tx) error {
 		if account != nil {
 			if err := insertAccount(ctx, tx, *account); err != nil {
@@ -23,10 +23,19 @@ func (s *store) createClaudeSetup(ctx context.Context, next *snapshot, account *
 		if err := makeCallerRoom(ctx, tx, inputError("Client limit reached (1024)")); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO callers(id,name,hash,created) VALUES(?,?,?,?)", id, "Claude Code", hashToken(token), time.Now().UnixMilli()); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO callers(id,name,hash,created) VALUES(?,?,?,?)", id, callerName, hashToken(token), time.Now().UnixMilli()); err != nil {
 			return err
 		}
-		return writeGrants(tx, id, []string{route}, next)
+		if err := writeGrants(tx, id, grants, next); err != nil {
+			return err
+		}
+		if operator {
+			result, err := tx.ExecContext(ctx, `INSERT INTO claude_shared_enrollment(account,caller,route,authority,expires)
+				SELECT ?,caller,route,authority,? FROM grants WHERE caller=? AND route=?
+				ON CONFLICT(account) DO UPDATE SET caller=excluded.caller,route=excluded.route,authority=excluded.authority,expires=excluded.expires,reserved=0`, route.Account, time.Now().Add(claudeSharedEnrollmentTTL).Unix(), id, route.Name)
+			return claudeSharedRequireChange(result, err)
+		}
+		return nil
 	})
 }
 
@@ -55,29 +64,27 @@ func saveSetupConfig(ctx context.Context, tx *sql.Tx, next *snapshot) error {
 	return nil
 }
 
-func (s *store) clearClaudeSetup(ctx context.Context, next *snapshot, routes []string) ([]string, error) {
+// Clearing a provider removes only its account-owned logins and enrollment grants.
+func (s *store) clearNativeSetup(ctx context.Context, next *snapshot, routes []string, p *nativeProxyProvider) ([]string, error) {
 	var revoked []string
 	err := s.accountWrite(ctx, func(tx *sql.Tx) error {
-		// Include orphaned native reservations, but never infer ownership from a
-		// client name. An unrelated empty client must not be revoked.
+		const enrollments = " FROM claude_shared_enrollment WHERE account IN (SELECT name FROM accounts WHERE kind=?)"
 		affected := map[string]bool{}
-		if err := claudeSetupAffectedCallers(ctx, tx, "SELECT DISTINCT caller FROM claude_vault", nil, affected); err != nil {
+		if err := nativeSetupAffectedCallers(ctx, tx, "SELECT caller"+enrollments, []any{p.kind}, affected); err != nil {
 			return err
 		}
 		for _, route := range routes {
-			if err := claudeSetupAffectedCallers(ctx, tx, "SELECT caller FROM grants WHERE route=?", []any{route}, affected); err != nil {
+			if err := nativeSetupAffectedCallers(ctx, tx, "SELECT caller FROM grants WHERE route=?", []any{route}, affected); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, "DELETE FROM grants WHERE route=?", route); err != nil {
 				return err
 			}
 		}
-		// Delete every row, including spent receipts and in-flight code
-		// reservations. Re-creating identical names/grants cannot revive them.
-		if _, err := tx.ExecContext(ctx, "DELETE FROM claude_vault"); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE"+enrollments, p.kind); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM accounts WHERE kind='claude-code'"); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM accounts WHERE kind=?", p.kind); err != nil {
 			return err
 		}
 		if err := saveSetupConfig(ctx, tx, next); err != nil {
@@ -103,7 +110,7 @@ func (s *store) clearClaudeSetup(ctx context.Context, next *snapshot, routes []s
 	return revoked, err
 }
 
-func claudeSetupAffectedCallers(ctx context.Context, tx *sql.Tx, query string, args []any, affected map[string]bool) error {
+func nativeSetupAffectedCallers(ctx context.Context, tx *sql.Tx, query string, args []any, affected map[string]bool) error {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err

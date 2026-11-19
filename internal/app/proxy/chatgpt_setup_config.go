@@ -183,11 +183,15 @@ func (s *Service) provisionChatGPTRoute(ctx context.Context, a accountRecord) (s
 	}
 	c.Money = money
 	route := chatGPTPresetRoute(preset, a.Name, a.Name)
+	route.Provider = unusedProviderSlug(c.Routes, route.Name)
 	c.Routes = append(append([]Route(nil), c.Routes...), route)
 	companions := chatGPTCompanionRoutes(preset, a.Name, c.Routes)
+	for i := range companions {
+		companions[i].Provider = route.Provider
+	}
 	c.Routes = append(c.Routes, companions...)
 	added := 1 + len(companions)
-	next, err := compile(c, s.snap.revision+1, s.snap.secrets)
+	next, err := s.snap.recompile(c, s.snap.secrets)
 	if err != nil {
 		return "", &chatGPTSetupError{503, "Could not prepare the standard ChatGPT route"}
 	}

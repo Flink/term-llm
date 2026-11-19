@@ -289,12 +289,11 @@ func TestCLIProxyMarkerWithoutBindingFailsBeforeExec(t *testing.T) {
 	if _, _, err := startCLIWireAudit("grok-bin", []string{grokProxyRootEnv + "=" + root, "GROK_HOME=/owned"}); err == nil {
 		t.Error("grok-bin accepted a binding of another credential kind")
 	}
-	// Antigravity fails closed even with a registered root.
+	// The generic launcher must not bypass the bound worker's rewrite/bootstrap path.
 	agyRoot := "https://agy-proxy-env.example.test/agy-bin"
-	registerCLIProxyBindings(t, "", agyRoot)
-	agy := NewAgyBinProvider("gemini", map[string]string{agyProxyRootEnv: agyRoot})
-	if err := rejectAgyProxyEnvironment(agy.buildCommandEnv()); err == nil || !strings.Contains(err.Error(), agyBinMinimumVersion) {
-		t.Errorf("agy-bin proxy launch not refused: %v", err)
+	registerCLIProxyBindings(t, "agy-bin", agyRoot)
+	if _, _, err := startCLIWireAudit("agy-bin", []string{agyProxyRootEnv + "=" + agyRoot}); err == nil {
+		t.Error("generic launch bypassed the Antigravity worker proxy")
 	}
 }
 

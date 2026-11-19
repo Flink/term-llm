@@ -56,20 +56,10 @@ func TestClaudeSetupClearAllPreservesOtherAccessAndHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := s.store.account(native.Account)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scope := claudeForwardScope{caller: mixed.ID, route: native.Name, account: native.Account, authority: native.authority, identity: a.identityVersion}
-	if _, err := s.store.claudeVaultBeginCode(context.Background(), [32]byte{}, scope); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.store.db.Exec(`INSERT INTO claude_vault SELECT 'orphan',?, 'gone-route',authority,'gone-account',identity,generation,'orphan-access','orphan-refresh','spent',expires,updated,data FROM claude_vault LIMIT 1`, orphan.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.store.db.Exec("INSERT INTO grants(caller,route,authority) VALUES(?, 'gone-route', 'stale-native-authority')", orphan.ID); err != nil {
-		t.Fatal(err)
-	}
+	// A stale enrollment on an existing Claude account still identifies the
+	// affected caller, even if its recorded route no longer exists.
+	execProxySQL(t, s.store, "INSERT INTO claude_shared_enrollment(account,caller,route,authority,expires,reserved) VALUES(?,?,'gone-route','stale-native-authority',0,1)", "unused-slot", orphan.ID)
+	execProxySQL(t, s.store, "INSERT INTO grants(caller,route,authority) VALUES(?, 'gone-route', 'stale-native-authority')", orphan.ID)
 	// These are real synthetic ledger/debug records, not files belonging to a
 	// user's config or login. Clearing setup must not prune any of them.
 	rec, req := debugRequest("px_claude_clear")
@@ -121,8 +111,8 @@ func TestClaudeSetupClearAllPreservesOtherAccessAndHistory(t *testing.T) {
 			t.Fatalf("Claude slots retained or other slot removed: %+v %v", infos, err)
 		}
 		var rows int
-		if err := s.store.db.QueryRow("SELECT count(*) FROM claude_vault").Scan(&rows); err != nil || rows != 0 {
-			t.Fatalf("orphan vault retained: %d %v", rows, err)
+		if err := s.store.db.QueryRow("SELECT count(*) FROM claude_shared_enrollment").Scan(&rows); err != nil || rows != 0 {
+			t.Fatalf("enrollments retained: %d %v", rows, err)
 		}
 		clients, err := s.store.callers()
 		if err != nil || len(clients) != 7 {
@@ -181,32 +171,35 @@ func TestClaudeSetupClearFencesLateOAuthAfterIdenticalRecreation(t *testing.T) {
 				t.Fatal(err)
 			}
 			scope := claudeForwardScope{caller: out.CallerID, route: native.Name, account: native.Account, authority: native.authority, identity: a.identityVersion}
-			key := [32]byte{42}
-			previous, err := s.store.claudeVaultBeginCode(context.Background(), key, scope)
-			if err != nil {
+			ctx := context.Background()
+			before := a
+			if refresh {
+				markNativeSetupAccountReady(t, s, a.Name, [32]byte{42})
+				a, err = s.store.account(a.Name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before = a
+				before.State = "refreshing"
+				if err := s.store.changeClaudeSharedAccount(ctx, a, before); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := s.store.reserveClaudeSharedEnrollment(ctx, scope); err != nil {
 				t.Fatal(err)
 			}
-			vendor := claudeVaultReply{AccessToken: "synthetic-access", RefreshToken: "synthetic-refresh", ExpiresIn: 3600, TokenType: "Bearer", Scope: "user:profile user:inference"}
-			if refresh {
-				reply, err := s.store.claudeVaultSave(context.Background(), key, scope, vendor, &previous)
-				if err != nil {
-					t.Fatal(err)
-				}
-				previous, err = s.store.claudeVaultLookup(context.Background(), key, scope, reply.RefreshToken, true)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := s.store.claudeVaultFence(context.Background(), previous.id, scope); err != nil {
-					t.Fatal(err)
-				}
-			}
+
 			clear := adminRequest(s, "DELETE", "claude/setup", map[string]any{"revision": s.snap.revision}, cookie, csrf)
 			if clear.Code != 200 {
 				t.Fatal(clear.Code, clear.Body.String())
 			}
 			// Recreate the identical identity/grant. The mixed caller was correctly
 			// retained; reservation deletion must independently fence completion.
-			if err := s.store.replaceAccount(context.Background(), a, 0); err != nil {
+			recreated := newNativeAccount(a.Name, a.Kind)
+			recreated.Generation, recreated.identityVersion = before.Generation, before.identityVersion
+			if refresh {
+				recreated.State = "refreshing"
+			}
+			if err := s.store.replaceAccount(ctx, recreated, 0); err != nil {
 				t.Fatal(err)
 			}
 			configure(t, s, Config{Routes: []Route{native.Route, other}}, nil)
@@ -216,11 +209,24 @@ func TestClaudeSetupClearFencesLateOAuthAfterIdenticalRecreation(t *testing.T) {
 			if err := claudeVaultBindingValid(context.Background(), s.store.db, scope); err != nil {
 				t.Fatal("fixture must restore the original binding", err)
 			}
-			if _, err := s.store.claudeVaultSave(context.Background(), key, scope, vendor, &previous); !errors.Is(err, errClaudeVaultLogin) {
+			next := before
+			next.Generation++
+			if err := sealNativeAccount([32]byte{42}, &next, claudeVaultReply{AccessToken: "synthetic-access", RefreshToken: "synthetic-refresh", ExpiresIn: 3600}, ""); err != nil {
+				t.Fatal(err)
+			}
+			if refresh {
+				err = s.store.changeClaudeSharedAccount(ctx, before, next)
+			} else {
+				err = s.finishClaudeSharedEnrollment(ctx, scope, before, next)
+			}
+			if !errors.Is(err, errClaudeVaultLogin) {
 				t.Fatalf("late OAuth completion recreated custody: %v", err)
 			}
+			if got, err := s.store.account(a.Name); err != nil || len(got.claudeSharedCipher) != 0 || got.claudeSharedID != recreated.claudeSharedID {
+				t.Fatal("late OAuth completion modified the new account", err)
+			}
 			var rows int
-			if err := s.store.db.QueryRow("SELECT count(*) FROM claude_vault").Scan(&rows); err != nil || rows != 0 {
+			if err := s.store.db.QueryRow("SELECT count(*) FROM claude_shared_enrollment").Scan(&rows); err != nil || rows != 0 {
 				t.Fatalf("late custody rows=%d err=%v", rows, err)
 			}
 		})

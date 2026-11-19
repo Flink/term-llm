@@ -58,6 +58,7 @@ var presetNotes = map[string]string{
 	"grok":              "Only the responses, chat completions, models and billing endpoints are forwarded.",
 	"copilot":           "Only the responses, chat completions and models endpoints are forwarded.",
 	"claude-code":       "Use Set up Claude, then sign in normally with term-llm proxy run claude.",
+	"agy-bin":           "Personal subscriptions only. Use Antigravity setup, then sign in with term-llm proxy run agy -- acp --login on Linux. The device receives a scoped proxy token, not Google credentials.",
 	"bedrock":           "Enter https://bedrock-runtime.<region>.amazonaws.com for the region stored with the account. The proxy signs each request; only model invoke and converse calls are forwarded.",
 	"opencode-go":       "One key, one grant, three protocols: Chat Completions and Responses at /, Messages at /messages/, and Gemini at /gemini/. The client still sends its own x-opencode-client and x-opencode-session headers.",
 	"elevenlabs":        "The client appends /v1 speech or music paths. Put the client token in its API key field.",
@@ -90,7 +91,7 @@ func presetsFromProfiles(profiles []proxyprofile.Profile) []routePreset {
 		if p.Provider != "" {
 			preset.Usage = "auto"
 		}
-		if p.Account != "" && p.Account != "claude-code" {
+		if p.Account != "" && nativeProviderForKind(p.Account) == nil {
 			preset.Note = joinNote("Uses a trusted "+p.Account+" account held by the proxy; choose it below. No API key is stored on the route.", preset.Note)
 		}
 		if p.WebSocket {

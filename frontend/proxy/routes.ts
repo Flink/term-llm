@@ -1,16 +1,37 @@
-import type { ProxyAccount, ProxyClient, ProxyRoute, ProxyState } from '../src/api/proxy-client';
+import {
+  ProxyAPIError,
+  type ProxyAccount,
+  type ProxyClient,
+  type ProxyPreset,
+  type ProxyRoute,
+  type ProxyState,
+} from '../src/api/proxy-client';
 import { accountControls, connectAccount, unusedAccountsView } from './accounts';
-import { isClaudeRoute } from './claude';
+import {
+  nativeProvider,
+  nativeProviders,
+  routeNativeProvider,
+  type NativeProvider,
+} from './native';
 import { actions, button, card, disclosure, el, type UIContext } from './dom';
-import { clearClaudeSetup, providerOnboarding, providerRouteAction } from './provider-onboarding';
-import { routeAccess } from './route-access';
+import {
+  approvalSummary,
+  providerGroups,
+  providerRouteLine,
+  writableProviderID,
+  type ProviderGroup,
+} from './provider-groups';
+import { clearNativeSetup, providerOnboarding, providerRouteAction } from './provider-onboarding';
+import { providerAccess } from './provider-access';
+import { providerConfigSection } from './provider-config';
 import { routeForm } from './route-form';
 import { matchRoutePreset, presetLabel, routePresetPicker } from './route-presets';
 import { routeSummary } from './route-summary';
-import { routeNeedsSecret } from './route-rules';
+import { routeNeedsSecret, routeRules } from './route-rules';
 
 const PAGE_SIZE = 10;
-const routePage = new WeakMap<UIContext, number>();
+const providerPage = new WeakMap<UIContext, number>();
+const openManagers = new WeakMap<UIContext, Set<string>>();
 
 function pageNumbers(current: number, total: number): (number | 'ellipsis')[] {
   if (total <= 7) return Array.from({ length: total }, (_, i) => i);
@@ -24,14 +45,43 @@ function pageNumbers(current: number, total: number): (number | 'ellipsis')[] {
   return pages;
 }
 
+function routeUsesSecret(route: ProxyRoute): boolean {
+  const rules = routeRules(route);
+  const destinations = rules.length ? rules : [route];
+  return destinations.some((dest) =>
+    Object.values(dest.set_headers).some((header) => header.secret !== undefined),
+  );
+}
+
+function deleteProviderConsequence(group: ProviderGroup, state: ProxyState): string {
+  const routeNames = new Set(group.routes.map((route) => route.name));
+  const affected = state.callers
+    .filter((caller) => !caller.revoked && caller.grants.some((grant) => routeNames.has(grant)))
+    .map((caller) => caller.name)
+    .join(', ');
+  const routesPart =
+    group.routes.length === 1
+      ? `Removes route ${group.routes[0].name}`
+      : `Removes ${group.routes.length} routes (${group.routes.map((route) => route.name).join(', ')})`;
+  const notes: string[] = [];
+  if (group.routes.some((route) => route.account)) {
+    notes.push('Connected accounts stay under Unused accounts until removed.');
+  }
+  if (group.routes.some(routeUsesSecret)) {
+    notes.push('Stored API keys stay in Secrets.');
+  }
+  const extra = notes.length ? ` ${notes.join(' ')}` : '';
+  return `Delete provider ${group.label}? ${routesPart} and permanently revokes client access${affected ? ` for ${affected}` : ''}.${extra} Re-adding this provider will not restore grants. Only new requests are blocked; dispatched requests may continue.`;
+}
+
 export function routesView(state: ProxyState, api: ProxyClient, context: UIContext): HTMLElement {
   const readonly = state.mode === 'file';
   const view = el('div');
-  const intro = card(
-    'Routes',
-    el('p', 'Connect a provider, then give clients access to its route.'),
-  );
-  intro.classList.add('page-intro');
+  const groups = providerGroups(state);
+  const open = openManagers.get(context) ?? new Set<string>();
+  openManagers.set(context, open);
+  const intro = card('Providers');
+  intro.classList.add('page-intro', 'providers-intro');
   view.append(intro);
 
   // The app guards navigation. Within Routes, an operation must not replace a
@@ -82,7 +132,6 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
   let editor: { row: HTMLElement; form: HTMLElement } | undefined;
   function closeEditor() {
     editor?.form.remove();
-    editor?.row.classList.remove('expanded');
     editor = undefined;
   }
   if (readonly) {
@@ -93,9 +142,7 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
       ),
     );
   } else {
-    const toolbar = el('div');
-    toolbar.className = 'route-cmd-bar';
-    const addButton = button('Add route', () => {
+    const addButton = button('Add provider', () => {
       if (blocked()) return;
       if (!composer.childElementCount) {
         closeEditor();
@@ -109,7 +156,7 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
               const guided = preset && providerOnboarding(preset, state, api, formContext, close);
               const panel =
                 guided && preset ? card(`Set up ${presetLabel(preset)}`, guided) : manualForm();
-              if (guided && preset?.account_kind === 'claude-code')
+              if (guided && nativeProvider(preset?.account_kind))
                 panel.append(actions(button('Cancel', close)));
               // Guided sign-in is the default. Existing operators can still
               // attach a manually imported ChatGPT account to a new route.
@@ -147,62 +194,96 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
     }
     addButton.className = 'primary';
     addButton.setAttribute('aria-expanded', 'false');
-    toolbar.append(addButton);
-    view.append(toolbar, composer);
+    intro.append(addButton);
+    view.append(composer);
   }
 
   let currentPage = Math.min(
-    routePage.get(context) ?? 0,
-    Math.max(0, Math.ceil(state.routes.length / PAGE_SIZE) - 1),
+    providerPage.get(context) ?? 0,
+    Math.max(0, Math.ceil(groups.length / PAGE_SIZE) - 1),
   );
   const routeList = el('div');
   routeList.className = 'route-list';
   const pagination = el('nav');
   pagination.className = 'route-pagination';
-  pagination.setAttribute('aria-label', 'Route pagination');
+  pagination.setAttribute('aria-label', 'Provider pagination');
 
   const accountDeps = () => ({ state, api, context: componentContext() });
-  // Credentials are maintained beside the routes that use them. Claude
-  // sign-ins live on each device and are managed by Claude Code settings.
+  // Credentials are maintained beside the routes that use them. Native
+  // sign-ins are held by the proxy and managed in the provider section.
   function routeAccountTools(route: ProxyRoute, kind?: ProxyAccount['kind']) {
-    if (!route.account || state.accounts === undefined || isClaudeRoute(route, state)) return;
+    if (
+      !route.account ||
+      state.accounts === undefined ||
+      routeNativeProvider(route, state) ||
+      nativeProvider(kind)
+    )
+      return;
     const account = state.accounts.find((a) => a.name === route.account);
     if (!account) return connectAccount(accountDeps(), route.account, kind);
-    if (account.kind === 'claude-code') return;
     const usedBy = state.routes.filter((r) => r.account === account.name).map((r) => r.name);
     return accountControls(accountDeps(), account, usedBy, `route:${route.name}`);
   }
-  function claudeSettings() {
-    const settings = disclosure(
-      'Claude Code settings',
-      el('p', 'Removes every Claude route, device connection and saved proxy sign-in.'),
-      clearClaudeSetup(state, api, componentContext()),
-    );
-    settings.className = 'claude-settings';
-    return settings;
+
+  function deleteProviderButton(group: ProviderGroup): HTMLButtonElement {
+    const native = group.routes.map((route) => routeNativeProvider(route, state)).find(Boolean);
+    const clearsNative =
+      !!native &&
+      group.routes.every((route) => routeNativeProvider(route, state) === native) &&
+      state.routes.every(
+        (route) => routeNativeProvider(route, state) !== native || group.routes.includes(route),
+      );
+    const removeContext = componentContext();
+    const remove = button('Delete provider', () => {
+      if (blocked()) return;
+      const consequence = clearsNative
+        ? `Delete provider ${group.label}? Removes all ${native.shortName} proxy routes, device access, and saved proxy sign-ins. Other providers and your normal ${native.shortName} setup are unchanged.`
+        : deleteProviderConsequence(group, state);
+      if (!window.confirm(consequence)) return;
+      void removeContext.run(async () => {
+        try {
+          if (clearsNative) {
+            await api.clearNative(native.launcher, state.revision);
+          } else {
+            const removing = new Set(group.routes);
+            await api.config(
+              state.revision,
+              state.routes.filter((route) => !removing.has(route)),
+            );
+          }
+        } catch (error) {
+          if (error instanceof ProxyAPIError && error.status === 409) {
+            try {
+              await context.refresh();
+            } catch {
+              // Preserve the conflict message.
+            }
+          }
+          throw error;
+        }
+        open.delete(group.id);
+        await context.refresh();
+        context.announce(
+          clearsNative
+            ? `Deleted provider ${group.label}. ${native.shortName} proxy setup cleared; other providers are unchanged.`
+            : `Deleted provider ${group.label}. Its client grants were removed; dispatched requests may continue.`,
+        );
+      }, remove);
+    });
+    remove.className = 'danger';
+    remove.setAttribute('aria-label', `Delete provider ${group.label}`);
+    return remove;
   }
 
-  function renderRow(route: ProxyRoute): HTMLElement {
-    const preset = matchRoutePreset(route, state);
-    const display = routeSummary(route, state, preset);
-    const head = el('div', display.summary);
-    head.className = 'route-row-head';
-    const provider = el('div', el('h3', 'Provider setup'), display.provider);
-    const providerAction = providerRouteAction(route, state, api, componentContext());
-    if (providerAction) provider.append(providerAction);
-    const accountTools = routeAccountTools(route, preset?.account_kind);
-    if (accountTools) provider.append(accountTools);
-    if (!readonly && isClaudeRoute(route, state)) provider.append(claudeSettings());
-    const sides = el('div', provider, routeAccess(route, state, api, componentContext()));
-    sides.className = 'route-connections';
-    const row = el('article', head, sides, display.advanced);
-    row.dataset.focus = `route:${route.name}`;
-    row.className = `route-card route-accordion-item${route.enabled ? '' : ' disabled-route'}`;
-    if (readonly) return row;
-
-    const edit = (showAccount = false) => {
+  function routeAdminActions(
+    route: ProxyRoute,
+    panel: HTMLElement,
+    preset: ProxyPreset | undefined,
+  ) {
+    const rowContext = componentContext();
+    const edit = (focusAccount = false) => {
       if (blocked()) return;
-      if (editor?.row === row) {
+      if (editor?.row === panel) {
         focusWithin(editor.form);
         return;
       }
@@ -210,31 +291,26 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
       const form = routeForm(
         state,
         api,
-        componentContext(),
+        rowContext,
         () => {
           if (blocked()) return;
           closeEditor();
-          focusWithin(row);
+          editButton.focus();
         },
         route,
         preset,
       );
-      row.classList.add('expanded');
-      row.append(form);
-      editor = { row, form };
-      if (showAccount) {
-        const technical = form.querySelector<HTMLDetailsElement>('details');
-        if (technical) technical.open = true;
+      panel.append(form);
+      editor = { row: panel, form };
+      if (focusAccount) {
+        const accountSelect = form.querySelector<HTMLSelectElement>('select');
+        if (accountSelect) accountSelect.focus();
+        else form.querySelector('input')?.focus();
+      } else {
+        form.querySelector('input')?.focus();
       }
-      form.querySelector('input')?.focus();
     };
     const editButton = button('Edit', () => edit());
-    if (!providerAction && (route.account || routeNeedsSecret(route))) {
-      const configure = button(route.account ? 'Change linked account' : 'Configure API key', () =>
-        edit(!!route.account),
-      );
-      provider.append(actions(configure));
-    }
     editButton.setAttribute('aria-label', `Edit ${route.name}`);
     const toggle = button(route.enabled ? 'Disable' : 'Enable', () => {
       if (blocked()) return;
@@ -256,23 +332,159 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
         );
       }, toggle);
     });
-    const rowContext = componentContext();
     toggle.setAttribute('aria-label', `${route.enabled ? 'Disable' : 'Enable'} ${route.name}`);
-    head.append(actions(editButton, toggle));
+    const controls = actions(editButton, toggle);
+    if ((route.account && !routeNativeProvider(route, state)) || routeNeedsSecret(route)) {
+      controls.append(
+        button(route.account ? 'Change linked account' : 'Configure API key', () =>
+          edit(!!route.account),
+        ),
+      );
+    }
+    return controls;
+  }
+
+  function renderProvider(group: ReturnType<typeof providerGroups>[number]): HTMLElement {
+    const routes = group.routes.map((route) => ({
+      route,
+      preset: matchRoutePreset(route, state),
+      display: routeSummary(route, state),
+    }));
+    const heading = el('h2', group.label);
+    heading.tabIndex = -1;
+    const status = routes[0].display.status;
+    const uniform = routes.every((item) => item.display.status === status);
+    const issue = routes.some((item) => item.display.providerIssue);
+    const statusText = el('span', uniform ? status : issue ? 'Needs attention' : 'Configured');
+    statusText.className = `provider-status${issue ? ' provider-route-warning' : ''}`;
+    const title = el('div', heading, statusText);
+    title.className = 'provider-title';
+    const list = el('ul');
+    list.className = 'provider-routes';
+    list.setAttribute('aria-label', `${group.label} routes`);
+    const manage = disclosure('Manage');
+    const details = el('div');
+    details.className = 'provider-management-content';
+    manage.append(details);
+    manage.className = 'provider-manage';
+    manage.open = open.has(group.id);
+    manage.addEventListener('toggle', () => {
+      if (manage.open) open.add(group.id);
+      else open.delete(group.id);
+    });
+
+    details.append(providerAccess(group, state, api, componentContext()));
+
+    const seenAccounts = new Set<string>();
+    const seenNative = new Set<NativeProvider>();
+    for (const { route, preset, display } of routes) {
+      const native = routeNativeProvider(route, state);
+      const warnings = [...display.warnings];
+      if (!uniform && display.providerIssue) warnings.push(display.providerIssue);
+      list.append(providerRouteLine(route, preset, warnings.join(' · '), group.label));
+      if (route.account && !seenAccounts.has(route.account) && !native) {
+        seenAccounts.add(route.account);
+        const account = routeAccountTools(route, preset?.account_kind);
+        const signIn = providerRouteAction(route, state, api, componentContext());
+        if (signIn || account) {
+          const settings = el('div', el('h3', 'Account'));
+          settings.className = 'provider-section provider-account-section';
+          if (signIn) settings.append(signIn);
+          if (account) settings.append(account);
+          // Account controls belong to the provider, not to each child route.
+          details.append(settings);
+        }
+      }
+      if (!readonly && native && !seenNative.has(native)) {
+        const setup = providerRouteAction(route, state, api, componentContext());
+        if (setup) {
+          seenNative.add(native);
+          const section = el('div', el('h3', 'Shared subscription'), setup);
+          section.className = 'provider-section provider-account-section';
+          details.append(section);
+        }
+      }
+    }
+
+    const routesSection = el('div', el('h3', routes.length === 1 ? 'Route' : 'Routes'));
+    routesSection.className = 'provider-section provider-routes-section';
+    for (const { route, preset, display } of routes) {
+      const panel = el('div');
+      panel.className = 'provider-route-management';
+      panel.dataset.route = route.name;
+      const routeHeader = el('div', el('code', route.local_prefix));
+      routeHeader.className = 'provider-route-header';
+      if (!readonly) routeHeader.append(routeAdminActions(route, panel, preset));
+      panel.append(routeHeader, display.advanced);
+      routesSection.append(panel);
+    }
+    details.append(routesSection);
+
+    details.append(providerConfigSection(group, state, api, componentContext(), readonly));
+
+    if (!readonly) {
+      const addRoute = button('Add route', () => {
+        if (blocked()) return;
+        if (editor?.row === details) {
+          focusWithin(editor.form);
+          return;
+        }
+        closeEditor();
+        const form = routeForm(
+          state,
+          api,
+          componentContext(),
+          () => {
+            if (blocked()) return;
+            closeEditor();
+            addRoute.focus();
+          },
+          undefined,
+          undefined,
+          { ...group, id: writableProviderID(group, state) },
+        );
+        routesSection.append(form);
+        editor = { row: details, form };
+        form.querySelector('input')?.focus();
+      });
+      addRoute.setAttribute('aria-label', `Add route to ${group.label}`);
+      const footer = el('div', actions(addRoute), actions(deleteProviderButton(group)));
+      footer.className = 'provider-manage-footer';
+      details.append(footer);
+    }
+
+    const row = el('article', title, approvalSummary(group, state), list, manage);
+    row.className = 'route-card route-accordion-item provider-card';
+    row.setAttribute('aria-label', group.label);
     return row;
   }
 
+  // Keep every disclosure containing a show-once token reachable until the
+  // operator has copied or dismissed it (including native device launchers).
+  view.addEventListener('click', (event) => {
+    if (!(event.target instanceof Element)) return;
+    const details = event.target.closest('summary')?.parentElement;
+    if (
+      details instanceof HTMLDetailsElement &&
+      details.open &&
+      (tokenOwner || context.hasProtectedToken?.())
+    ) {
+      event.preventDefault();
+      context.announce('Finish saving or dismissing the one-time connection details first.');
+    }
+  });
+
   function renderPage() {
     const start = currentPage * PAGE_SIZE;
-    const end = Math.min(start + PAGE_SIZE, state.routes.length);
-    routeList.replaceChildren(...state.routes.slice(start, end).map(renderRow));
-    const totalPages = Math.ceil(state.routes.length / PAGE_SIZE);
+    const end = Math.min(start + PAGE_SIZE, groups.length);
+    routeList.replaceChildren(...groups.slice(start, end).map(renderProvider));
+    const totalPages = Math.ceil(groups.length / PAGE_SIZE);
     if (totalPages <= 1) return;
     const goTo = (page: number) => {
       if (page === currentPage || blocked()) return;
       closeEditor();
       currentPage = page;
-      routePage.set(context, page);
+      providerPage.set(context, page);
       renderPage();
       focusWithin(routeList);
     };
@@ -298,19 +510,19 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
     next.disabled = currentPage >= totalPages - 1;
     controls.append(next);
     pagination.replaceChildren(
-      el('small', `Showing ${start + 1}–${end} of ${state.routes.length} routes`),
+      el('small', `Showing ${start + 1}–${end} of ${groups.length} providers`),
       controls,
     );
     if (!pagination.parentElement) view.append(pagination);
   }
 
-  if (state.routes.length) {
+  if (groups.length) {
     view.append(routeList);
     renderPage();
   } else {
     view.append(
       card(
-        'Start with one route',
+        'Add your first provider',
         el(
           'p',
           readonly
@@ -320,15 +532,22 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
       ),
     );
   }
-  // Claude sign-ins can outlive their routes; keep the reset reachable.
-  const orphanClaude =
-    !readonly &&
-    !state.routes.some((route) => isClaudeRoute(route, state)) &&
-    state.accounts?.some((account) => account.kind === 'claude-code');
-  if (orphanClaude) {
-    const claude = card('Claude Code', claudeSettings());
-    claude.classList.add('claude-leftovers');
-    view.append(claude);
+  // Native sign-ins can outlive their routes; keep each reset reachable.
+  if (!readonly) {
+    for (const native of nativeProviders) {
+      if (!state.accounts?.some((account) => account.kind === native.kind)) continue;
+      if (state.routes.some((route) => routeNativeProvider(route, state) === native)) continue;
+      const leftovers = card(
+        native.label,
+        el(
+          'p',
+          `Removes every ${native.shortName} route, device connection and saved proxy sign-in.`,
+        ),
+        actions(clearNativeSetup(native, state, api, componentContext())),
+      );
+      leftovers.classList.add(`${native.launcher}-leftovers`);
+      view.append(leftovers);
+    }
   }
   if (state.accounts !== undefined) {
     const unused = unusedAccountsView(accountDeps());

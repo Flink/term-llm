@@ -96,7 +96,7 @@ it('starts with an optional name, waits for OpenAI approval, then refreshes to t
   await vi.advanceTimersByTimeAsync(2000);
   expect(api.chatGPTSetupStatus).toHaveBeenCalledTimes(2);
   expect(context.refresh).toHaveBeenCalledExactlyOnceWith(`route:${route.name}`);
-  expect(context.announce).toHaveBeenCalledWith(expect.stringContaining('Grant access'));
+  expect(context.announce).toHaveBeenCalledWith(expect.stringContaining('Approve clients'));
   expect(createCaller).not.toHaveBeenCalled();
 });
 

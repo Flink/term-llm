@@ -39,7 +39,6 @@ function setup(auth: 'token' | 'passkey' = 'passkey', entry: ProxyAccount = acco
   const state = { auth, accounts: [entry], routes: [] } as unknown as ProxyState;
   const deps = { state, api, context: ctx };
   const view = accountControls(deps, entry, ['home', 'home-backend']);
-  view.open = true;
   document.body.append(view);
   return { api, view, announce, deps, ctx };
 }
@@ -47,9 +46,10 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
-it('shows account status and every route sharing it without credential fields', () => {
+it('shows account status and every route sharing it without credential fields or nested disclosures', () => {
   const { view } = setup();
-  expect(view.querySelector('summary')).toHaveTextContent('Manage account home-chat');
+  expect(view.querySelector('details')).toBeNull();
+  expect(view.textContent).toContain('home-chat');
   expect(view.textContent).toContain('needs login');
   expect(view.textContent).toContain('Shared by routes home, home-backend.');
   expect(view.querySelector('input')).toBeNull();
@@ -100,7 +100,6 @@ it('removes only unused accounts, after confirmation', async () => {
   const { api, view, deps, ctx } = setup();
   expect(view.querySelector('button.danger')).toBeNull();
   const unused = accountControls(deps, account);
-  unused.open = true;
   document.body.append(unused);
   const remove = vi.spyOn(api, 'removeAccount').mockResolvedValue({ removed: 'home-chat' });
   vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -168,11 +167,13 @@ it.each([
   }
 });
 
-it.each(['ready', 'needs_login', 'native_login'])(
+it.each(['ready', 'needs_login', 'refreshing'])(
   'excludes Claude accounts from unused account maintenance (%s)',
   (state) => {
     const { deps } = setup('token');
-    deps.state.accounts = [{ ...account, name: 'claude', kind: 'claude-code', state }];
+    deps.state.accounts = [
+      { ...account, name: 'claude', kind: 'claude-code', auth_mode: 'shared_vault', state },
+    ];
     expect(unusedAccountsView(deps)).toBeUndefined();
   },
 );
@@ -182,9 +183,10 @@ it('lists only accounts no route references as unused', () => {
   deps.state.accounts = [account, { ...account, name: 'spare', kind: 'grok' }];
   deps.state.routes = [{ name: 'home', account: 'home-chat' } as ProxyState['routes'][number]];
   const view = unusedAccountsView(deps)!;
-  expect([...view.querySelectorAll('summary')].map((node) => node.textContent)).toEqual([
-    'Manage account spare',
-  ]);
+  expect(view.querySelector('details')).toBeNull();
+  expect(
+    [...view.querySelectorAll('.account-controls-status strong')].map((node) => node.textContent),
+  ).toEqual(['spare']);
 });
 
 it('offers only proxy-held account kinds and can fix the kind for a route', () => {

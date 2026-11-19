@@ -1,14 +1,16 @@
-import { claudeConnectionDetails, isClaudeRoute } from './claude';
+import { nativeConnectionDetails, routeNativeProvider, routeAllowsClientApproval } from './native';
 import {
   clientLabel,
   clientListHeader,
   clientRow,
   duplicateSuffixes,
-  grantChips,
+  providerChips,
   setRowExpanded,
   sortCallers,
+  type ProviderApprovalState,
 } from './client-list';
 import type { ProxyCaller, ProxyClient, ProxyRoute, ProxyState } from '../src/api/proxy-client';
+import { providerApproval, providerGroups } from './provider-groups';
 import {
   authLabel,
   joinLocalPrefix,
@@ -206,7 +208,7 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
     'Clients',
     el(
       'p',
-      'Each client gets its own token and can only use the routes you grant. A grant delegates that route’s upstream access.',
+      'Each client gets its own token and can only use the providers you approve. Approval covers every current route in that provider and delegates its upstream access.',
     ),
   );
   intro.classList.add('page-intro');
@@ -218,23 +220,53 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
   const name = input();
   name.required = true;
   name.maxLength = 80;
-  const grants = grantChips(state.routes, [], 'Routes');
+  // Block additions until every native route in a provider is shared and ready.
+  const groups = providerGroups(state);
+  const unavailable = new Map<string, string[]>();
+  for (const group of groups) {
+    const blocked = group.routes
+      .filter((route) => !routeAllowsClientApproval(route, state))
+      .map((route) => route.name);
+    if (blocked.length) unavailable.set(group.id, blocked);
+  }
+  const approvable = groups.some((group) => !unavailable.has(group.id));
+  const providers = providerChips(
+    groups,
+    new Map<string, ProviderApprovalState>(),
+    'Providers',
+    unavailable,
+  );
   const form = el('form', field('Client name', name));
-  if (state.routes.length) form.append(grants.fields);
+  if (groups.length) {
+    form.append(
+      providers.fields,
+      el(
+        'p',
+        'Approval covers every current route in a provider. A route added later is not granted automatically.',
+      ),
+    );
+  }
+  if (unavailable.size)
+    form.append(
+      el(
+        'p',
+        'Native providers can be approved once their shared routes are enabled and signed in.',
+      ),
+    );
   form.className = 'client-composer';
   form.id = 'client-composer';
-  submit(
+  const create = submit(
     form,
     context,
     async () => {
-      const selected = grants.selected();
-      if (!selected.length) throw new Error('Select at least one explicit route grant.');
+      const selected = providers.selected();
+      if (!selected.length) throw new Error('Select at least one provider to approve.');
       context.protectToken(true, true);
       context.announce('Creating client… wait for the one-time token.');
       view.inert = true;
       let issued = false;
       try {
-        const result = await api.createCaller(name.value.trim(), selected, state.revision);
+        const result = await api.createProviderCaller(name.value.trim(), selected, state.revision);
         issued = true;
         context.protectToken(true);
         const token = input(result.token);
@@ -272,18 +304,32 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
           copy,
           el(
             'p',
-            'For curl examples, set TOKEN in your shell to this client token, not the administrator token.',
+            'Approval covers every current route in each approved provider. For curl examples, set TOKEN in your shell to this client token, not the administrator token.',
           ),
         );
-        for (const route of state.routes.filter((r) => selected.includes(r.name))) {
-          if (isClaudeRoute(route, state)) {
-            panel.append(
-              el('h3', route.name),
-              claudeConnectionDetails(
-                { url: location.origin + route.local_prefix, token: result.token },
-                context,
-              ),
-            );
+        // Show the routes the server actually approved, not the ticked provider
+        // IDs, so the examples always match the new token's access.
+        const granted = new Set(
+          result.caller.grants?.length
+            ? result.caller.grants
+            : groups
+                .filter((group) => selected.includes(group.id))
+                .flatMap((group) => group.routes.map((route) => route.name)),
+        );
+        for (const route of state.routes.filter((candidate) => granted.has(candidate.name))) {
+          const provider = routeNativeProvider(route, state);
+          if (provider) {
+            if (routeAllowsClientApproval(route, state)) {
+              panel.append(
+                el('h3', route.name),
+                nativeConnectionDetails(
+                  provider,
+                  { url: location.origin + route.local_prefix, token: result.token },
+                  context,
+                  'shared-worker',
+                ),
+              );
+            }
             continue;
           }
           const rules = routeRules(route);
@@ -356,6 +402,7 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
     },
     'Create client',
   );
+  if (!approvable && state.routes.length) create.disabled = true;
   form.append(button('Cancel', () => setComposer(false, true)));
   if (!state.routes.length) {
     const note = el(
@@ -383,7 +430,7 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
     newClient.setAttribute('aria-expanded', String(open));
     if (!open) {
       name.value = '';
-      grants.reset();
+      providers.reset();
     }
     if (moveFocus) (open ? name : newClient).focus();
   }
@@ -392,34 +439,48 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
   view.append(toolbar, form);
 
   // The editor is built on expand so collapsed rows hold no form controls.
-  function grantEditor(caller: ProxyCaller, label: string, collapse: () => void): HTMLElement[] {
-    const chosen = grantChips(state.routes, caller.grants, 'Route grants');
+  function approvalEditor(caller: ProxyCaller, label: string, collapse: () => void): HTMLElement[] {
+    const approvals = new Map(
+      groups.map((group) => [group.id, providerApproval(group, caller)] as const),
+    );
+    const chosen = providerChips(groups, approvals, 'Provider approvals', unavailable);
     const editor = el(
       'form',
       chosen.fields,
       el(
         'p',
-        'The token stays valid when grants change. Removed grants block new requests; dispatched requests may continue.',
+        'Approval covers every current route in the provider. The token stays valid when approvals change. Unchecking revokes access to every route in that provider; dispatched requests may continue. Existing partial approvals stay unchanged unless you change them.',
       ),
     );
     submit(
       editor,
       context,
       async () => {
-        const selected = chosen.selected();
-        const removed = caller.grants.filter((grant) => !selected.includes(grant));
-        if (
-          removed.length &&
-          !window.confirm(
-            `Remove ${label}’s grants for ${removed.join(', ')}? New requests to those routes will be blocked; dispatched requests may continue. The token is not reissued.`,
-          )
-        )
+        const changes = chosen.changes();
+        if (!changes.length) {
+          context.announce(
+            'No provider approval changes to save. Partial approvals are unchanged.',
+          );
           return;
-        await api.updateCaller(caller.id, selected, state.revision);
+        }
+        const removed = changes
+          .filter((change) => !change.approved)
+          .flatMap((change) => groups.filter((group) => group.id === change.id));
+        if (removed.length) {
+          const providers = removed.map((group) => group.label).join(', ');
+          const routes = removed.flatMap((group) => group.routes.map((route) => route.name));
+          if (
+            !window.confirm(
+              `Remove ${label}’s approval for ${providers}? ${removed.length === 1 ? 'All of its' : 'All of their'} routes (${routes.join(', ')}) are revoked for new requests; dispatched requests may continue. The token is not reissued.`,
+            )
+          )
+            return;
+        }
+        await api.updateProviderApprovals(caller.id, changes, state.revision);
         await context.refresh(`caller:${caller.id}`);
-        context.announce(`Saved grants for ${label}. The token was not changed.`);
+        context.announce(`Saved provider approvals for ${label}. The token was not changed.`);
       },
-      'Save grants',
+      'Save approvals',
     );
     const revoke = confirmAction(
       'Revoke…',
@@ -448,13 +509,16 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
     const label = clientLabel(caller, suffixes);
     const panel = el('div');
     panel.className = 'client-detail';
-    const row = clientRow(caller, suffixes, keyNames, { panel, toggle: (open) => setOpen(open) });
+    const row = clientRow(caller, suffixes, keyNames, groups, {
+      panel,
+      toggle: (open) => setOpen(open),
+    });
     const toggle = () => row.querySelector<HTMLElement>('.client-toggle');
     function setOpen(open: boolean) {
       if (open && closeOpen) closeOpen();
       panel.replaceChildren(
         ...(open
-          ? grantEditor(caller, label, () => {
+          ? approvalEditor(caller, label, () => {
               setOpen(false);
               toggle()?.focus();
             })
@@ -471,7 +535,10 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
     view.append(list);
   }
   if (revoked.length) {
-    const list = el('div', ...revoked.map((caller) => clientRow(caller, suffixes, keyNames)));
+    const list = el(
+      'div',
+      ...revoked.map((caller) => clientRow(caller, suffixes, keyNames, groups)),
+    );
     list.className = 'client-list revoked-list';
     const group = disclosure(`Revoked (${revoked.length})`, list);
     group.className = 'client-revoked';

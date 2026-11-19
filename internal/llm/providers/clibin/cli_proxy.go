@@ -1,7 +1,6 @@
 package clibin
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -31,10 +30,12 @@ type cliProxyBinding struct{ Root, Token, Kind, Dir string }
 // every CLI launch, after provider and inherited values were merged. A marker
 // without a matching registered binding fails before exec. This is routing and
 // credential-namespace isolation, not a network sandbox.
-func prepareCLIProxyEnvironment(ctx context.Context, provider string, env []string) ([]string, error) {
+func prepareCLIProxyEnvironment(provider string, env []string) ([]string, error) {
 	switch {
 	case strings.HasPrefix(provider, "claude-bin"):
-		return prepareClaudeProxyEnvironment(ctx, env)
+		if envValue(env, claudeProxyRootEnv) != "" {
+			return nil, fmt.Errorf("scoped claude-bin launches require native command preparation (no direct fallback)")
+		}
 	case strings.HasPrefix(provider, "cursor-bin"):
 		return prepareCursorProxyEnvironment(env)
 	case strings.HasPrefix(provider, "grok-bin"):
@@ -42,18 +43,11 @@ func prepareCLIProxyEnvironment(ctx context.Context, provider string, env []stri
 	case strings.HasPrefix(provider, "vibe-bin"):
 		return prepareVibeProxyEnvironment(env)
 	case strings.HasPrefix(provider, "agy-bin"):
-		return env, rejectAgyProxyEnvironment(env)
+		if envValue(env, agyProxyRootEnv) != "" {
+			return nil, fmt.Errorf("scoped agy-bin launches require the native rewrite proxy (no direct fallback)")
+		}
 	}
 	return env, nil
-}
-
-// rejectAgyProxyEnvironment fails closed: no credentialless Antigravity adapter
-// exists, so a proxy-bound agy-bin must never fall back to the local login.
-func rejectAgyProxyEnvironment(env []string) error {
-	if envValue(env, agyProxyRootEnv) == "" {
-		return nil
-	}
-	return fmt.Errorf("agy-bin has no credentialless proxy adapter (it requires agy %s or newer verified in isolation); refusing to use the local Antigravity login", agyBinMinimumVersion)
 }
 
 // cliProxyRequested reports whether a provider was bound to a proxy root, for

@@ -192,6 +192,7 @@ func TestProviderProxyRejectsGlobalConflict(t *testing.T) {
 }
 
 func TestProviderProxyUsesSeparateEnrolledClaudeBinding(t *testing.T) {
+	stubEmptyProxyDiscovery(t)
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", home)
 	const root = "https://combined-proxy.example.test"
@@ -229,6 +230,7 @@ providers:
 }
 
 func TestProviderProxyMixedConfigFailsClosed(t *testing.T) {
+	stubEmptyProxyDiscovery(t)
 	for _, tc := range []struct{ name, localPath, selection, want string }{
 		{"double-selection", "/claude-code", "claude-bin", `remove "claude-bin" from proxy.providers`},
 		{"bad-selection", "/claude-code", "no-such-provider", "not a known provider"},

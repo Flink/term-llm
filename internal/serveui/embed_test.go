@@ -276,12 +276,14 @@ func TestProductionBundleSizeBudgets(t *testing.T) {
 		"dist/hub.js":  {raw: 107_500, gzip: 35_500},
 		"dist/hub.css": {raw: 20_500, gzip: 5_500},
 		// Route setup, accounts, Claude/ChatGPT onboarding, live requests,
-		// payload debug, the Cost graph and the Clients list measure
-		// ~121.4/43.3 kB raw/Go-gzip6. Leave ~10% room for further features.
-		"dist/proxy.js": {raw: 134_000, gzip: 48_000},
-		// Routes, requests ledger, Home timeline and Clients list styles measure
-		// 25,379/6,229 bytes raw/Go-gzip6; ~10% headroom.
-		"dist/proxy.css": {raw: 28_000, gzip: 7_000},
+		// payload debug, the Cost graph, the Clients list, and per-provider
+		// term-llm client config editing/import measure ~138.6/49.4 kB
+		// raw/Go-gzip6. Retain modest headroom.
+		"dist/proxy.js": {raw: 145_000, gzip: 52_000},
+		// Routes, flattened provider management sections/footer, requests ledger,
+		// Home timeline, and Clients list styles measure ~28.3/6.8 kB raw/Go-gzip6;
+		// retain modest headroom.
+		"dist/proxy.css": {raw: 30_000, gzip: 7_500},
 	}
 	for name, budget := range budgets {
 		body, err := testBuildAsset(name)

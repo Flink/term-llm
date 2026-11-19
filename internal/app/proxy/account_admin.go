@@ -66,15 +66,13 @@ func (s *Service) accountsAPI(w http.ResponseWriter, r *http.Request, sess sessi
 			next.chatGPTIdentityHash = chatGPTAccountIdentityHash(old)
 		}
 		next.credentials = accountCredentials{}
-		if old.Kind == "claude-code" {
-			next.credentials.Mode = "vault"
-			next.AuthMode = "vault"
+		if nativeProviderForKind(old.Kind) != nil {
+			next.credentials.Mode = old.credentials.Mode
+			next.AuthMode = old.AuthMode
 		}
+		next.claudeSharedCipher = nil
 		next.identityVersion++
 		next.State = "needs_login"
-		if old.Kind == "claude-code" {
-			next.State = "native_login"
-		}
 		next.Generation++
 		next.ExpiresAt = 0
 		next.Updated = time.Now().UnixMilli()
@@ -102,6 +100,10 @@ func (s *Service) accountsAPI(w http.ResponseWriter, r *http.Request, sess sessi
 		fail(w, 409, "Account kind is immutable; use a new name")
 		return
 	}
+	if exists && old.claudeShared() {
+		fail(w, 409, "Use provider setup to reconnect a shared subscription")
+		return
+	}
 	if err = validateAccountCredentials(in.Kind, in.Credentials); err != nil {
 		fail(w, 400, err.Error())
 		return
@@ -126,8 +128,8 @@ func (s *Service) accountsAPI(w http.ResponseWriter, r *http.Request, sess sessi
 		fail(w, 400, "AWS signing accounts require an explicit region")
 		return
 	}
-	if next.Kind == "claude-code" {
-		next.State = "native_login"
+	if nativeProviderForKind(next.Kind) != nil {
+		next = newNativeAccount(in.Name, in.Kind)
 	}
 	next.AuthMode = accountAuthMode(next.Kind, next.credentials)
 	if err = s.store.replaceAccount(r.Context(), next, expected); err != nil {

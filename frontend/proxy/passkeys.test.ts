@@ -104,7 +104,7 @@ describe('proxy passkey access', () => {
     const { api, root, platform } = setup();
     const tokenLogin = vi.spyOn(api, 'login');
     await click(root, 'Sign in with passkey');
-    await waitFor(() => expect(getByRole(root, 'button', { name: 'Routes' })).toBeVisible());
+    await waitFor(() => expect(getByRole(root, 'button', { name: 'Providers' })).toBeVisible());
     expect(vi.mocked(api.authStatus).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(api.state).mock.invocationCallOrder[0],
     );
@@ -126,7 +126,7 @@ describe('proxy passkey access', () => {
     fill(root, 'Bootstrap token', 'private-file-secret');
     fill(root, 'Passkey name', 'Laptop');
     await click(root, 'Create first passkey');
-    await waitFor(() => expect(getByRole(root, 'button', { name: 'Routes' })).toBeVisible());
+    await waitFor(() => expect(getByRole(root, 'button', { name: 'Providers' })).toBeVisible());
     expect(api.verifySecret).toHaveBeenCalledWith('bootstrap', 'private-file-secret');
     expect(api.beginEnrollment).toHaveBeenCalledWith('bootstrap', 'Laptop');
     expect(platform.create).toHaveBeenCalledWith(creation);
@@ -224,7 +224,7 @@ describe('proxy passkey access', () => {
   it('keeps token mode explicit with no Passkeys tab', async () => {
     const { root, api } = setup({ auth: 'token' }, true);
     vi.mocked(api.state).mockResolvedValue({ ...snapshot, auth: 'token' });
-    await click(root, 'Routes');
+    await click(root, 'Providers');
     expect(queryByRole(root, 'button', { name: 'Passkeys' })).toBeNull();
   });
 });

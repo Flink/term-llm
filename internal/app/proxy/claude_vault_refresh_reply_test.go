@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,7 +11,7 @@ import (
 func TestClaudeVaultInitialExchangeRejectsRefreshMetadataOmissions(t *testing.T) {
 	for _, omission := range []string{"scope", "refresh_token", "both"} {
 		t.Run(omission, func(t *testing.T) {
-			f := newClaudeForwardFixture(t)
+			f := newClaudeForwardProbeFixture(t)
 			f.oauth = func(w http.ResponseWriter, r *http.Request) {
 				response := map[string]any{"access_token": "real-access", "refresh_token": "real-refresh", "token_type": "Bearer", "expires_in": 3600, "scope": "user:profile user:inference"}
 				if omission != "scope" {
@@ -24,7 +23,7 @@ func TestClaudeVaultInitialExchangeRejectsRefreshMetadataOmissions(t *testing.T)
 				json.NewEncoder(w).Encode(response)
 			}
 			response := claudeVaultDirect(t, f, claudeVaultCodePayload)
-			if response.Code == 200 || strings.Contains(response.Body.String(), "real-access") || strings.Contains(response.Body.String(), "real-refresh") {
+			if response.Code == 200 || f.oauthCalls.Load() != 1 || strings.Contains(response.Body.String(), "real-access") || strings.Contains(response.Body.String(), "real-refresh") {
 				t.Fatal("initial code exchange accepted omitted grant metadata", response.Code)
 			}
 		})
@@ -34,7 +33,7 @@ func TestClaudeVaultInitialExchangeRejectsRefreshMetadataOmissions(t *testing.T)
 func TestClaudeVaultRefreshOmissionsRetainCustodyWithoutScopeEscalation(t *testing.T) {
 	for _, omission := range []string{"scope", "refresh_token", "both"} {
 		t.Run(omission, func(t *testing.T) {
-			f := newClaudeForwardFixture(t)
+			f := newClaudeForwardProbeFixture(t)
 			const granted = "user:profile user:inference user:mcp_servers"
 			f.oauth = func(w http.ResponseWriter, r *http.Request) {
 				var payload map[string]string
@@ -57,28 +56,36 @@ func TestClaudeVaultRefreshOmissionsRetainCustodyWithoutScopeEscalation(t *testi
 				json.NewEncoder(w).Encode(response)
 			}
 			initial := claudeVaultDecode(t, claudeVaultDirect(t, f, claudeVaultCodePayload))
-			// Requesting additional/Console scopes is not evidence that they were granted.
-			payload, _ := json.Marshal(map[string]string{"grant_type": "refresh_token", "client_id": claudeClientID, "refresh_token": initial.RefreshToken, "scope": "user:profile user:inference user:plugins org:create_api_key"})
-			response := claudeVaultDirect(t, f, string(payload))
-			rotated := claudeVaultDecode(t, response)
-			if rotated.AccessToken == initial.AccessToken || rotated.RefreshToken == initial.RefreshToken || rotated.Scope != granted {
-				t.Fatal("fallback reused placeholders or escalated scope", rotated.Scope)
+			execProxySQL(t, f.service.store, "UPDATE accounts SET expires=1 WHERE name='claude'")
+			conn, reader := f.native(t)
+			if code, _ := claudeForwardNativeCall(t, conn, reader, "GET", "/v1/models", claudeAPIHost, initial.AccessToken, ""); code != 200 {
+				t.Fatal("shared request could not renew expiring custody", code)
 			}
-			if strings.Contains(response.Body.String(), "real-refresh") || strings.Contains(response.Body.String(), "synthetic-vendor-access") {
-				t.Fatal("fallback exposed real credential")
+			conn.Close()
+			a, err := f.service.store.account("claude")
+			if err != nil {
+				t.Fatal(err)
 			}
-			scope, key := claudeVaultTestScope(t, f)
-			record, err := f.service.store.claudeVaultLookup(context.Background(), key, scope, rotated.RefreshToken, true)
+			forwarder, err := f.service.claudeForwarder()
+			if err != nil {
+				t.Fatal(err)
+			}
+			secret, err := claudeSharedSecret(forwarder.ca.vaultKey, a)
 			expectedRefresh := "first-real-refresh"
 			if omission == "scope" {
 				expectedRefresh = "next-real-refresh"
 			}
-			if err != nil || record.private.Scope != granted || record.private.Refresh != expectedRefresh {
-				t.Fatal("fallback custody not persisted for subsequent generations", record.private.Scope, err)
+			if err != nil || secret.Scope != granted || secret.Refresh != expectedRefresh {
+				t.Fatal("fallback custody not persisted for subsequent generations", secret.Scope, err)
 			}
-			retry := claudeVaultDecode(t, claudeVaultDirect(t, f, claudeVaultRefreshPayload(initial.RefreshToken)))
-			if retry.AccessToken != rotated.AccessToken || retry.RefreshToken != rotated.RefreshToken || retry.Scope != granted || f.oauthCalls.Load() != 2 {
-				t.Fatal("omission fallback bypassed cached retry fencing")
+			payload, _ := json.Marshal(map[string]string{"grant_type": "refresh_token", "client_id": claudeClientID, "refresh_token": initial.RefreshToken, "scope": "user:profile user:inference user:plugins org:create_api_key"})
+			response := claudeVaultDirect(t, f, string(payload))
+			reply := claudeVaultDecode(t, response)
+			if reply.AccessToken != initial.AccessToken || reply.RefreshToken != initial.RefreshToken || reply.Scope != granted || f.oauthCalls.Load() != 2 {
+				t.Fatal("local refresh rotated aliases, changed granted scopes, or contacted the issuer")
+			}
+			if strings.Contains(response.Body.String(), "real-refresh") || strings.Contains(response.Body.String(), "synthetic-vendor-access") {
+				t.Fatal("local refresh exposed the issuer's credentials")
 			}
 		})
 	}
@@ -109,9 +116,15 @@ func TestClaudeVaultExplicitConsoleScopeStillRejectsWithRefreshFallback(t *testi
 	f.oauth = func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"access_token":"real-access","token_type":"Bearer","expires_in":3600,"scope":"user:profile user:inference org:create_api_key"}`)
 	}
-	first := claudeVaultDirect(t, f, claudeVaultRefreshPayload(f.refresh))
-	retry := claudeVaultDirect(t, f, claudeVaultRefreshPayload(f.refresh))
-	if first.Code == 200 || retry.Code == 200 || f.oauthCalls.Load() != 1 {
-		t.Fatal("Console grant accepted or uncertain refresh replayed")
+	execProxySQL(t, f.service.store, "UPDATE accounts SET expires=1 WHERE name='claude'")
+	conn, reader := f.native(t)
+	defer conn.Close()
+	for range 2 {
+		if code, _ := claudeForwardNativeCall(t, conn, reader, "GET", "/v1/models", claudeAPIHost, f.access, ""); code == 200 {
+			t.Fatal("Console grant accepted for native access")
+		}
+	}
+	if f.oauthCalls.Load() != 1 || f.vendorCalls.Load() != 0 {
+		t.Fatal("uncertain refresh replayed or request forwarded")
 	}
 }

@@ -12,6 +12,7 @@ import (
 )
 
 func TestProxyMaterializationSkipsLocalSecretsAndUsesAllValidBindings(t *testing.T) {
+	stubEmptyProxyDiscovery(t)
 	cfg := Config{Proxy: ProxyConfig{URL: "https://proxy-materialize.example.test", Token: strings.Repeat("t", 40)}, Providers: map[string]ProviderConfig{"openai": {APIKey: "$(touch should-not-run)", Headers: map[string]string{"Authorization": "$(touch also-not-run)"}}, "grok": {Type: ProviderTypeGrok, APIKey: "$(false)"}}}
 	if err := cfg.materializeProxy(&fileSettings{}); err != nil {
 		t.Fatal(err)
@@ -51,6 +52,7 @@ func proxyStringFieldValue(c *Config, path string) (string, bool) {
 }
 
 func TestProxyExplicitRootsCannotSilentlyBypassCustody(t *testing.T) {
+	stubEmptyProxyDiscovery(t)
 	cfg := Config{Proxy: ProxyConfig{URL: "https://proxy-explicit.example.test", Token: strings.Repeat("t", 40), Direct: []string{"gemini"}}, Providers: map[string]ProviderConfig{"openai": {BaseURL: "https://direct.example.test/v1", APIKey: "local-key"}, "gemini": {APIKey: "gemini-local"}}}
 	file := &fileSettings{values: map[string]any{"providers": map[string]any{"openai": map[string]any{"base_url": "https://direct.example.test/v1"}}}}
 	if err := cfg.materializeProxy(file); err != nil {
@@ -64,6 +66,7 @@ func TestProxyExplicitRootsCannotSilentlyBypassCustody(t *testing.T) {
 	}
 }
 func TestProxyCustomProviderCannotShadowAccountRoute(t *testing.T) {
+	stubEmptyProxyDiscovery(t)
 	cfg := Config{Proxy: ProxyConfig{URL: "https://proxy-shadow.example.test", Token: strings.Repeat("t", 40)}, Providers: map[string]ProviderConfig{"gemini-live": {Type: ProviderTypeChatGPT}}}
 	if err := cfg.materializeProxy(&fileSettings{}); err == nil {
 		t.Fatal("account delegation was silently replaced by a static credential binding")
@@ -83,6 +86,7 @@ func TestProxyURLAndMissingTokenReject(t *testing.T) {
 	}
 }
 func TestProxyScopedTokenFileAndNoVendorCommandExecution(t *testing.T) {
+	stubEmptyProxyDiscovery(t)
 	dir := t.TempDir()
 	tokenFile := filepath.Join(dir, "token")
 	if err := os.WriteFile(tokenFile, []byte(strings.Repeat("s", 40)), 0600); err != nil {
@@ -106,6 +110,7 @@ func TestProxyScopedTokenFileAndNoVendorCommandExecution(t *testing.T) {
 }
 
 func TestProxyCustomAndAncillaryRootsRequireExplicitDirectException(t *testing.T) {
+	stubEmptyProxyDiscovery(t)
 	cfg := Config{Proxy: ProxyConfig{URL: "https://proxy-custom-required.example.test", Token: strings.Repeat("r", 40)}, Providers: map[string]ProviderConfig{"household": {Type: ProviderTypeOpenAICompat, BaseURL: "https://custom.example.test/v1", APIKey: "$(must-not-run)"}}}
 	cfg.Image.OpenAI.BaseURL = "https://api.openai.com/v1"
 	if err := cfg.materializeProxy(nil); err != nil {
@@ -120,6 +125,7 @@ func TestProxyCustomAndAncillaryRootsRequireExplicitDirectException(t *testing.T
 }
 
 func TestProxyExactChatURLIsBlockedRatherThanSilentlyChangingOperation(t *testing.T) {
+	stubEmptyProxyDiscovery(t)
 	for _, kind := range []ProviderType{ProviderTypeOpenAICompat, ProviderTypeVLLM} {
 		t.Run(string(kind), func(t *testing.T) {
 			cfg := Config{Proxy: ProxyConfig{URL: "https://proxy-exact-" + strings.ReplaceAll(string(kind), "_", "-") + ".example.test", Token: strings.Repeat("x", 40)}, Providers: map[string]ProviderConfig{"exact-service": {Type: kind, URL: "https://vendor.example.test/custom/generate", APIKey: "$(must-not-execute)"}}}
@@ -147,6 +153,7 @@ func TestProxyDirectCannotSilentlyMixOpenCodeGoCredentialDomains(t *testing.T) {
 }
 
 func TestProxyOpenCodeGoUsesConsolidatedProviderNamespaces(t *testing.T) {
+	stubEmptyProxyDiscovery(t)
 	cfg := Config{
 		Proxy: ProxyConfig{URL: "https://opencode-consolidated.example.test/proxy", Token: strings.Repeat("c", 40)},
 		Providers: map[string]ProviderConfig{
@@ -181,6 +188,7 @@ func TestProxyOpenCodeGoUsesConsolidatedProviderNamespaces(t *testing.T) {
 }
 
 func TestProxyOpenCodeGoWholeFamilyDirectException(t *testing.T) {
+	stubEmptyProxyDiscovery(t)
 	cfg := Config{
 		Proxy: ProxyConfig{URL: "https://opencode-family-direct.example.test", Token: strings.Repeat("d", 40), Direct: []string{"opencode-go"}},
 		Providers: map[string]ProviderConfig{
@@ -208,6 +216,7 @@ func TestProxyOpenCodeGoWholeFamilyDirectException(t *testing.T) {
 }
 
 func TestProxyOpenCodeGoNamedDirectExceptionIsIsolated(t *testing.T) {
+	stubEmptyProxyDiscovery(t)
 	cfg := Config{
 		Proxy: ProxyConfig{URL: "https://opencode-named-direct.example.test", Token: strings.Repeat("n", 40), Direct: []string{"household"}},
 		Providers: map[string]ProviderConfig{

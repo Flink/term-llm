@@ -15,9 +15,8 @@ import (
 const claudeVaultMaxBody = 64 << 10
 const claudeVaultOAuthTimeout = 30 * time.Second
 
-// This handler deliberately does not use shared account refresh or credentials.
-// The CONNECT principal authenticates exchange/refresh; returned placeholders
-// authenticate native API requests only when that same principal owns them.
+// Only an operator enrollment can exchange a code. Client-side refresh only
+// reissues scoped aliases; the shared account owns upstream token rotation.
 func (s *Service) claudeVaultOAuth(w http.ResponseWriter, r *http.Request, tunnel *claudeNativeTunnel, scope claudeForwardScope) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
@@ -44,59 +43,36 @@ func (s *Service) claudeVaultOAuth(w http.ResponseWriter, r *http.Request, tunne
 		claudeVaultError(w, 413, "invalid_request")
 		return
 	}
+	provider := scope.nativeProvider()
 	payload, err := parseClaudeVaultPayload(r.Header.Get("Content-Type"), body)
-	if err != nil || payload.value("client_id") != claudeClientID {
+	if err != nil || !provider.validOAuthPayload(payload) {
 		claudeVaultError(w, 400, "invalid_request")
 		return
 	}
-	var previous *claudeVaultRecord
-	switch payload.value("grant_type") {
-	case "authorization_code":
-		if payload.value("code") == "" || payload.value("code_verifier") == "" || payload.value("redirect_uri") == "" || payload.value("refresh_token") != "" {
-			claudeVaultError(w, 400, "invalid_request")
-			return
-		}
-		reservation, e := s.store.claudeVaultBeginCode(ctx, tunnel.forwarder.ca.vaultKey, scope)
-		if e != nil {
-			claudeVaultError(w, 503, "login_required")
-			return
-		}
-		previous = &reservation
-	case "refresh_token":
-		record, e := s.store.claudeVaultLookup(ctx, tunnel.forwarder.ca.vaultKey, scope, payload.value("refresh_token"), true)
-		if e != nil {
-			claudeVaultError(w, 400, "invalid_grant")
-			return
-		}
-		if record.state == "spent" {
-			cached, e := s.store.claudeVaultRetry(ctx, tunnel.forwarder.ca.vaultKey, scope, record)
-			if e != nil {
-				claudeVaultError(w, 400, "invalid_grant")
-				return
-			}
-			jsonReply(w, 200, cached)
-			return
-		}
-		if record.state != "ready" || record.private.Refresh == "" || s.store.claudeVaultFence(ctx, record.id, scope) != nil {
-			claudeVaultError(w, 400, "invalid_grant")
-			return
-		}
-		previous = &record
-		if err = payload.setRefresh(record.private.Refresh); err != nil {
-			claudeVaultError(w, 400, "invalid_grant")
-			return
-		}
-		body = payload.body
-	default:
-		claudeVaultError(w, 400, "unsupported_grant_type")
+	s.claudeSharedOAuth(w, r.WithContext(ctx), tunnel, scope, payload)
+}
+
+type nativeOAuthError struct {
+	status int
+	code   string
+}
+
+func (e nativeOAuthError) Error() string { return e.code }
+
+func writeNativeOAuthError(w http.ResponseWriter, err error) {
+	if e, ok := err.(nativeOAuthError); ok {
+		claudeVaultError(w, e.status, e.code)
 		return
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, claudeTokenURL, io.NopCloser(bytes.NewReader(body)))
+	claudeVaultError(w, 503, "login_required")
+}
+
+func (s *Service) exchangeNativeOAuth(ctx context.Context, provider *nativeProxyProvider, contentType string, body []byte, previous *claudeVaultRecord) (claudeVaultReply, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.tokenURL, io.NopCloser(bytes.NewReader(body)))
 	if err != nil {
-		claudeVaultError(w, 502, "login_required")
-		return
+		return claudeVaultReply{}, nativeOAuthError{502, "login_required"}
 	}
-	req.Header.Set("Content-Type", payload.contentType)
+	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Accept-Encoding", "identity")
 	req.ContentLength = int64(len(body))
@@ -106,31 +82,22 @@ func (s *Service) claudeVaultOAuth(w http.ResponseWriter, r *http.Request, tunne
 		if resp != nil && resp.Body != nil {
 			resp.Body.Close()
 		}
-		claudeVaultError(w, 502, "login_required")
-		return
+		return claudeVaultReply{}, nativeOAuthError{502, "login_required"}
 	}
 	defer resp.Body.Close()
 	// Do not read, log, reflect or follow issuer error/redirect bodies or headers.
 	if resp.StatusCode != 200 || resp.Header.Get("Content-Encoding") != "" {
-		claudeVaultError(w, 400, "invalid_grant")
-		return
+		return claudeVaultReply{}, nativeOAuthError{400, "invalid_grant"}
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, claudeVaultMaxBody+1))
 	if err != nil || len(data) > claudeVaultMaxBody {
-		claudeVaultError(w, 502, "login_required")
-		return
+		return claudeVaultReply{}, nativeOAuthError{502, "login_required"}
 	}
-	reply, err := parseClaudeVaultReplyForRefresh(data, previous)
+	reply, err := provider.parseVaultReply(data, previous)
 	if err != nil {
-		claudeVaultError(w, 400, "subscription_login_required")
-		return
+		return claudeVaultReply{}, nativeOAuthError{400, "subscription_login_required"}
 	}
-	sanitized, err := s.store.claudeVaultSave(ctx, tunnel.forwarder.ca.vaultKey, scope, reply, previous)
-	if err != nil {
-		claudeVaultError(w, 503, "login_required")
-		return
-	}
-	jsonReply(w, 200, sanitized)
+	return reply, nil
 }
 
 func claudeVaultError(w http.ResponseWriter, status int, code string) {
@@ -211,26 +178,15 @@ func (p claudeVaultPayload) value(key string) string {
 	}
 	return v
 }
-func (p *claudeVaultPayload) setRefresh(token string) error {
-	if p.form != nil {
-		p.form.Set("refresh_token", token)
-		p.body = []byte(p.form.Encode())
-		return nil
-	}
-	encoded, err := json.Marshal(token)
-	if err != nil {
-		return err
-	}
-	p.object["refresh_token"] = encoded
-	p.body, err = json.Marshal(p.object)
-	return err
-}
-
 func parseClaudeVaultReply(data []byte) (claudeVaultReply, error) {
 	return parseClaudeVaultReplyForRefresh(data, nil)
 }
 
 func parseClaudeVaultReplyForRefresh(data []byte, previous *claudeVaultRecord) (claudeVaultReply, error) {
+	return claudeProxyProvider.parseVaultReply(data, previous)
+}
+
+func (provider *nativeProxyProvider) parseVaultReply(data []byte, previous *claudeVaultRecord) (claudeVaultReply, error) {
 	var reply claudeVaultReply
 	if json.Unmarshal(data, &reply) != nil {
 		return reply, errClaudeVaultLogin
@@ -253,6 +209,14 @@ func parseClaudeVaultReplyForRefresh(data []byte, previous *claudeVaultRecord) (
 	if !validClaudeVaultToken(reply.AccessToken) || !validClaudeVaultToken(reply.RefreshToken) ||
 		!strings.EqualFold(reply.TokenType, "bearer") || reply.ExpiresIn <= 0 || reply.ExpiresIn > 366*24*60*60 || len(reply.Scope) > 4096 {
 		return reply, errClaudeVaultLogin
+	}
+	reply.TokenType = "Bearer"
+	if provider == agyProxyProvider {
+		// Google may include an ID token and extra metadata. Neither is needed
+		// by agy, and the only client-visible credentials must be placeholders.
+		reply.Account, reply.Organization = nil, nil
+		reply.Scope = agyNativeOAuthScopes(reply.Scope)
+		return reply, nil
 	}
 	profile, inference := false, false
 	var scopes []string
@@ -277,7 +241,6 @@ func parseClaudeVaultReplyForRefresh(data []byte, previous *claudeVaultRecord) (
 	if !profile || !inference {
 		return reply, errClaudeVaultLogin
 	}
-	reply.TokenType = "Bearer"
 	reply.Scope = strings.Join(scopes, " ")
 	if err := sanitizeClaudeVaultMetadata(&reply, previous); err != nil {
 		return reply, err

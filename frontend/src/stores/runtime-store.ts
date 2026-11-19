@@ -305,12 +305,22 @@ export class RuntimeStore {
       this.selectedModel.value &&
       !this.models.value.some((model) => model.id === this.selectedModel.value)
     ) {
-      const matching = this.models.value.find(
-        (model) =>
-          model.id ===
-          this.selectedModel.value.replace(/[-_](?:none|minimal|low|medium|high|xhigh|max)$/i, ''),
+      const suffixMatch = this.selectedModel.value.match(
+        /^(.*?)[-_](none|minimal|low|medium|high|xhigh|max)$/i,
       );
-      if (matching) this.setPreference('model', matching.id, false);
+      const matching = suffixMatch
+        ? this.models.value.find((model) => model.id === suffixMatch[1])
+        : undefined;
+      if (matching) {
+        this.setPreference('model', matching.id, false);
+        const migratedEffort = suffixMatch![2].toLowerCase();
+        if (
+          !this.selectedEffort.peek() &&
+          (!matching.efforts?.length || matching.efforts.includes(migratedEffort))
+        ) {
+          this.setPreference('effort', migratedEffort, false);
+        }
+      }
     }
   }
 

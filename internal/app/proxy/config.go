@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/fileprivacy"
+	"github.com/term-llm/term-llm/internal/proxyprofile"
 	"golang.org/x/net/http/httpguts"
 	"gopkg.in/yaml.v3"
 )
@@ -53,6 +54,7 @@ type Route struct {
 	Redirects       string                `json:"redirects,omitempty" yaml:"redirects,omitempty"`
 	Usage           string                `json:"usage,omitempty" yaml:"usage,omitempty"`
 	Name            string                `json:"name" yaml:"name"`
+	Provider        string                `json:"provider,omitempty" yaml:"provider,omitempty"` // Admin grouping only.
 	LocalPrefix     string                `json:"local_prefix" yaml:"local_prefix"`
 	Upstream        string                `json:"upstream" yaml:"upstream"`
 	Enabled         bool                  `json:"enabled" yaml:"enabled"`
@@ -67,10 +69,11 @@ type SecretRef struct {
 	Stored string `json:"stored,omitempty" yaml:"stored,omitempty"`
 }
 type Config struct {
-	Accounts map[string]AccountRef `json:"accounts,omitempty" yaml:"accounts,omitempty"`
-	Money    MoneySettings         `json:"money,omitempty" yaml:"money,omitempty"`
-	Routes   []Route               `json:"routes" yaml:"routes"`
-	Secrets  map[string]SecretRef  `json:"secrets" yaml:"secrets,omitempty"`
+	Accounts  map[string]AccountRef                        `json:"accounts,omitempty" yaml:"accounts,omitempty"`
+	Money     MoneySettings                                `json:"money,omitempty" yaml:"money,omitempty"`
+	Routes    []Route                                      `json:"routes" yaml:"routes"`
+	Providers map[string]proxyprofile.ClientProviderConfig `json:"providers,omitempty" yaml:"providers,omitempty"`
+	Secrets   map[string]SecretRef                         `json:"secrets" yaml:"secrets,omitempty"`
 }
 type material struct{ Origin, Value string }
 type activeRoute struct {
@@ -84,10 +87,11 @@ type activeRoute struct {
 	credentialHeaders []string
 }
 type snapshot struct {
-	config   Config
-	revision int64
-	routes   []activeRoute
-	secrets  map[string]material
+	config    Config
+	revision  int64
+	routes    []activeRoute
+	secrets   map[string]material
+	upstreams map[string]string // SRV references and their pinned HTTPS destinations.
 }
 
 // Origin normalizes the credential binding, including the effective port.
@@ -285,6 +289,10 @@ func resolveSecrets(c Config, stored map[string]material, adminFile string, file
 	return out, nil
 }
 func compile(c Config, revision int64, secrets map[string]material) (*snapshot, error) {
+	return compileWithDiscovery(c, revision, secrets, nil)
+}
+
+func compileWithDiscovery(c Config, revision int64, secrets map[string]material, previous map[string]string) (*snapshot, error) {
 	if err := ValidateMoneySettings(c.Money); err != nil {
 		return nil, err
 	}
@@ -301,6 +309,7 @@ func compile(c Config, revision int64, secrets map[string]material) (*snapshot, 
 	if c.Routes == nil {
 		c.Routes = []Route{}
 	}
+	discovery := upstreamDiscovery{previous: previous}
 	s := &snapshot{config: c, revision: revision, secrets: secrets}
 	names := map[string]bool{}
 	for i := range s.config.Routes {
@@ -309,15 +318,24 @@ func compile(c Config, revision int64, secrets map[string]material) (*snapshot, 
 			return nil, fmt.Errorf("route names must be unique immutable slugs")
 		}
 		names[r.Name] = true
+		if r.Provider != "" && !slug.MatchString(r.Provider) {
+			return nil, fmt.Errorf("route provider must be a slug of at most 64 characters")
+		}
 		if err := validatePrefix(*r, s.routes); err != nil {
 			return nil, err
 		}
-		ar, err := compileRoute(r, secrets)
+		ar, err := compileRoute(r, secrets, &discovery)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("route %s: %w", r.Name, err)
 		}
 		s.routes = append(s.routes, ar)
 	}
+	providers, err := validateProviderConfigs(s.config.Providers, s.config.Routes)
+	if err != nil {
+		return nil, err
+	}
+	s.config.Providers = providers
+	s.upstreams = discovery.resolved
 	return s, nil
 }
 

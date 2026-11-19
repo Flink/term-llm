@@ -5,7 +5,14 @@ import type {
   ProxyRoute,
   ProxyState,
 } from '../src/api/proxy-client';
-import { claudeConnectionDetails, isClaudeRoute } from './claude';
+import {
+  legacyNativeNotice,
+  nativeConnectionDetails,
+  nativeProvider,
+  routeNativeProvider,
+  routeSharedNativeAccount,
+  type NativeProvider,
+} from './native';
 import { actions, button, disclosure, el, field, input, submit, type UIContext } from './dom';
 
 const chatGPTDeviceURL = 'https://auth.openai.com/codex/device';
@@ -28,15 +35,14 @@ function chatGPTSignIn(
     el(
       'p',
       route
-        ? 'Sign in again to renew the account used by this route. Existing client access stays in place.'
-        : 'Sign in with your ChatGPT subscription. The proxy keeps the login; you decide who can use the route after setup.',
+        ? 'Sign in again to renew this provider’s account. Existing client access stays in place.'
+        : 'Sign in with your ChatGPT subscription. The proxy keeps the login; you approve clients separately.',
     ),
   );
   if (!route) {
     form.append(disclosure('Route name (optional)', field('Route name', name)));
+    form.append(button('Cancel', close));
   }
-  const cancelSetup = button('Cancel', close);
-  form.append(cancelSetup);
   let active: string | undefined;
 
   async function cancel(id: string) {
@@ -69,7 +75,8 @@ function chatGPTSignIn(
         try {
           await cancel(signIn.id);
         } finally {
-          close();
+          if (route) view.replaceChildren(form);
+          else close();
         }
       }, back);
     });
@@ -114,7 +121,7 @@ function chatGPTSignIn(
           }
           const message = route
             ? 'ChatGPT reconnected. Existing client access is unchanged.'
-            : 'ChatGPT route created. Grant access when you’re ready to use it.';
+            : 'ChatGPT connected. Approve clients for ChatGPT when you’re ready.';
           // Don’t invite another sign-in if setup succeeded but the view refresh fails.
           view.replaceChildren(el('p', message));
           if (!context.hasProtectedToken?.()) {
@@ -162,55 +169,76 @@ function chatGPTSignIn(
   return view;
 }
 
-function claudeLauncherSetup(
+function issueNativeLauncher(
+  view: HTMLElement,
+  provider: NativeProvider,
   state: ProxyState,
   api: ProxyClient,
   context: UIContext,
-  route?: ProxyRoute,
+  source: HTMLButtonElement,
+  onDismiss: (() => void) | undefined,
+  ...[use, route]:
+    [use: 'shared-operator', route?: ProxyRoute] | [use: 'shared-worker', route: ProxyRoute]
+) {
+  if (context.hasProtectedToken?.()) {
+    context.announce(
+      'Save or dismiss the open launcher or client token before creating another launcher.',
+    );
+    return;
+  }
+  const operator = use === 'shared-operator';
+  void context.run(async () => {
+    context.protectToken(true, true);
+    let issued = false;
+    try {
+      const connection = operator
+        ? route
+          ? await api.setupNative(provider.launcher, state.revision, route.name, 'connect')
+          : await api.setupNative(provider.launcher, state.revision, undefined, 'create')
+        : await api.setupNative(provider.launcher, state.revision, route.name);
+      const details = nativeConnectionDetails(provider, connection, context, use);
+      const dismiss = button('I saved it — dismiss', () => {
+        void context.run(async () => {
+          await context.refresh(route?.name ?? provider.launcher);
+          details.querySelectorAll('textarea').forEach((text) => (text.value = ''));
+          context.protectToken(false);
+          onDismiss?.();
+        }, dismiss);
+      });
+      issued = true;
+      context.protectToken(true);
+      view.replaceChildren(
+        el('p', 'Shown once. Save this launcher securely; its token cannot be retrieved later.'),
+        details,
+        dismiss,
+      );
+      view.querySelector('textarea')?.focus();
+    } finally {
+      if (!issued) context.protectToken(false);
+    }
+  }, source);
+}
+
+function nativeLauncherSetup(
+  provider: NativeProvider,
+  state: ProxyState,
+  api: ProxyClient,
+  context: UIContext,
 ): HTMLElement {
   const view = el('div');
   view.className = 'provider-onboarding';
-  const create = button(route ? 'Create device launcher' : 'Create route & get launcher', () => {
-    if (context.hasProtectedToken?.()) {
-      context.announce('Save or dismiss the open client token before adding another device.');
-      return;
-    }
-    void context.run(async () => {
-      context.protectToken(true, true);
-      let issued = false;
-      try {
-        const connection = route
-          ? await api.setupClaude(state.revision, route.name)
-          : await api.setupClaude(state.revision);
-        const details = claudeConnectionDetails(connection, context);
-        const dismiss = button('I saved it — dismiss', () => {
-          void context.run(async () => {
-            await context.refresh(route?.name ?? 'claude');
-            details.querySelectorAll('textarea').forEach((text) => (text.value = ''));
-            context.protectToken(false);
-          }, dismiss);
-        });
-        issued = true;
-        context.protectToken(true);
-        view.replaceChildren(
-          el('p', 'Shown once. Save this launcher securely; its token cannot be retrieved later.'),
-          details,
-          dismiss,
-        );
-        view.querySelector('textarea')?.focus();
-      } finally {
-        if (!issued) context.protectToken(false);
-      }
-    }, create);
-  });
+  const create = button('Create shared route & get sign-in launcher', () =>
+    issueNativeLauncher(view, provider, state, api, context, create, undefined, 'shared-operator'),
+  );
   create.className = 'primary';
   view.append(
     el(
       'p',
-      'Run the launcher on your device and sign in inside Claude Code. Your usual Claude setup stays unchanged.',
+      'Sign in once with the operator launcher. Authorized devices use your subscription and its limits without signing in themselves. Only grant access to devices you trust.',
     ),
-    create,
   );
+  if (provider.setupRequirements) view.append(el('p', provider.setupRequirements));
+  view.append(create);
   return view;
 }
 
@@ -222,7 +250,9 @@ export function providerOnboarding(
   close: () => void,
 ): HTMLElement | undefined {
   if (preset.id === 'chatgpt') return chatGPTSignIn(state, api, context, close);
-  if (preset.id === 'claude-code') return claudeLauncherSetup(state, api, context);
+  const provider = nativeProvider(preset.id);
+  if (!provider) return;
+  return nativeLauncherSetup(provider, state, api, context);
 }
 
 export function providerRouteAction(
@@ -232,37 +262,99 @@ export function providerRouteAction(
   context: UIContext,
 ): HTMLElement | undefined {
   if (state.mode === 'file') return;
-  if (isClaudeRoute(route, state)) {
+  const provider = routeNativeProvider(route, state);
+  if (provider) {
+    const shared = routeSharedNativeAccount(route, state);
+    if (!shared) return el('p', legacyNativeNotice);
     if (!route.enabled) return;
-    return disclosure('Add device', claudeLauncherSetup(state, api, context, route));
+    const view = el('div');
+    view.className = 'provider-onboarding provider-native-actions';
+    const ready = shared.state === 'ready';
+    const needsLogin = shared.state === 'needs_login';
+    const help = ready
+      ? 'Create a separately revocable device launcher for each worker, or reconnect the shared sign-in.'
+      : needsLogin
+        ? 'Use an operator launcher on your own device to sign in to the shared subscription. This launcher is not for workers.'
+        : 'Shared sign-in is refreshing. You can reconnect with a fresh operator launcher if needed.';
+    const renderControls = () => {
+      const parts: HTMLElement[] = [el('p', help)];
+      if (provider.setupRequirements) {
+        const req = el('p', provider.setupRequirements);
+        req.className = 'provider-note';
+        parts.push(req);
+      }
+      const buttons: HTMLButtonElement[] = [];
+      if (ready) {
+        const addDevice = button('Add device', () =>
+          issueNativeLauncher(
+            view,
+            provider,
+            state,
+            api,
+            context,
+            addDevice,
+            renderControls,
+            'shared-worker',
+            route,
+          ),
+        );
+        addDevice.className = 'primary';
+        buttons.push(addDevice);
+      }
+      const operator = button(needsLogin ? 'Get operator sign-in launcher' : 'Reconnect', () =>
+        issueNativeLauncher(
+          view,
+          provider,
+          state,
+          api,
+          context,
+          operator,
+          renderControls,
+          'shared-operator',
+          route,
+        ),
+      );
+      if (needsLogin) operator.className = 'primary';
+      buttons.push(operator);
+      parts.push(actions(...buttons));
+      view.replaceChildren(...parts);
+    };
+    renderControls();
+    return view;
   }
   const account = (state.accounts ?? []).find((value) => value.name === route.account);
   if (account?.kind !== 'chatgpt') return;
-  const details = disclosure(account.state === 'ready' ? 'Reconnect' : 'Sign-in needed');
-  details.append(chatGPTSignIn(state, api, context, () => (details.open = false), route));
-  return details;
+  const view = chatGPTSignIn(state, api, context, () => {}, route);
+  if (account.state !== 'ready') {
+    const submitButton = view.querySelector<HTMLButtonElement>('button[type=submit]');
+    if (submitButton) submitButton.className = 'primary';
+  }
+  return view;
 }
 
-export function clearClaudeSetup(
+export function clearNativeSetup(
+  provider: NativeProvider,
   state: ProxyState,
   api: ProxyClient,
   context: UIContext,
 ): HTMLButtonElement {
-  const clear = button('Clear all Claude setup', () => {
+  const clear = button(`Clear all ${provider.shortName} setup`, () => {
     if (context.hasProtectedToken?.()) {
-      context.announce('Save or dismiss the open client token before clearing Claude setup.');
+      context.announce(
+        `Save or dismiss the open client token before clearing ${provider.shortName} setup.`,
+      );
       return;
     }
     if (
       !window.confirm(
-        'Remove all Claude proxy routes, device access, and saved proxy sign-ins? Other providers and your normal Claude setup are unchanged.',
+        `Remove all ${provider.shortName} proxy routes, device access, and saved proxy sign-ins? Other providers and your normal ${provider.shortName} setup are unchanged.`,
       )
     )
       return;
     void context.run(async () => {
-      await api.clearClaude(state.revision);
+      await api.clearNative(provider.launcher, state.revision);
       await context.refresh();
-      context.announce('Claude proxy setup cleared. Other providers are unchanged.');
+      context.announce(`${provider.shortName} proxy setup cleared. Other providers are unchanged.`);
     }, clear);
   });
   clear.className = 'danger';

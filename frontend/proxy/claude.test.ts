@@ -1,22 +1,39 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { fireEvent, getByLabelText, getByRole, waitFor } from '@testing-library/preact';
+import {
+  fireEvent,
+  getByLabelText,
+  getByRole,
+  getByText,
+  queryByLabelText,
+  queryByRole,
+  waitFor,
+} from '@testing-library/preact';
 import {
   ProxyAPIError,
   ProxyClient,
   type ProxyAccount,
   type ProxyRoute,
+  type ProxyPreset,
   type ProxyState,
 } from '../src/api/proxy-client';
 import type { PasskeyPlatform } from '../src/hub/platform/passkeys';
 import { mountProxy } from './app';
-import { providerOnboarding, providerRouteAction, clearClaudeSetup } from './provider-onboarding';
+import { routeSummary } from './route-summary';
+import { providerOnboarding, providerRouteAction, clearNativeSetup } from './provider-onboarding';
 import type { UIContext } from './dom';
-import { claudeLauncher, claudeProviderYAML, isClaudeRoute } from './claude';
+import {
+  agyProvider,
+  claudeProvider,
+  nativeLauncher,
+  nativeProviderYAML,
+  routeNativeProvider,
+} from './native';
 
 const account: ProxyAccount = {
   name: 'native-slot',
   kind: 'claude-code',
-  state: 'native_login',
+  auth_mode: 'shared_vault',
+  state: 'needs_login',
   generation: 1,
   updated: 1,
 };
@@ -38,6 +55,22 @@ const other: ProxyRoute = {
   local_prefix: '/openai/',
   upstream: 'https://api.openai.com/v1',
   billing: 'pay_as_you_go',
+};
+const agyAccount: ProxyAccount = { ...account, name: 'personal-slot', kind: 'agy-bin' };
+const agyRoute: ProxyRoute = {
+  ...route,
+  name: 'personal-route',
+  local_prefix: '/agy-bin/',
+  upstream: 'https://daily-cloudcode-pa.googleapis.com',
+  account: agyAccount.name,
+};
+const agyPreset: ProxyPreset = {
+  id: 'agy-bin',
+  label: 'Antigravity personal subscription',
+  account_kind: 'agy-bin',
+  group: 'plan',
+  upstream: agyRoute.upstream,
+  auth: agyRoute.caller_auth,
 };
 const presets = [
   {
@@ -94,7 +127,7 @@ function setup(initial = snapshot()) {
     publicKey: { challenge: 'fixture' },
   } as never);
   vi.spyOn(api, 'finishPasskey').mockResolvedValue();
-  vi.spyOn(api, 'setupClaude').mockImplementation(async () => {
+  vi.spyOn(api, 'setupNative').mockImplementation(async () => {
     current = { ...current, ...configured, revision: current.revision + 1 };
     return {
       revision: current.revision,
@@ -103,11 +136,11 @@ function setup(initial = snapshot()) {
       caller_id: `caller-${serial}`,
     };
   });
-  vi.spyOn(api, 'clearClaude').mockImplementation(async () => {
+  vi.spyOn(api, 'clearNative').mockImplementation(async () => {
     current = {
       ...current,
       accounts: (current.accounts ?? []).filter((a) => a.kind !== 'claude-code'),
-      routes: current.routes.filter((r) => !isClaudeRoute(r, current)),
+      routes: current.routes.filter((r) => routeNativeProvider(r, current) !== claudeProvider),
       revision: current.revision + 1,
     };
   });
@@ -152,12 +185,12 @@ function providerFixture(state = snapshot(), refresh = vi.fn().mockResolvedValue
     token: 'scoped-canary-1',
     caller_id: 'device',
   };
-  vi.spyOn(api, 'setupClaude').mockResolvedValue(connection);
-  vi.spyOn(api, 'clearClaude').mockResolvedValue();
+  vi.spyOn(api, 'setupNative').mockResolvedValue(connection);
+  vi.spyOn(api, 'clearNative').mockResolvedValue();
   return { api, context, errors, refresh, connection };
 }
 
-it('creates a route and launcher, keeps the token out of browser storage, and clears it only after dismissal refresh succeeds', async () => {
+it('keeps the operator launcher token out of browser storage and clears it only after dismissal refresh succeeds', async () => {
   const fixture = providerFixture();
   const { api, context, errors, refresh } = fixture;
   const writeText = vi.fn().mockResolvedValue(undefined);
@@ -165,16 +198,16 @@ it('creates a route and launcher, keeps the token out of browser storage, and cl
   const storageWrite = vi.spyOn(Storage.prototype, 'setItem');
   const view = providerOnboarding(presets[0], snapshot(), api, context, vi.fn())!;
   document.body.append(view);
-  await click(view, 'Create route & get launcher');
+  await click(view, 'Create shared route & get sign-in launcher');
   const command = await waitFor(
-    () => getByLabelText(view, 'Launcher command') as HTMLTextAreaElement,
+    () => getByLabelText(view, 'Operator sign-in launcher command') as HTMLTextAreaElement,
   );
   expect(command.value).toContain('scoped-canary-1');
   expect(command).toHaveFocus();
-  expect(api.setupClaude).toHaveBeenCalledExactlyOnceWith(7);
+  expect(api.setupNative).toHaveBeenCalledExactlyOnceWith('claude', 7, undefined, 'create');
   expect(context.hasProtectedToken!()).toBe(true);
   expect(storageWrite).not.toHaveBeenCalled();
-  await click(view, 'Copy launcher command');
+  await click(view, 'Copy operator launcher command');
   await waitFor(() => expect(writeText).toHaveBeenCalledWith(command.value));
   refresh.mockRejectedValueOnce(new ProxyAPIError(503, 'State unavailable.'));
   await click(view, 'I saved it — dismiss');
@@ -186,90 +219,226 @@ it('creates a route and launcher, keeps the token out of browser storage, and cl
   expect(context.hasProtectedToken!()).toBe(false);
 });
 
-it('adds a device to the selected enabled route without picking a different route or issuing another visible token', async () => {
-  const state = snapshot(configured);
+it.each([
+  [account, route],
+  [agyAccount, agyRoute],
+])('does not offer a new launcher on legacy $kind routes', (account, route) => {
+  const state = snapshot({
+    accounts: [{ ...account, auth_mode: 'vault', state: 'native_login' }],
+    routes: [route],
+  });
   const { api, context } = providerFixture(state);
-  const view = providerRouteAction(route, state, api, context)! as HTMLDetailsElement;
+  const view = providerRouteAction(route, state, api, context)!;
+  expect(view).toHaveTextContent('must be migrated to a shared subscription');
+  expect(view.querySelector('summary, button')).toBeNull();
+  expect(routeSummary(route, state).status).toBe('Shared subscription migration needed');
+  expect(api.setupNative).not.toHaveBeenCalled();
+});
+
+function sharedSnapshot(state: string, enabled = true): ProxyState {
+  return snapshot({
+    ...configured,
+    accounts: [{ ...account, auth_mode: 'shared_vault', state }],
+    routes: [{ ...route, enabled }],
+  });
+}
+
+it('offers only shared Claude setup and presents an operator-only launcher', async () => {
+  const { root, api } = setup();
+  await click(root, 'Add provider');
+  expect(getByText(root, 'Sign in once, then add devices')).toBeVisible();
+  await click(root, 'Claude Code');
+  expect(queryByRole(root, 'button', { name: 'Create route & get launcher' })).toBeNull();
+  expect(
+    getByRole(root, 'button', { name: 'Create shared route & get sign-in launcher' }),
+  ).toBeVisible();
+  expect(api.setupNative).not.toHaveBeenCalled();
+  await click(root, 'Create shared route & get sign-in launcher');
+  const command = await waitFor(
+    () => getByLabelText(root, 'Operator sign-in launcher command') as HTMLTextAreaElement,
+  );
+  expect(api.setupNative).toHaveBeenCalledExactlyOnceWith('claude', 7, undefined, 'create');
+  expect(command.value).toBe(
+    "term-llm proxy run claude --url 'https://proxy.example/native/' --token 'scoped-canary-1'",
+  );
+  expect(command).toHaveFocus();
+  expect(root).toHaveTextContent('Keep this operator launcher private.');
+  expect(queryByLabelText(root, 'Provider YAML')).toBeNull();
+
+  vi.mocked(api.state).mockResolvedValueOnce(sharedSnapshot('needs_login'));
+  await click(root, 'I saved it — dismiss');
+  await waitFor(() => expect(root).toHaveTextContent('Shared Claude sign-in needed'));
+  const summary = getByText(root, 'Manage', { selector: 'summary' });
+  fireEvent.click(summary);
+  expect(getByRole(root, 'button', { name: 'Get operator sign-in launcher' })).toBeVisible();
+  expect(queryByRole(root, 'button', { name: 'Add device' })).toBeNull();
+  expect(summary.parentElement!.querySelectorAll('details')).toHaveLength(0);
+
+  vi.mocked(api.state).mockResolvedValueOnce(sharedSnapshot('ready'));
+  await click(root, 'Refresh state');
+  await waitFor(() => expect(root).toHaveTextContent('Shared Claude subscription ready'));
+  expect(getByRole(root, 'button', { name: 'Add device' })).toBeInTheDocument();
+});
+
+it.each([
+  ['needs_login', 'Shared Claude sign-in needed', 'Get operator sign-in launcher'],
+  ['refreshing', 'Shared Claude sign-in refreshing', 'Reconnect'],
+  ['ready', 'Shared Claude subscription ready', 'Reconnect'],
+])(
+  'uses shared account state %s to show operator and worker actions directly',
+  (state, status, operatorLabel) => {
+    const snapshot = sharedSnapshot(state);
+    const { api, context } = providerFixture(snapshot);
+    const action = providerRouteAction(route, snapshot, api, context)!;
+    document.body.append(action);
+    expect(routeSummary(route, snapshot).status).toBe(status);
+    expect(action.querySelector('details')).toBeNull();
+    expect(getByRole(action, 'button', { name: operatorLabel })).toBeInTheDocument();
+    expect(queryByRole(action, 'button', { name: 'Add device' }) !== null).toBe(state === 'ready');
+    expect(
+      providerRouteAction({ ...route, enabled: false }, snapshot, api, context),
+    ).toBeUndefined();
+    expect(providerRouteAction(route, { ...snapshot, mode: 'file' }, api, context)).toBeUndefined();
+  },
+);
+
+it('separates reconnect from Add device on the same ready shared route', async () => {
+  const state = sharedSnapshot('ready');
+  const { api, context } = providerFixture(state);
+  const view = providerRouteAction(route, state, api, context)!;
   document.body.append(view);
-  expect(view.querySelector('summary')).toHaveTextContent('Add device');
-  view.open = true;
-  context.protectToken(true);
-  await click(view, 'Create device launcher');
-  expect(api.setupClaude).not.toHaveBeenCalled();
-  context.protectToken(false);
-  await click(view, 'Create device launcher');
-  await waitFor(() => expect(api.setupClaude).toHaveBeenCalledExactlyOnceWith(7, route.name));
-  expect(providerRouteAction({ ...route, enabled: false }, state, api, context)).toBeUndefined();
-  expect(providerRouteAction(route, { ...state, mode: 'file' }, api, context)).toBeUndefined();
+  await click(view, 'Reconnect');
+  await waitFor(() =>
+    expect(getByLabelText(view, 'Operator sign-in launcher command')).toBeVisible(),
+  );
+  expect(api.setupNative).toHaveBeenCalledExactlyOnceWith('claude', 7, route.name, 'connect');
+  expect(queryByRole(view, 'button', { name: 'Add device' })).toBeNull();
+  await click(view, 'I saved it — dismiss');
+  await waitFor(() => expect(context.hasProtectedToken!()).toBe(false));
+  await click(view, 'Add device');
+  await waitFor(() => expect(getByLabelText(view, 'Launcher command')).toBeVisible());
+  expect(api.setupNative).toHaveBeenNthCalledWith(2, 'claude', 7, route.name);
+  expect(view).toHaveTextContent('with an updated term-llm');
+  expect(view).toHaveTextContent('does not open a browser');
+  expect(queryByLabelText(view, 'Operator sign-in launcher command')).toBeNull();
 });
 
 it('keeps clearing all Claude setup separate and requires confirmation', async () => {
   const state = snapshot(configured);
   const { api, context, refresh } = providerFixture(state);
-  const view = clearClaudeSetup(state, api, context);
+  const view = clearNativeSetup(claudeProvider, state, api, context);
   document.body.append(view);
   const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
   fireEvent.click(view);
-  expect(api.clearClaude).not.toHaveBeenCalled();
+  expect(api.clearNative).not.toHaveBeenCalled();
   fireEvent.click(view);
   await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   expect(confirm).toHaveBeenCalledWith(
     expect.stringContaining('Other providers and your normal Claude setup are unchanged'),
   );
-  expect(api.clearClaude).toHaveBeenCalledExactlyOnceWith(7);
+  expect(api.clearNative).toHaveBeenCalledExactlyOnceWith('claude', 7);
 });
 
-it('uses the revisioned endpoint with CSRF, never URL tokens or account/pairing APIs', async () => {
-  const connection = {
-    revision: 8,
-    url: 'https://proxy.example/native/',
-    token: 'scoped-canary',
-    caller_id: 'caller',
-  };
-  const fetcher = vi
-    .fn<typeof fetch>()
-    .mockResolvedValueOnce(new Response(JSON.stringify({ csrf: 'csrf' })))
-    .mockResolvedValueOnce(new Response(JSON.stringify(connection)))
-    .mockResolvedValueOnce(new Response(null, { status: 204 }));
-  const api = new ProxyClient(fetcher);
-  await api.login('admin');
-  expect(await api.setupClaude(7)).toEqual(connection);
-  await api.clearClaude(8);
-  expect(fetcher.mock.calls.slice(1)).toEqual([
-    [
-      '/_proxy/api/claude/setup',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({ revision: 7 }),
-        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf' }),
-        credentials: 'same-origin',
-        cache: 'no-store',
-      }),
-    ],
-    [
-      '/_proxy/api/claude/setup',
-      expect.objectContaining({
-        method: 'DELETE',
-        body: JSON.stringify({ revision: 8 }),
-        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf' }),
-      }),
-    ],
-  ]);
-});
+it.each(['claude', 'agy'] as const)(
+  'uses the revisioned %s endpoint with CSRF and no URL tokens',
+  async (launcher) => {
+    const connection = {
+      revision: 8,
+      url: 'https://proxy.example/native/',
+      token: 'scoped-canary',
+      caller_id: 'caller',
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ csrf: 'csrf' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify(connection)))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const api = new ProxyClient(fetcher);
+    await api.login('admin');
+    expect(await api.setupNative(launcher, 7, route.name)).toEqual(connection);
+    await api.clearNative(launcher, 8);
+    expect(fetcher.mock.calls.slice(1)).toEqual([
+      [
+        `/_proxy/api/${launcher}/setup`,
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ revision: 7, route: route.name }),
+          headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf' }),
+          credentials: 'same-origin',
+          cache: 'no-store',
+        }),
+      ],
+      [
+        `/_proxy/api/${launcher}/setup`,
+        expect.objectContaining({
+          method: 'DELETE',
+          body: JSON.stringify({ revision: 8 }),
+          headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf' }),
+        }),
+      ],
+    ]);
+  },
+);
+
+it.each(['claude', 'agy'] as const)(
+  'sends shared_action only for %s operator setup',
+  async (launcher) => {
+    const connection = {
+      revision: 8,
+      url: 'https://proxy.example/native/',
+      token: 'scoped',
+      caller_id: 'id',
+    };
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => Response.json(connection));
+    const api = new ProxyClient(fetcher);
+    await api.setupNative(launcher, 7, undefined, 'create');
+    await api.setupNative(launcher, 8, route.name, 'connect');
+    await api.setupNative(launcher, 9, route.name);
+    expect(
+      fetcher.mock.calls.map(([url, request]) => [
+        url,
+        request?.method,
+        JSON.parse(String(request?.body)),
+      ]),
+    ).toEqual([
+      [`/_proxy/api/${launcher}/setup`, 'POST', { revision: 7, shared_action: 'create' }],
+      [
+        `/_proxy/api/${launcher}/setup`,
+        'POST',
+        { revision: 8, route: route.name, shared_action: 'connect' },
+      ],
+      [`/_proxy/api/${launcher}/setup`, 'POST', { revision: 9, route: route.name }],
+    ]);
+  },
+);
 
 it('safely quotes native command arguments and literal YAML, without API-key examples', () => {
-  expect(claudeLauncher("https://proxy.test/o'connor/", "scope'$x;echo unsafe")).toBe(
+  expect(
+    nativeLauncher(
+      claudeProvider,
+      "https://proxy.test/o'connor/",
+      "scope'$x;echo unsafe",
+      'shared-worker',
+    ),
+  ).toBe(
     "term-llm proxy run claude --url 'https://proxy.test/o'\\''connor/' --token 'scope'\\''$x;echo unsafe'",
   );
-  expect(claudeProviderYAML("https://proxy.test/o'connor/", "scope'token")).toBe(
+  expect(nativeProviderYAML(claudeProvider, "https://proxy.test/o'connor/", "scope'token")).toBe(
     "providers:\n  claude-bin:\n    proxy:\n      url: 'https://proxy.test/o''connor/'\n      token: 'scope''token'\n",
   );
-  expect(isClaudeRoute({ ...other, name: 'claude' }, snapshot(configured))).toBe(false);
+  expect(routeNativeProvider({ ...other, name: 'claude' }, snapshot(configured))).toBeUndefined();
 });
 
-it('uses native Claude examples and unchanged curl examples for mixed generic Clients grants', async () => {
-  const { root, api } = setup(snapshot({ ...configured, routes: [route, other] }));
-  vi.spyOn(api, 'createCaller').mockResolvedValue({
+const clientProviders = [
+  { id: 'claude-plan', label: 'Claude Code', routes: [route.name] },
+  { id: 'openai-api', label: 'OpenAI API', routes: [other.name] },
+];
+
+it('uses a native Claude launcher and curl examples for mixed provider approvals', async () => {
+  const { root, api } = setup(
+    snapshot({ ...sharedSnapshot('ready'), routes: [route, other], providers: clientProviders }),
+  );
+  const create = vi.spyOn(api, 'createProviderCaller').mockResolvedValue({
     token: 'generic-scoped-canary',
     caller: {
       id: 'mixed',
@@ -284,9 +453,10 @@ it('uses native Claude examples and unchanged curl examples for mixed generic Cl
   await click(root, 'Clients');
   await click(root, 'New client');
   fireEvent.input(getByLabelText(root, 'Client name'), { target: { value: 'mixed' } });
-  fireEvent.click(getByLabelText(root, route.name));
-  fireEvent.click(getByLabelText(root, other.name));
+  fireEvent.click(getByRole(root, 'checkbox', { name: 'Claude Code' }));
+  fireEvent.click(getByRole(root, 'checkbox', { name: 'OpenAI API' }));
   await click(root, 'Create client');
+  expect(create).toHaveBeenCalledExactlyOnceWith('mixed', ['claude-plan', 'openai-api'], 7);
   await waitFor(() => expect(getByLabelText(root, 'Launcher command')).toBeVisible());
   expect((getByLabelText(root, 'Launcher command') as HTMLTextAreaElement).value).toContain(
     "--token 'generic-scoped-canary'",
@@ -298,4 +468,140 @@ it('uses native Claude examples and unchanged curl examples for mixed generic Cl
   expect(root.textContent).toContain(
     'For curl examples, set TOKEN in your shell to this client token, not the administrator token.',
   );
+});
+
+it.each(
+  [
+    { account, route, label: 'Claude Code', launcher: 'claude' },
+    { account: agyAccount, route: agyRoute, label: 'Antigravity', launcher: 'agy' },
+  ].flatMap((provider) =>
+    ['legacy', 'needs_login', 'refreshing', 'ready', 'disabled'].map((state) => ({
+      ...provider,
+      state,
+    })),
+  ),
+)(
+  'only approves $label for client launchers after operator sign-in ($state)',
+  async ({ account, route, label, launcher, state }) => {
+    const ready = state === 'ready';
+    const { root, api } = setup(
+      snapshot({
+        accounts: [
+          {
+            ...account,
+            auth_mode: state === 'legacy' ? 'vault' : 'shared_vault',
+            state: state === 'legacy' ? 'native_login' : state === 'disabled' ? 'ready' : state,
+          },
+        ],
+        routes: [{ ...route, enabled: state !== 'disabled' }, other],
+        providers: [{ id: 'native', label, routes: [route.name] }, clientProviders[1]],
+        callers: [caller],
+      }),
+    );
+    const create = vi.spyOn(api, 'createProviderCaller').mockResolvedValue({
+      token: 'shared-worker-canary',
+      caller: {
+        ...caller,
+        id: 'new-client',
+        name: 'Worker',
+        grants: [ready ? route.name : other.name],
+      },
+    });
+    await click(root, 'Clients');
+    await click(root, 'New client');
+    const native = getByRole(root, 'checkbox', {
+      name: ready ? label : `${label} (shared subscription not ready)`,
+    });
+    const openAI = getByRole(root, 'checkbox', { name: 'OpenAI API' });
+    expect(openAI).toBeEnabled();
+    if (ready) expect(native).toBeEnabled();
+    else expect(native).toBeDisabled();
+
+    fireEvent.input(getByLabelText(root, 'Client name'), { target: { value: 'Worker' } });
+    fireEvent.click(ready ? native : openAI);
+    await click(root, 'Create client');
+    expect(create).toHaveBeenCalledExactlyOnceWith('Worker', [ready ? 'native' : 'openai-api'], 7);
+    await waitFor(() => expect(getByLabelText(root, 'Client token')).toBeVisible());
+    expect(queryByLabelText(root, 'Operator sign-in launcher command')).toBeNull();
+    if (ready) {
+      expect(getByLabelText(root, 'Launcher command')).toHaveValue(
+        `term-llm proxy run ${launcher} --url '${location.origin + route.local_prefix}' --token 'shared-worker-canary'`,
+      );
+      expect(root).toHaveTextContent('does not open a browser');
+    } else {
+      expect(queryByLabelText(root, 'Launcher command')).toBeNull();
+      expect(root.querySelector('pre')).toHaveTextContent('/openai/');
+    }
+  },
+);
+
+it('describes removing a shared grant without signing the subscription out', async () => {
+  const { root } = setup(sharedSnapshot('ready'));
+  const manage = await waitFor(() => getByText(root, 'Manage', { selector: 'summary' }));
+  fireEvent.click(manage);
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  await click(root, `Remove ${caller.name}’s access to ${route.name}`);
+  expect(confirm).toHaveBeenCalledWith(
+    expect.stringContaining('The shared Claude sign-in and other clients’ access are unchanged.'),
+  );
+});
+
+it('creates a shared Antigravity route and shows an operator-only login command', async () => {
+  const { root, api } = setup(snapshot({ presets: [agyPreset] }));
+  await click(root, 'Add provider');
+  await click(root, 'Antigravity personal subscription');
+  expect(root).toHaveTextContent('Personal subscriptions only, not Enterprise.');
+  expect(root).toHaveTextContent('macOS credential isolation has not been verified');
+  expect(queryByRole(root, 'button', { name: 'Connect new account' })).toBeNull();
+  expect(queryByRole(root, 'button', { name: 'Create route & get launcher' })).toBeNull();
+  await click(root, 'Create shared route & get sign-in launcher');
+  const command = await waitFor(() => getByLabelText(root, 'Operator sign-in launcher command'));
+  expect(api.setupNative).toHaveBeenCalledExactlyOnceWith('agy', 7, undefined, 'create');
+  expect(command).toHaveValue(
+    "term-llm proxy run agy --url 'https://proxy.example/native/' --token 'scoped-canary-1' -- acp --login",
+  );
+  expect(queryByLabelText(root, 'Provider YAML')).toBeNull();
+});
+
+it('signs in and adds workers to the same shared Antigravity route without sending workers through login', async () => {
+  const shared: ProxyAccount = { ...agyAccount, auth_mode: 'shared_vault', state: 'needs_login' };
+  const state = snapshot({ accounts: [account, shared], routes: [route, agyRoute] });
+  const { api, context, refresh } = providerFixture(state);
+  const pending = providerRouteAction(agyRoute, state, api, context)!;
+  document.body.append(pending);
+  expect(routeSummary(agyRoute, state).status).toBe('Shared Antigravity sign-in needed');
+  expect(pending.querySelector('details')).toBeNull();
+  expect(queryByRole(pending, 'button', { name: 'Add device' })).toBeNull();
+  await click(pending, 'Get operator sign-in launcher');
+  expect(api.setupNative).toHaveBeenCalledExactlyOnceWith('agy', 7, agyRoute.name, 'connect');
+  expect(getByLabelText(pending, 'Operator sign-in launcher command')).toHaveValue(
+    "term-llm proxy run agy --url 'https://proxy.example/native/' --token 'scoped-canary-1' -- acp --login",
+  );
+  await click(pending, 'I saved it — dismiss');
+  await waitFor(() => expect(context.hasProtectedToken!()).toBe(false));
+  expect(refresh).toHaveBeenCalledWith(agyRoute.name);
+  pending.remove();
+
+  const ready = { ...state, accounts: [account, { ...shared, state: 'ready' }], revision: 8 };
+  expect(routeSummary(agyRoute, ready).status).toBe('Shared Antigravity subscription ready');
+  const view = providerRouteAction(agyRoute, ready, api, context)!;
+  document.body.append(view);
+  await click(view, 'Add device');
+  expect(api.setupNative).toHaveBeenNthCalledWith(2, 'agy', 8, agyRoute.name);
+  expect(getByLabelText(view, 'Launcher command')).toHaveValue(
+    "term-llm proxy run agy --url 'https://proxy.example/native/' --token 'scoped-canary-1'",
+  );
+  expect(getByLabelText(view, 'Provider YAML')).toHaveValue(
+    "providers:\n  agy-bin:\n    proxy:\n      url: 'https://proxy.example/native/'\n      token: 'scoped-canary-1'\n",
+  );
+  expect(view.querySelector('details')).toBeNull();
+  await click(view, 'I saved it — dismiss');
+  await waitFor(() => expect(context.hasProtectedToken!()).toBe(false));
+  const clear = clearNativeSetup(agyProvider, ready, api, context);
+  document.body.append(clear);
+  expect(clear).toHaveAccessibleName('Clear all Antigravity setup');
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  fireEvent.click(clear);
+  await waitFor(() => expect(api.clearNative).toHaveBeenCalledExactlyOnceWith('agy', 8));
+  expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Other providers'));
 });

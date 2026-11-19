@@ -1,5 +1,6 @@
 import type { ProxyPreset, ProxyRoute, ProxyState } from '../src/api/proxy-client';
 import { button, card, el } from './dom';
+import { nativeProvider } from './native';
 import { routeRules } from './route-rules';
 
 const featured = ['claude-code', 'chatgpt'];
@@ -18,8 +19,8 @@ export function matchRoutePreset(route: ProxyRoute, state: ProxyState): ProxyPre
   const presets = state.presets ?? [];
   const rules = routeRules(route);
   const kind = state.accounts?.find((account) => account.name === route.account)?.kind;
-  if (kind === 'claude-code') return presets.find((preset) => preset.account_kind === kind);
-  return presets.find((preset) => {
+  if (nativeProvider(kind)) return presets.find((preset) => preset.account_kind === kind);
+  const matches = presets.filter((preset) => {
     if (kind ? preset.account_kind !== kind : !!preset.account_kind !== !!route.account)
       return false;
     if (!rules.length)
@@ -35,6 +36,7 @@ export function matchRoutePreset(route: ProxyRoute, state: ProxyState): ProxyPre
       )
     );
   });
+  return matches.find((preset) => preset.id === route.name) ?? matches[0];
 }
 
 // Group headings already say "plan" or "API", so the picker drops the suffix.
@@ -50,7 +52,8 @@ const groups: [NonNullable<ProxyPreset['group']>, string][] = [
 ];
 
 const hints: Record<string, string> = {
-  'claude-code': 'Sign in on each device',
+  'claude-code': 'Sign in once, then add devices',
+  'agy-bin': 'Sign in once on Linux, then add devices',
   chatgpt: 'Includes dictation, embeddings and live',
   grok: 'Includes Grok CLI',
   gemini: 'Includes Live',
@@ -156,7 +159,7 @@ export function routePresetPicker(
   custom.className = 'route-preset-custom';
   const footer = el('div', el('span', 'Not listed?'), custom);
   footer.className = 'route-picker-footer';
-  const picker = card('Add a route', grid, empty, footer);
+  const picker = card('Add a provider', grid, empty, footer);
   picker.classList.add('route-picker');
   const heading = picker.querySelector('h2')!;
   const header = el('div');

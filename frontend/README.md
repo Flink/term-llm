@@ -127,38 +127,42 @@ configuration, not a credential store. Administrator tokens, secret values and
 client tokens are never persisted **in browser storage**; the server does store
 secrets, in plaintext at rest.
 
-The compact **Claude Code** card appears before generic route onboarding. **Set up
-Claude** creates its route, internal native slot and scoped client atomically via
-`POST /_proxy/api/claude/setup` with `{ revision }`, without probing the provider.
-The response `{ url, token, caller_id, revision }` is shown once as a safely quoted native
-launcher command; copying and trying that command needs no config-file edit.
-**Optional term-llm integration** exposes copyable `providers.claude-bin.proxy` YAML
-with the same scoped proxy token, never a real Claude credential. Neither output
-is stored in browser storage or URLs. State reconciliation preserves these one-time
-details, and navigation/refresh/sign-out guard against accidental dismissal.
+**Providers → Add provider** uses shared subscriptions for Claude Code and
+personal Antigravity. **Create shared route & get sign-in launcher** posts
+`{ revision, shared_action: "create" }` to `/_proxy/api/claude/setup` or
+`/_proxy/api/agy/setup`. **Manage → Get operator sign-in launcher** or
+**Reconnect** posts `{ revision, route, shared_action: "connect" }` to get a
+private operator launcher for an existing shared route. The operator signs in
+once and refreshes the UI. Only the Antigravity operator command appends
+`-- acp --login`.
 
-An enabled Claude route granted to an active client offers **Create another
-connection**, not token retrieval. Partial or disabled legacy setups offer **Set up
-Claude**. Any Claude resources enable **Clear Claude setup**, also available
-directly beside the one-time command.
-Clearing never requires claiming the token was saved. Confirmed
-`DELETE /_proxy/api/claude/setup` with `{ revision }`
-removes all Claude routes, slots, saved proxy sign-ins and Claude access. Claude-only
-clients are revoked; mixed clients retain other route grants. Revoked client rows
-may remain for audit. Other providers are untouched. Your normal Claude setup stays
-unchanged. The setup response revision is captured before the secondary state
-read so immediate clear still works if that read fails. Failed or cancelled clears retain the one-time
-details; a completed clear erases and unprotects them. Both mutations require
-exactly one fresh passkey assertion in passkey mode; conflicts refresh state without replaying the write. File-managed setups
-explain that they are read-only and expose no Claude mutation controls.
+**Manage → Add device** posts `{ revision, route }` to issue a separately
+revocable worker launcher, never to retrieve an existing token. It is available
+only for enabled `shared_vault` routes in state `ready`. Workers do not sign in
+or receive vendor credentials. They can copy optional `providers.claude-bin.proxy`
+or `providers.agy-bin.proxy` YAML; operator launchers never show worker YAML.
+Responses `{ url, token, caller_id, revision }` are shown once with a safely
+quoted command and are not persisted in browser storage or page URLs.
 
-Claude is excluded from the generic provider preset/editor and **Other provider accounts**
-maintenance UI, including existing manually configured routes classified by their
-account's `claude-code` kind. The generic four-step checklist is suppressed when
-only Claude is configured; other-provider onboarding and completed-history hiding
-are unchanged. There is no browser OAuth, token paste or pairing wizard for Claude.
-**Clients** still lists scoped clients/grants; Claude connection examples use the
-native launcher, not API-key curl commands.
+Schema v8 preserves routes, client tokens, grants and existing shared Claude
+sign-ins. It converts per-device accounts to `shared_vault` with state
+`needs_login`; the operator must sign in again once for each converted account.
+The UI does not offer per-device sign-in and keeps `needs_login` and `refreshing`
+routes out of new worker access. Existing clients can still be managed.
+Every editable provider exposes a confirmed **Manage → Delete provider** action
+without nested disclosures: for route-based providers it removes every route in
+the group in one revision-checked `PUT /_proxy/api/config`, and for native
+shared providers it sends `DELETE` with `{ revision }` to remove that provider’s
+native routes, access and saved proxy sign-ins (leftover native sign-ins without
+routes retain **Clear all … setup**). It is not the same as revoking a single
+client. Normal vendor CLI profiles remain unchanged. File-managed routes expose
+no provider or native setup mutation controls.
+
+Native routes are recognized by their account kind, not their name or URL. The
+native presets use guided setup instead of the generic account editor. There is
+no browser OAuth wizard or token paste for native setup. **Clients** lists
+scoped clients and grants; ready native routes use worker launcher examples,
+not API-key curl commands.
 
 Other provider accounts retain write-only credential JSON and explicit replacement
 with fresh passkey authentication. **Manage** opens metadata and sign-out without

@@ -45,6 +45,18 @@ export function supportedEfforts(model: ModelOption | undefined): string[] {
   return ['', ...new Set((values.length ? values : EFFORTS).map(String).filter(Boolean))];
 }
 
+export function effectiveEffortForModel(model: ModelOption | undefined, effort: string): string {
+  const normalized = String(effort || '')
+    .trim()
+    .toLowerCase();
+  if (!normalized) return '';
+  const values =
+    model?.efforts ||
+    (Array.isArray(model?.reasoning_efforts) ? (model.reasoning_efforts as string[]) : []);
+  if (values.length > 0 && !values.includes(normalized)) return '';
+  return normalized;
+}
+
 export function defaultProvider(providers: ModelOption[]): ModelOption | undefined {
   return providers.find((provider) => provider.is_default === true) || providers[0];
 }
@@ -112,15 +124,17 @@ export function applyRuntimeToRequest(
   providerInfo?: ModelOption,
 ): void {
   const split = splitModelEffort(selected.model, selected.effort);
+  const effort = effectiveEffortForModel(modelInfo, split.effort);
   if (split.model) body.model = split.model;
-  const differs = runtimeDiffers(active, { ...selected, model: split.model, effort: split.effort });
+  const differs = runtimeDiffers(active, { ...selected, model: split.model, effort });
   if (differs) {
     body.provider = selected.provider || active.provider || undefined;
-    if (split.effort) body.reasoning_effort = split.effort;
+    if (effort) body.reasoning_effort = effort;
     body.model_swap = { mode: 'auto', fallback: 'handover' };
   } else {
     if (active.provider || selected.provider) body.provider = active.provider || selected.provider;
-    if (split.effort || active.effort) body.reasoning_effort = split.effort || active.effort;
+    const activeEffort = effectiveEffortForModel(modelInfo, active.effort || '');
+    if (effort || activeEffort) body.reasoning_effort = effort || activeEffort;
   }
   if (supportsReasoningMode(modelInfo, selected.reasoningMode))
     body.reasoning = { mode: selected.reasoningMode === 'pro' ? 'pro' : 'standard' };

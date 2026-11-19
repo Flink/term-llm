@@ -30,6 +30,8 @@ type accountRecord struct {
 	identityVersion     int64
 	chatGPTIdentityHash string // only retained when ChatGPT credentials are cleared
 	refresh             accountRefreshState
+	claudeSharedID      string
+	claudeSharedCipher  []byte
 }
 type accountPrivate struct {
 	Credentials         accountCredentials  `json:"credentials"`
@@ -38,6 +40,8 @@ type accountPrivate struct {
 	Refresh             accountRefreshState `json:"refresh,omitempty"`
 	IdentityVersion     int64               `json:"identity_version,omitempty"`
 	ChatGPTIdentityHash string              `json:"chatgpt_identity_hash,omitempty"`
+	ClaudeSharedID      string              `json:"claude_shared_id,omitempty"`
+	ClaudeSharedCipher  []byte              `json:"claude_shared_cipher,omitempty"`
 }
 
 func (s *store) account(name string) (accountRecord, error) {
@@ -55,6 +59,7 @@ func (s *store) account(name string) (accountRecord, error) {
 	a.refresh = private.Refresh
 	a.identityVersion = private.IdentityVersion
 	a.chatGPTIdentityHash = private.ChatGPTIdentityHash
+	a.claudeSharedID, a.claudeSharedCipher = private.ClaudeSharedID, private.ClaudeSharedCipher
 	applyAccountAuthInfo(&a.AccountInfo, private)
 	return a, nil
 }
@@ -118,7 +123,7 @@ func (s *store) accountWrite(ctx context.Context, fn func(*sql.Tx) error) error 
 	return nil
 }
 func encodeAccount(a accountRecord) ([]byte, error) {
-	return json.Marshal(accountPrivate{Credentials: a.credentials, Operator: a.operator, Endpoint: a.endpoint, Refresh: a.refresh, IdentityVersion: a.identityVersion, ChatGPTIdentityHash: a.chatGPTIdentityHash})
+	return json.Marshal(accountPrivate{Credentials: a.credentials, Operator: a.operator, Endpoint: a.endpoint, Refresh: a.refresh, IdentityVersion: a.identityVersion, ChatGPTIdentityHash: a.chatGPTIdentityHash, ClaudeSharedID: a.claudeSharedID, ClaudeSharedCipher: a.claudeSharedCipher})
 }
 func insertAccount(ctx context.Context, tx *sql.Tx, a accountRecord) error {
 	var n int
@@ -145,7 +150,7 @@ func (s *store) replaceAccount(ctx context.Context, a accountRecord, expected in
 		return err
 	}
 	return s.accountWrite(ctx, func(tx *sql.Tx) error {
-		result, e := tx.Exec("UPDATE accounts SET kind=?,state=?,generation=?,expires=?,updated=?,data=? WHERE name=? AND generation=?", a.Kind, a.State, a.Generation, a.ExpiresAt, a.Updated, string(data), a.Name, expected)
+		result, e := tx.Exec("UPDATE accounts SET state=?,generation=?,expires=?,updated=?,data=? WHERE name=? AND generation=? AND kind=?", a.State, a.Generation, a.ExpiresAt, a.Updated, string(data), a.Name, expected, a.Kind)
 		if e != nil {
 			return e
 		}
@@ -156,8 +161,8 @@ func (s *store) replaceAccount(ctx context.Context, a accountRecord, expected in
 		if n != 1 {
 			return errors.New("account changed")
 		}
-		if a.Kind == "claude-code" {
-			_, e = tx.Exec("DELETE FROM claude_vault WHERE account=? AND identity<>?", a.Name, a.identityVersion)
+		if a.claudeShared() && a.State == "needs_login" {
+			_, e = tx.ExecContext(ctx, "DELETE FROM claude_shared_enrollment WHERE account=?", a.Name)
 		}
 		return e
 	})
@@ -187,10 +192,4 @@ func (s *store) interruptAccounts(ctx context.Context) error {
 
 func applyAccountAuthInfo(info *AccountInfo, private accountPrivate) {
 	info.AuthMode = accountAuthMode(info.Kind, private.Credentials)
-	if info.Kind == "claude-code" {
-		// A slot is not a shared signed-in identity. Native sessions are private
-		// to their scoped client and do not expose account-level login status.
-		info.State = "native_login"
-		info.ExpiresAt = 0
-	}
 }

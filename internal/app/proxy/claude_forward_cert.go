@@ -24,12 +24,19 @@ func (f *claudeForwarder) certificate(stateDir string) (*tls.Certificate, error)
 		leaf = f.ca.leaf
 	}
 	if leaf.Leaf == nil || !time.Now().Add(24*time.Hour).Before(leaf.Leaf.NotAfter) {
-		renewed, err := openClaudeForwardCA(stateDir)
+		renewed, err := f.nativeProvider().openCA(stateDir)
 		if err != nil || renewed.certificatePEM != f.ca.certificatePEM {
-			return nil, errors.New("Claude proxy certificate renewal unavailable")
+			return nil, errors.New("native proxy certificate renewal unavailable")
 		}
 		leaf = renewed.leaf
 	}
 	f.certificates.leaf = leaf
 	return &leaf, nil
+}
+
+func (f *claudeForwarder) nativeProvider() *nativeProxyProvider {
+	if f.provider == nil {
+		return claudeProxyProvider
+	}
+	return f.provider
 }

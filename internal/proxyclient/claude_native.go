@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -17,11 +18,15 @@ import (
 // by the retired setup-token launcher from being reused. The scoped token is
 // part of the directory name hash but is never written.
 func ClaudeNativeStateDir(root, token string) (string, error) {
+	return claudeNativePolicy.stateDir("claude-proxy-v2", root, token)
+}
+
+func (p nativePolicy) stateDir(namespace, root, token string) (string, error) {
 	canonical, err := canonicalRoot(root)
-	if err != nil {
-		return "", errors.New("Claude proxy binding root is invalid")
+	if err != nil || !safeNativeRootPath(canonical) {
+		return "", p.errorf("binding root is invalid")
 	}
-	if err := validateClaudeNativeToken(token); err != nil {
+	if err := p.validateToken(token); err != nil {
 		return "", err
 	}
 	cache, err := os.UserCacheDir()
@@ -29,34 +34,56 @@ func ClaudeNativeStateDir(root, token string) (string, error) {
 		return "", errors.New("could not locate the private application cache directory")
 	}
 	sum := sha256.Sum256([]byte(canonical + "\x00" + token))
-	return filepath.Join(cache, "term-llm", "claude-proxy-v2", hex.EncodeToString(sum[:16])), nil
+	return filepath.Join(cache, "term-llm", namespace, hex.EncodeToString(sum[:16])), nil
 }
 
-// PrepareClaudeNativeEnvironment prepares the process-local environment for a
-// native Claude client behind a Claude-only TLS-intercepting credential proxy.
-// It fetches the proxy's public v2 CA and proxy origin from the binding root,
-// stores the CA below stateDir with owner-only permissions, pins the isolated
-// Claude profile to claude.ai subscription login, and returns env with
-// competing vendor credentials, federation/profile state, cloud/auth-helper
-// switches and ambient proxy settings removed. Unrelated entries are preserved.
-//
-// No vendor OAuth token is injected: the native client signs in normally
-// through platform.claude.com and stores only the proxy's placeholder in the
-// term-managed CLAUDE_CONFIG_DIR/ANTHROPIC_CONFIG_DIR. The returned environment
-// trusts the proxy CA only for this process (through NODE_EXTRA_CA_CERTS); it
-// never installs trust in the operating system and never falls back to a direct
-// vendor credential. The caller owns stateDir and must keep it private.
+// PrepareClaudeNativeEnvironment prepares an environment for the v2 operator
+// login flow. New launches should use PrepareClaudeNativeCommand so they also
+// support shared-worker metadata that requires a credential descriptor.
 func PrepareClaudeNativeEnvironment(ctx context.Context, root, token, stateDir string, env []string) ([]string, error) {
+	bootstrap, err := fetchClaudeBootstrap(ctx, root, token, stateDir)
+	if err != nil {
+		return nil, err
+	}
+	if bootstrap.claudeAccess.placeholder != "" {
+		return nil, errors.New("Claude proxy shared access requires command-aware preparation")
+	}
+	return prepareClaudeNativeEnv(env, bootstrap, token, stateDir)
+}
+
+// PrepareClaudeNativeCommand replaces the child environment with scoped proxy
+// routing, a process-local CA, and per-binding Claude configuration. Shared
+// worker metadata also supplies a scoped access placeholder; neither a vendor
+// OAuth token nor a refresh token is installed. If cleanup is non-nil, the
+// caller must invoke it after the launch attempt (including on failure).
+func PrepareClaudeNativeCommand(ctx context.Context, cmd *exec.Cmd, root, token, stateDir string) (cleanup func(), err error) {
+	bootstrap, err := fetchClaudeBootstrap(ctx, root, token, stateDir)
+	if err != nil {
+		return nil, err
+	}
+	return prepareClaudeNativeCommand(cmd, bootstrap, token, stateDir)
+}
+
+func fetchClaudeBootstrap(ctx context.Context, root, token, stateDir string) (*nativeBootstrap, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if strings.TrimSpace(stateDir) == "" {
 		return nil, errors.New("Claude proxy state directory is required")
 	}
-	bootstrap, err := fetchClaudeNativeBootstrap(ctx, root, token)
+	return claudeNativePolicy.fetchBootstrap(ctx, root, token)
+}
+
+func prepareClaudeNativeCommand(cmd *exec.Cmd, bootstrap *nativeBootstrap, token, stateDir string) (func(), error) {
+	env, err := prepareClaudeNativeEnv(cmd.Environ(), bootstrap, token, stateDir)
 	if err != nil {
 		return nil, err
 	}
+	cmd.Env = env
+	return bootstrap.claudeAccess.apply(cmd)
+}
+
+func prepareClaudeNativeEnv(env []string, bootstrap *nativeBootstrap, token, stateDir string) ([]string, error) {
 	caPath, err := prepareClaudeNativeState(stateDir, bootstrap.CAPEM)
 	if err != nil {
 		return nil, err

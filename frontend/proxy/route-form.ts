@@ -1,7 +1,9 @@
+import { nativeProvider } from './native';
 import { accountDialog, accountStateLabel } from './accounts';
 import { secretForm } from './security';
 import { presetLabel } from './route-presets';
 import { availableCompanions, companionRoutes, companionToggle } from './route-companions';
+import { freeProviderID } from './provider-groups';
 import {
   ProxyAPIError,
   type ProxyClient,
@@ -40,6 +42,7 @@ export function routeForm(
   close: () => void,
   route?: ProxyRoute,
   preset?: ProxyPreset,
+  provider?: { id: string; routes: ProxyRoute[] },
 ): HTMLElement {
   const defaults = route ? undefined : preset;
   let suggestedName = defaults?.id ?? '';
@@ -111,7 +114,7 @@ export function routeForm(
   name.addEventListener('input', () => {
     if (!prefixEdited) local.value = name.value.trim() ? `/${name.value.trim()}/` : '';
   });
-  const upstream = input(initial.upstream, 'url');
+  const upstream = input(initial.upstream);
   upstream.required = !rulesMode;
   const header = input(initial.caller_auth.header);
   header.required = true;
@@ -177,7 +180,7 @@ export function routeForm(
     initialRules.forEach((rule, index) => {
       const path = input(rule.path_prefix);
       path.required = true;
-      const ruleUpstream = input(rule.upstream, 'url');
+      const ruleUpstream = input(rule.upstream);
       ruleUpstream.required = true;
       const node = el(
         'fieldset',
@@ -206,8 +209,9 @@ export function routeForm(
   }
   const protocolDetails = el('ul');
   protocolDetails.className = 'route-protocol-details';
-  const advanced = disclosure(
-    'Advanced',
+  // Inside Manage, avoid nested disclosures: render route fields directly.
+  const embedded = !!route || !!provider;
+  const advancedContent = [
     el(
       'p',
       'Names are permanent (letters, numbers, - or _). Local prefixes must be unique non-root paths ending in /. Upstream URLs cannot include credentials, a query or a fragment.',
@@ -223,7 +227,11 @@ export function routeForm(
       'Automatic reads reported token counts and model names from uncompressed responses for spending estimates; no content is stored by usage measurement.',
     ),
     field('Upstream request ID header (optional)', requestID),
-  );
+  ];
+  const advanced: HTMLElement = embedded
+    ? el('div', el('h4', 'Advanced settings'), ...advancedContent)
+    : disclosure('Advanced', ...advancedContent);
+  if (embedded) advanced.className = 'route-form-advanced';
   if (!rulesMode)
     advanced.append(
       field('Local client authentication header', header),
@@ -245,7 +253,7 @@ export function routeForm(
       account,
       candidates.length || !accountKind ? '' : `Connect a ${accountKind} account to continue.`,
     );
-    if (accountKind && accountKind !== 'claude-code')
+    if (accountKind && !nativeProvider(accountKind))
       accountField.append(
         button('Connect new account', () =>
           accountDialog({ state, api, context }, formRoot, accountKind, (stored) => {
@@ -265,7 +273,8 @@ export function routeForm(
   if (rulesMode) technical.append(rulesBlock);
   (preset ? advanced : form).append(httpLabel);
   if (route) advanced.append(enabledLabel);
-  if (preset && !rulesMode && !upstream.value) advanced.open = true;
+  if (preset && !rulesMode && !upstream.value && advanced instanceof HTMLDetailsElement)
+    advanced.open = true;
   // Native validation must be able to report errors even on controls inside
   // a closed Advanced panel (or its subpath editor).
   form.addEventListener(
@@ -320,10 +329,15 @@ export function routeForm(
   let sharedSecret =
     keyRules.flatMap((row) => Object.values(row.source.set_headers)).find((header) => header.secret)
       ?.secret ?? '';
+  function isSRVUpstream(value: string): boolean {
+    return /^srv:\/\/_([a-z0-9-]+)\._tcp\.([a-z0-9-]+(?:\.[a-z0-9-]+)*\.?)(?:\/[^?#]*)?$/i.test(
+      value,
+    );
+  }
   function sharedCredentialOrigins(): string[] {
     const origins = keyRules.flatMap((row) => {
       try {
-        return [new URL(row.upstream.value).origin];
+        return isSRVUpstream(row.upstream.value) ? [] : [new URL(row.upstream.value).origin];
       } catch {
         return [];
       }
@@ -332,8 +346,11 @@ export function routeForm(
   }
   function refreshSharedSecret() {
     const origins = sharedCredentialOrigins();
-    const matching = state.secrets.filter((secret) =>
-      origins.some((origin) => sameOrigin(secret.origin, origin)),
+    const hasSRVRule = keyRules.some((row) => isSRVUpstream(row.upstream.value));
+    const allKeyRulesAreSRV =
+      hasSRVRule && keyRules.every((row) => isSRVUpstream(row.upstream.value));
+    const matching = state.secrets.filter(
+      (secret) => allKeyRulesAreSRV || origins.some((origin) => sameOrigin(secret.origin, origin)),
     );
     sharedSecretSelect.replaceChildren(
       ...[['', 'Choose secret'], ...matching.map((secret) => [secret.name, secret.name])].map(
@@ -349,8 +366,10 @@ export function routeForm(
     sharedSecretSelect.value = sharedSecret;
     sharedSecretSelect.required = keyRules.length > 0;
     sharedSecretOrigins.textContent = origins.length
-      ? `Shared upstream origin: ${origins.join(', ')}`
-      : 'Enter a valid upstream URL for every subpath rule.';
+      ? `Shared upstream origin: ${origins.join(', ')}${hasSRVRule ? '. The server validates SRV targets.' : ''}`
+      : hasSRVRule
+        ? 'SRV upstream: bind secrets to the discovered HTTPS host and port; the server validates.'
+        : 'Enter a valid upstream URL for every subpath rule.';
     const divergent = [
       ...new Set(
         keyRules
@@ -371,10 +390,23 @@ export function routeForm(
     sharedSecretMissing.replaceChildren();
     if (origins.length && !matching.length)
       sharedSecretMissing.append(el('p', `No secret is bound to ${origins.join(' or ')} yet.`));
+    if (allKeyRulesAreSRV && !matching.length)
+      sharedSecretMissing.append(
+        el('p', 'No stored secrets yet. Add a key for the resolved origin.'),
+      );
   }
   if (rulesMode && keyRules.length) {
     const addKey = button('Add API key', () => {
       const origin = sharedCredentialOrigins()[0];
+      if (!origin && keyRules.some((row) => isSRVUpstream(row.upstream.value))) {
+        openSecretDialog('', `${(name.value || 'upstream').slice(0, 56)}-key`, (stored) => {
+          sharedSecret = stored;
+          refreshSharedSecret();
+          rows.forEach((row) => row.update());
+          previewRoute();
+        });
+        return;
+      }
       if (!origin) {
         context.announce('Enter a valid upstream URL for the subpath rules first.');
         return;
@@ -408,8 +440,10 @@ export function routeForm(
     });
   }
   function upstreamOrigin() {
+    const value = rulesMode ? (ruleRows[0]?.upstream.value ?? '') : upstream.value;
+    if (isSRVUpstream(value)) return '';
     try {
-      return new URL(rulesMode ? (ruleRows[0]?.upstream.value ?? '') : upstream.value).origin;
+      return new URL(value).origin;
     } catch {
       return '';
     }
@@ -513,7 +547,13 @@ export function routeForm(
         );
       },
     });
-    dialog.append(form, notice);
+    const srvBindingHelp = !origin
+      ? el(
+          'p',
+          'For SRV upstreams, bind this secret to the discovered concrete HTTPS target and port, never to the srv:// reference. The server checks the resolved origin.',
+        )
+      : undefined;
+    dialog.append(form, ...(srvBindingHelp ? [srvBindingHelp] : []), notice);
     dialog.addEventListener('cancel', (event) => {
       if (form.getAttribute('aria-busy') === 'true') event.preventDefault();
     });
@@ -580,7 +620,9 @@ export function routeForm(
     }
     const update = () => {
       const origin = upstreamOrigin();
-      const matching = state.secrets.filter((s) => sameOrigin(s.origin, origin));
+      const matching = state.secrets.filter((s) =>
+        origin ? sameOrigin(s.origin, origin) : isSRVUpstream(upstream.value),
+      );
       selected = secret.value || selected;
       secret.replaceChildren(
         ...[['', 'Choose secret'], ...matching.map((s) => [s.name, s.name])].map(
@@ -613,14 +655,22 @@ export function routeForm(
               : `No secret is bound to ${origin} yet.`,
           ),
         );
-      if (useSecret && origin && (primary || !matching.length))
+      if (
+        useSecret &&
+        (origin || isSRVUpstream(upstream.value)) &&
+        (!matching.length || isSRVUpstream(upstream.value))
+      )
         missing.append(
           button('Add API key', () =>
-            openSecretDialog(origin, `${(name.value || 'upstream').slice(0, 56)}-key`, (stored) => {
-              selected = stored;
-              secret.value = '';
-              rows.forEach((row) => row.update());
-            }),
+            openSecretDialog(
+              isSRVUpstream(upstream.value) ? '' : origin,
+              `${(name.value || 'upstream').slice(0, 56)}-key`,
+              (stored) => {
+                selected = stored;
+                secret.value = '';
+                rows.forEach((row) => row.update());
+              },
+            ),
           ),
         );
       previewRoute();
@@ -677,6 +727,61 @@ export function routeForm(
   }
   advanced.append(el('h3', 'Preview'), preview);
   form.append(advanced);
+  let clientConfigYAML: HTMLTextAreaElement | undefined;
+  if (!route && !provider && !rulesMode) {
+    clientConfigYAML = el('textarea');
+    clientConfigYAML.className = 'provider-config-yaml';
+    clientConfigYAML.rows = 8;
+    clientConfigYAML.spellcheck = false;
+    clientConfigYAML.placeholder = [
+      'type: vllm',
+      'model: deepseek-ai/DeepSeek-V4-Flash',
+      'context_window: 200000',
+      'max_output_tokens: 50000',
+      'vllm_thinking_param: thinking',
+    ].join('\n');
+    const importNotice = el('p');
+    importNotice.className = 'provider-config-notice';
+    importNotice.hidden = true;
+    const importButton = button('Import pasted term-llm YAML', () => {
+      void context.run(async () => {
+        const raw = clientConfigYAML?.value ?? '';
+        if (!raw.trim()) {
+          throw new Error('Paste a term-llm provider YAML block into Client config first.');
+        }
+        const parsed = await api.parseProviderConfig(raw);
+        if (parsed.name) {
+          name.value = parsed.name;
+          if (!prefixEdited) local.value = `/${parsed.name}/`;
+        }
+        if (parsed.upstream) {
+          upstream.value = parsed.upstream;
+          if (parsed.upstream.toLowerCase().startsWith('http:')) http.checked = false;
+          rows.forEach((r) => r.update());
+        }
+        if (clientConfigYAML) clientConfigYAML.value = parsed.config_yaml;
+        const stripped = parsed.stripped?.length
+          ? ` Stripped local-only fields: ${parsed.stripped.join(', ')}.`
+          : '';
+        importNotice.textContent = `Imported${parsed.name ? ` ${parsed.name}` : ''}.${stripped}${parsed.upstream ? ' Configure or select the upstream API key above.' : ''}`;
+        importNotice.hidden = false;
+        previewRoute();
+        context.announce(importNotice.textContent);
+      }, importButton);
+    });
+    const clientConfigDisclosure = disclosure(
+      'Client config (term-llm)',
+      field(
+        'Provider YAML (optional)',
+        clientConfigYAML,
+        'Discovered automatically by term-llm clients listing this provider under proxy.providers. Paste a full local term-llm provider block and click Import pasted term-llm YAML to pre-fill name, upstream URL and client config.',
+      ),
+      importNotice,
+      actions(importButton),
+    );
+    clientConfigDisclosure.className = 'provider-config-create';
+    form.append(clientConfigDisclosure);
+  }
   if (route) {
     const affected = state.callers
       .filter((c) => !c.revoked && c.grants.includes(route.name))
@@ -694,7 +799,7 @@ export function routeForm(
     form,
     context,
     async () => {
-      if (!rulesMode) {
+      if (!rulesMode && !isSRVUpstream(upstream.value)) {
         const url = new URL(upstream.value);
         if (
           !['https:', 'http:'].includes(url.protocol) ||
@@ -741,18 +846,20 @@ export function routeForm(
       if (rulesMode) {
         const seen = new Set<string>();
         for (const row of ruleRows) {
-          const url = new URL(row.upstream.value);
+          const srv = isSRVUpstream(row.upstream.value);
+          const url = srv ? undefined : new URL(row.upstream.value);
           if (
-            !['https:', 'http:'].includes(url.protocol) ||
-            url.username ||
-            url.password ||
-            url.hash ||
-            url.search
+            !srv &&
+            (!['https:', 'http:'].includes(url!.protocol) ||
+              url!.username ||
+              url!.password ||
+              url!.hash ||
+              url!.search)
           )
             throw new Error(
-              'Use an HTTP(S) upstream URL for every subpath rule, without credentials, a query or a fragment.',
+              'Use an HTTP(S) upstream URL or valid SRV reference for every subpath rule, without credentials, a query or a fragment.',
             );
-          if (url.protocol === 'http:' && !http.checked)
+          if (url?.protocol === 'http:' && !http.checked)
             throw new Error('Explicitly allow insecure HTTP, or use HTTPS for every subpath rule.');
           const subpath = row.path.value;
           if (
@@ -774,7 +881,10 @@ export function routeForm(
           if (!secret)
             throw new Error('Select a stored secret for the subpath rules, or add one first.');
           for (const row of keyRules) {
-            if (!sameOrigin(secret.origin, new URL(row.upstream.value).origin))
+            if (
+              !isSRVUpstream(row.upstream.value) &&
+              !sameOrigin(secret.origin, new URL(row.upstream.value).origin)
+            )
               throw new Error(
                 `Subpath rules that use a key must share the stored secret's exact origin (${secret.origin}).`,
               );
@@ -799,8 +909,16 @@ export function routeForm(
             throw new Error('Header substitutions must have unique names.');
           if (row.kind.value === 'secret') {
             const secret = state.secrets.find((s) => s.name === row.secret.value);
-            if (!secret || !sameOrigin(secret.origin, new URL(upstream.value).origin))
-              throw new Error('Select a secret bound to this exact upstream origin.');
+            if (
+              !secret ||
+              (!isSRVUpstream(upstream.value) &&
+                !sameOrigin(secret.origin, new URL(upstream.value).origin))
+            )
+              throw new Error(
+                isSRVUpstream(upstream.value)
+                  ? 'Select a stored secret for this SRV upstream.'
+                  : 'Select a secret bound to this exact upstream origin.',
+              );
             setHeaders[row.header.value.trim()] = {
               secret: secret.name,
               prefix: row.prefix.value,
@@ -860,12 +978,23 @@ export function routeForm(
         return;
       const extra =
         defaults && createCompanions.checked ? companionRoutes(next, defaults, companions) : [];
-      await api.config(
-        state.revision,
-        route
-          ? state.routes.map((r) => (r === route ? next : r))
-          : [...state.routes, next, ...extra],
+      const providerID =
+        provider?.id ?? (extra.length ? freeProviderID(next.name, state) : undefined);
+      const added = [next, ...extra].map((item) =>
+        providerID ? { ...item, provider: providerID } : item,
       );
+      const configured = state.routes.map((item) => {
+        if (item === route) return next;
+        return provider?.routes.includes(item) ? { ...item, provider: provider.id } : item;
+      });
+      const rawClientYAML = clientConfigYAML?.value.trim() ?? '';
+      const targetProviderID = providerID ?? next.name;
+      const nextRoutes = route ? configured : [...configured, ...added];
+      if (rawClientYAML) {
+        await api.config(state.revision, nextRoutes, { [targetProviderID]: rawClientYAML });
+      } else {
+        await api.config(state.revision, nextRoutes);
+      }
       await context.refresh(`route:${next.name}`);
       const saved = [next, ...extra].map((r) => r.name).join(', ');
       context.announce(
@@ -899,9 +1028,13 @@ export function routeForm(
       context,
       `Delete route ${route.name}? ${affected} will lose access. Re-adding this name will not restore grants. Disable instead to keep grants. Only new requests are blocked; dispatched requests may continue.`,
     );
-    form.append(
-      disclosure('Danger zone', el('p', 'Deletion removes client grants permanently.'), remove),
+    const danger = el(
+      'div',
+      el('p', 'Deletion removes client grants permanently.'),
+      actions(remove),
     );
+    danger.className = 'route-form-danger';
+    form.append(danger);
   }
   previewRoute();
   return formRoot;

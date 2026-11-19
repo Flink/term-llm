@@ -123,7 +123,7 @@ test('Requests refreshes filtered page one without replacing unchanged rows and 
 
   await pager.getByRole('button', { name: 'Previous', exact: true }).click();
   await expect(firstRow).toBeVisible();
-  await page.getByRole('button', { name: 'Routes', exact: true }).click();
+  await page.getByRole('button', { name: 'Providers', exact: true }).click();
   const leftCount = calls.length;
   await page.clock.runFor(2500);
   expect(calls).toHaveLength(leftCount);

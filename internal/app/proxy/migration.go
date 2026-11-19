@@ -8,7 +8,7 @@ import (
 	"github.com/term-llm/term-llm/internal/sqliteutil"
 )
 
-const schemaVersion = 6
+const schemaVersion = 8
 
 const adminKeySchemaV6 = `
 CREATE UNIQUE INDEX callers_external_id ON callers(external_id) WHERE external_id != '' AND revoked = 0;
@@ -54,7 +54,10 @@ var migrations = []sqliteutil.Migration{{
 	}
 	_, err := tx.Exec(claudeVaultSchema)
 	return err
-}}, {Version: 6, Description: "admin API keys and caller provisioning metadata", Up: migrateAdminKeys},
+}}, {Version: 6, Description: "admin API keys and caller provisioning metadata", Up: migrateAdminKeys}, {Version: 7, Description: "shared Claude login enrollment", Up: func(tx sqliteutil.Executor) error {
+	_, err := tx.Exec(claudeSharedSchema)
+	return err
+}}, {Version: 8, Description: "account-owned native subscription credentials", Up: migrateSharedNativeAccounts},
 }
 
 func migrateAdminKeys(tx sqliteutil.Executor) error {
@@ -127,4 +130,19 @@ func createSchema(tx sqliteutil.Executor) error {
 		return err
 	}
 	return nil
+}
+
+// Never promote one client's credentials into a login for other clients.
+// Keep every route and grant; an operator must reconnect each converted slot.
+func migrateSharedNativeAccounts(tx sqliteutil.Executor) error {
+	if _, err := tx.Exec(`UPDATE accounts SET state='needs_login', generation=generation+1, expires=0,
+		data=json_set(json_remove(data,'$.claude_shared_cipher','$.refresh'),
+			'$.credentials',json_object('mode','shared_vault'), '$.claude_shared_id','ns_'||lower(hex(randomblob(32))),
+			'$.identity_version',coalesce(json_extract(data,'$.identity_version'),0)+1)
+		WHERE kind IN ('claude-code','agy-bin') AND
+			(coalesce(json_extract(data,'$.credentials.mode'),'')!='shared_vault' OR coalesce(json_extract(data,'$.claude_shared_id'),'')='')`); err != nil {
+		return err
+	}
+	_, err := tx.Exec("DROP TABLE claude_vault")
+	return err
 }

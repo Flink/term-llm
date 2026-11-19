@@ -135,25 +135,12 @@ func newClaudeForwardFixtureWithPolicy(t *testing.T, concurrency int, allow []st
 		}
 		return (&net.Dialer{}).DialContext(ctx, network, up.Listener.Addr().String())
 	}
-	a := accountRecord{AccountInfo: AccountInfo{Name: "claude", Kind: "claude-code", State: "native_login", Generation: 1}, credentials: accountCredentials{Mode: "vault"}}
-	if err := f.service.store.replaceAccount(context.Background(), a, 0); err != nil {
-		t.Fatal(err)
-	}
+	a, key := seedReadyClaudeShared(t, f.service, "claude", "synthetic-vendor-access", "synthetic-vendor-refresh")
 	configure(t, f.service, Config{Routes: []Route{{Name: "claude", LocalPrefix: "/claude/", Upstream: "https://" + claudeAPIHost, Enabled: true, Account: "claude", Usage: "auto", Billing: "plan", CallerAuth: Auth{Header: "X-Scoped-Key", Prefix: "Local "}, Allow: allow}}}, nil)
 	f.token = caller(t, f.service, "claude")
-	forwarder, err := f.service.claudeForwarder()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ar, principal, err := f.service.claudeForwardRouteLocked("claude", f.token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := f.service.store.claudeVaultSave(context.Background(), forwarder.ca.vaultKey, claudeForwardScope{route: ar.Name, authority: ar.authority, account: ar.Account, caller: principal.ID, identity: a.identityVersion}, claudeVaultReply{AccessToken: "synthetic-vendor-access", RefreshToken: "synthetic-vendor-refresh", TokenType: "Bearer", ExpiresIn: 3600, Scope: "user:profile user:inference"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.access, f.refresh = result.AccessToken, result.RefreshToken
+	scope := claudeSharedTestCallerScope(t, f.service, f.service.snap.routes[0], f.token)
+	f.access = claudeSharedAlias(key, a, scope, claudeProxyProvider.accessPrefix)
+	f.refresh = claudeSharedAlias(key, a, scope, claudeProxyProvider.refreshPrefix)
 
 	// Exercise the integration API without requiring the owning parent to edit
 	// server.go while this isolated backend is under construction.
@@ -164,6 +151,9 @@ func newClaudeForwardFixtureWithPolicy(t *testing.T, concurrency int, allow []st
 	}))
 	t.Cleanup(f.server.Close)
 	bootstrap := f.bootstrap(t, f.token)
+	if bootstrap.AccessPlaceholder != f.access {
+		t.Fatal("bootstrap did not emit the caller-scoped access alias")
+	}
 	f.roots = x509.NewCertPool()
 	if !f.roots.AppendCertsFromPEM([]byte(bootstrap.CertificatePEM)) {
 		t.Fatal("invalid bootstrap certificate")
@@ -172,9 +162,10 @@ func newClaudeForwardFixtureWithPolicy(t *testing.T, concurrency int, allow []st
 }
 
 type claudeForwardBootstrapReply struct {
-	CertificatePEM string `json:"certificate_pem"`
-	ProxyURL       string `json:"proxy_url"`
-	Route          string `json:"route"`
+	AccessPlaceholder string `json:"access_placeholder"`
+	CertificatePEM    string `json:"certificate_pem"`
+	ProxyURL          string `json:"proxy_url"`
+	Route             string `json:"route"`
 }
 
 func (f *claudeForwardFixture) bootstrap(t *testing.T, token string) claudeForwardBootstrapReply {
@@ -247,7 +238,12 @@ func (f *claudeForwardFixture) native(t *testing.T) (*tls.Conn, *bufio.Reader) {
 }
 func (f *claudeForwardFixture) nativeHost(t *testing.T, host, token string) (*tls.Conn, *bufio.Reader) {
 	t.Helper()
-	raw, reader, status := f.connect(t, host+":443", claudeForwardBasic("claude", token))
+	return f.nativeRouteHost(t, "claude", host, token)
+}
+
+func (f *claudeForwardFixture) nativeRouteHost(t *testing.T, route, host, token string) (*tls.Conn, *bufio.Reader) {
+	t.Helper()
+	raw, reader, status := f.connect(t, host+":443", claudeForwardBasic(route, token))
 	if status != 200 {
 		t.Fatalf("CONNECT status %d", status)
 	}
@@ -308,7 +304,7 @@ func TestClaudeForwardUsageInferenceAndOrdinaryPolicy(t *testing.T) {
 		t.Fatal("denied request dispatched", f.vendorCalls.Load())
 	}
 	records, _, err = f.service.store.records(nil, 100)
-	if err != nil || len(records) != 6 {
+	if err != nil || len(records) != 3 {
 		t.Fatal("ordinary ledger not used", len(records), err)
 	}
 	found := false
@@ -329,7 +325,7 @@ func TestClaudeForwardUsageInferenceAndOrdinaryPolicy(t *testing.T) {
 	}
 }
 
-func TestClaudeForwardPassesAPIRequestsThroughWithNativeLogin(t *testing.T) {
+func TestClaudeForwardEnforcesSharedSurfaceEvenWithoutRouteAllowlist(t *testing.T) {
 	f := newClaudeForwardFixtureWithPolicy(t, 1, nil)
 	f.api = func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -341,25 +337,33 @@ func TestClaudeForwardPassesAPIRequestsThroughWithNativeLogin(t *testing.T) {
 	}
 	conn, reader := f.native(t)
 	for _, endpoint := range []struct{ method, path string }{
-		{"GET", "/v1/mcp_servers?cursor=a%2Fb"},
-		{"POST", "/api/event_logging/v2/batch"},
-		{"POST", "/api/artifacts/mcp"},
+		{"GET", "/api/oauth/usage?fixture=a%2Fb"},
+		{"GET", "/api/claude_code/settings"},
 		{"POST", "/v1/messages"},
-		{"GET", "/api/future-endpoint"},
 	} {
 		code, body := claudeForwardNativeCall(t, conn, reader, endpoint.method, endpoint.path, claudeAPIHost, f.access, "")
 		if code != http.StatusAccepted || body != endpoint.method+" "+endpoint.path {
 			t.Fatalf("%s %s = %d %q", endpoint.method, endpoint.path, code, body)
 		}
 	}
-	if code, _ := claudeForwardNativeCall(t, conn, reader, "GET", "/v1/mcp_servers", claudeAPIHost, "invalid-placeholder", ""); code != http.StatusUnauthorized {
+	for _, endpoint := range []struct{ method, path string }{
+		{"GET", "/v1/mcp_servers?cursor=a%2Fb"},
+		{"POST", "/api/event_logging/v2/batch"},
+		{"POST", "/api/artifacts/mcp"},
+		{"GET", "/api/future-endpoint"},
+	} {
+		if code, _ := claudeForwardNativeCall(t, conn, reader, endpoint.method, endpoint.path, claudeAPIHost, f.access, ""); code != http.StatusForbidden {
+			t.Fatalf("unsupported shared endpoint %s %s: %d", endpoint.method, endpoint.path, code)
+		}
+	}
+	if code, _ := claudeForwardNativeCall(t, conn, reader, "GET", "/v1/models", claudeAPIHost, "invalid-placeholder", ""); code != http.StatusUnauthorized {
 		t.Fatalf("invalid native token = %d, want 401", code)
 	}
-	if out := call(f.service, "GET", "/claude/v1/mcp_servers", "X-Scoped-Key", f.token, nil); out.Code != http.StatusBadGateway {
+	if out := call(f.service, "GET", "/claude/v1/models", "X-Scoped-Key", f.token, nil); out.Code != http.StatusBadGateway {
 		t.Fatalf("native account used without a native session: %d", out.Code)
 	}
-	if f.vendorCalls.Load() != 5 {
-		t.Fatalf("upstream calls = %d, want 5 authenticated native requests", f.vendorCalls.Load())
+	if f.vendorCalls.Load() != 3 {
+		t.Fatalf("upstream calls = %d, want 3 authenticated native requests", f.vendorCalls.Load())
 	}
 }
 

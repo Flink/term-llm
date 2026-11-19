@@ -179,11 +179,9 @@ var ProviderModels = map[string][]ModelEntry{
 		{ID: "gpt-5.6-sol"},
 	},
 	"agy-bin": {
-		{ID: "gemini-3.6-flash-high"},
-		{ID: "gemini-3.6-flash-medium"},
-		{ID: "gemini-3.6-flash-low"},
-		{ID: "gemini-3.5-flash-high"},
-		{ID: "gemini-3.1-pro-high"},
+		{ID: "gemini-3.6-flash", ReasoningEfforts: anthropicLowHighEffortVariants},
+		{ID: "gemini-3.5-flash", ReasoningEfforts: anthropicLowHighEffortVariants},
+		{ID: "gemini-3.1-pro", ReasoningEfforts: anthropicLowHighEffortVariants},
 		{ID: "claude-sonnet-4-6"},
 		{ID: "claude-opus-4-6-thinking"},
 	},
@@ -333,7 +331,6 @@ var defaultEffortVariants = []string{"minimal", "low", "medium", "high", "xhigh"
 
 var gpt56OpenAIEffortVariants = []string{"none", "low", "medium", "high", "xhigh", "max"}
 var gpt56ChatGPTEffortVariants = []string{"low", "medium", "high", "xhigh", "max"}
-
 var claudeBinOpusEffortVariants = []string{"low", "medium", "high", "xhigh", "max"}
 var claudeBinSonnetEffortVariants = []string{"low", "medium", "high"}
 
@@ -384,9 +381,12 @@ func resolveProviderModelEntries(provider string) []ModelEntry {
 			return mergeLiveModelEntries(models, entries)
 		}
 	case "claude-bin":
-		// Claude Code reports per-model effort levels; they override the
-		// curated alias rows, which remain for models the CLI did not list.
+		// Live CLI effort levels override curated rows when cached.
 		if models := clibin.GetCachedClaudeBinModelInfos(); len(models) > 0 {
+			return mergeLiveModelEntries(models, entries)
+		}
+	case "agy-bin":
+		if models := clibin.GetCachedAgyBinModelInfos(); len(models) > 0 {
 			return mergeLiveModelEntries(models, entries)
 		}
 	}

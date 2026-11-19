@@ -147,7 +147,7 @@ func TestAgyBuildArgs(t *testing.T) {
 	p := NewAgyBinProvider("gemini-3.6-flash-high", nil)
 	args := p.buildArgs(core.Request{}, "")
 	joined := strings.Join(args, " ")
-	for _, want := range []string{"--dangerously-skip-permissions", "--disable-slash-commands", "--input-format stream-json", "--output-format stream-json", "--agent " + agyAgentName, "--model gemini-3.6-flash-high"} {
+	for _, want := range []string{"--dangerously-skip-permissions", "--disable-slash-commands", "--input-format stream-json", "--output-format stream-json", "--agent " + agyAgentName, "--model gemini-3.6-flash", "--effort high"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("args %q missing %q", joined, want)
 		}
@@ -159,6 +159,80 @@ func TestAgyBuildArgs(t *testing.T) {
 	}
 	if strings.Contains(joined, "--print-timeout") {
 		t.Fatalf("args %q cap the whole inline tool loop", joined)
+	}
+}
+
+func TestAgyBuildArgsEffortPrecedence(t *testing.T) {
+	tests := []struct {
+		name          string
+		providerModel string
+		reqModel      string
+		reqEffort     string
+		wantModel     string
+		wantEffort    string
+	}{
+		{
+			name:          "suffixed provider model splits into base and effort",
+			providerModel: "gemini-4-neon-high",
+			wantModel:     "gemini-4-neon",
+			wantEffort:    "high",
+		},
+		{
+			name:          "explicit request effort overrides provider suffix without conflict",
+			providerModel: "gemini-4-neon-high",
+			reqEffort:     "low",
+			wantModel:     "gemini-4-neon",
+			wantEffort:    "low",
+		},
+		{
+			name:          "switching to different model does not leak provider effort",
+			providerModel: "gemini-4-neon-high",
+			reqModel:      "gemini-pro-orchestrator-neon",
+			wantModel:     "gemini-pro-orchestrator-neon",
+			wantEffort:    "",
+		},
+		{
+			name:       "web UI sends base model and separate reasoning_effort",
+			reqModel:   "gemini-4-neon",
+			reqEffort:  "xhigh",
+			wantModel:  "gemini-4-neon",
+			wantEffort: "xhigh",
+		},
+		{
+			name:       "explicit effort overrides suffixed request model",
+			reqModel:   "gemini-4-neon-low",
+			reqEffort:  "xhigh",
+			wantModel:  "gemini-4-neon",
+			wantEffort: "xhigh",
+		},
+		{
+			name:       "default and auto effort omit --effort",
+			reqModel:   "gemini-4-neon",
+			reqEffort:  "default",
+			wantModel:  "gemini-4-neon",
+			wantEffort: "",
+		},
+		{
+			name:       "effort without explicit model still passes --effort",
+			reqEffort:  "high",
+			wantModel:  "",
+			wantEffort: "high",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewAgyBinProvider(tt.providerModel, nil)
+			args := p.buildArgs(core.Request{Model: tt.reqModel, ReasoningEffort: tt.reqEffort}, "")
+			if got := argFlagValue(args, "--model"); got != tt.wantModel {
+				t.Errorf("--model = %q, want %q (args=%v)", got, tt.wantModel, args)
+			}
+			if got := argFlagValue(args, "--effort"); got != tt.wantEffort {
+				t.Errorf("--effort = %q, want %q (args=%v)", got, tt.wantEffort, args)
+			}
+		})
+	}
+	if err := ValidateAgyBinModel("xhigh"); err == nil {
+		t.Fatal("ValidateAgyBinModel accepted bare effort level")
 	}
 }
 

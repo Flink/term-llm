@@ -6,8 +6,8 @@ weight: 45
 
 `term-llm serve proxy` forwards HTTP/SSE and opt-in WebSockets to fixed upstreams,
 substituting server-held credentials. It runs independently of chat and provider
-configuration. Saving routes does not probe vendors. Each client has its own route grants;
-admin sessions never authorize forwarding.
+configuration. Saving routes does not probe vendors. Each client has its own token and
+provider approvals; admin sessions never authorize forwarding.
 
 ## Quick start: local passkey administration
 
@@ -19,32 +19,69 @@ term-llm serve proxy
    passkeys bind to the hostname.
 2. Run the printed `cat` command, paste the bootstrap token, name your passkey and
    enroll. The token expires ten minutes after startup; restart if it expires.
-3. Open **Routes → Add route** and choose a preset. The preset asks for only
-   what it needs: sign in for ChatGPT, get a launcher for Claude Code, or add
-   an API key for a service like Venice.
-4. On the new route, choose **Grant access** to give an app or device access.
-   For Claude Code, use its launcher instead. Save the shown-once client token
-   privately. In an app that accepts a custom API root, use the route URL and
-   the client token, **not** the upstream credential. The **Clients** tab lets
-   you see and manage the routes a client already has access to.
+3. Open **Providers → Add provider** and choose a preset. The preset asks for only
+   what it needs: sign in for ChatGPT, [sign in once for Claude Code](#set-up-a-shared-claude-subscription),
+   [sign in once for personal Antigravity](#run-personal-antigravity-through-the-proxy),
+   or add an API key for a service like Venice.
+4. Open **Manage** on the new provider card, then choose **Approve access for**
+   followed by the provider name. That gives an app or device access to every
+   route the provider currently has. For Claude Code and Antigravity, use the
+   device launcher instead, after the shared subscription is ready. Save the
+   shown-once client token privately. In an app that accepts a custom API root,
+   use the route URL and the client token, **not** the upstream credential. The **Clients** tab lets you see and manage
+   which providers a client is approved for.
 
 The listener defaults to `127.0.0.1:8082`. Keep its state directory across restarts.
 Remote administration requires a stable HTTPS hostname and explicit enrollment.
 
-## Connect a ChatGPT subscription
+## Providers and client approvals
 
-1. Choose **Routes → Add route → ChatGPT plan**, then **Sign in to ChatGPT**.
+**Providers** groups related routes on one card. The card heading names the
+provider and is followed by one compact status. Each route line shows only the
+local prefix and any condition such as **Disabled**. The card also shows one
+approval summary. **Manage** holds the provider account, **Approve access for**
+the provider, and each route's edit, enable or disable controls plus
+provider-specific settings. Once any client is approved, including a legacy
+partial approval, that control is labeled **Manage access for** the provider.
+One connected account is shown once even when several routes use it.
+
+Client approval applies to the whole configured provider. Approving a client
+authorizes every route the provider has at that moment; it never authorizes a
+different provider or a route added later. If you add a route to the provider or
+change a route's upstream authority, access policy or credential rules, that
+route needs approval again, and the client is marked as needing approval.
+Existing clients created with per-route grants keep exactly the grants they
+already have; they are not expanded automatically. Approve the provider when you
+want those clients to cover all of its current routes. Removing approval removes
+the client's grants for the provider's current routes; its token and approvals
+for other providers stay unchanged.
+
+Grouping never widens access and does not change routing. An **OpenAI API**
+provider keeps its own API key and approval even when it targets
+`api.openai.com` like the ChatGPT OAuth embeddings route. Existing `?tab=routes`
+bookmarks still open **Providers**. Route names, URLs, and the public management
+API are unchanged and remain route-based. Existing YAML works as is; to group
+custom routes in a file, give them the same optional `provider` slug. In the UI,
+use **Manage → Add route** to add a route to an existing provider.
+
+## Global proxy settings and explicit native launch
+
+
+1. Choose **Providers → Add provider → ChatGPT**, then **Sign in to ChatGPT**.
 2. Open the OpenAI sign-in page from the proxy, enter the one-time code and
-   approve the request. Return to the proxy. The proxy stores the login and
-   creates the route; no local OAuth credential file is required. Your OpenAI
-   account must allow device-code sign-in.
-3. Choose **Grant access** on the route to authorize an app or device. A
-   successful provider sign-in does not give any new client access by itself.
+   approve the request. Return to the proxy. It stores one login and creates the
+   ChatGPT routes together when their names and prefixes are available. No local
+   OAuth credential file is required. Your OpenAI account must allow device-code
+   sign-in.
+3. Open **Manage**, then choose **Approve access for ChatGPT** to authorize an
+   app or device for the provider's current routes. A successful provider
+   sign-in does not give any new client access by itself.
 
-Use **Reconnect** on the route to renew its login without replacing its client
-access. Choose a distinct route name if you want separate routes for separate
-accounts. The main route is enough for chat; if needed, add the **ChatGPT plan
-usage and dictation** preset and select the same account for that route. A
+Use **Manage → Reconnect ChatGPT** to renew the login without changing client
+approvals. Use a distinct name when setting up a separate ChatGPT account. The
+main route is enough for chat; the other routes cover usage, dictation,
+embeddings, and realtime sideband, and one approval covers all of them. If a
+route is added later, approve the provider again for clients that need it. A
 ChatGPT subscription is separate from the **OpenAI API** key preset. To route
 only ChatGPT through the proxy in term-llm, [configure the client allowlist](#using-term-llm-as-a-client)
 with the canonical `/chatgpt/` route.
@@ -55,22 +92,33 @@ Claude Code can opt in to proxy-held credentials. The launcher never modifies
 ordinary `claude`: your regular `~/.claude` settings, credentials, hooks and plugins
 are untouched, and a plain `claude` run continues to use its own local login.
 
-### Set up or clear Claude
+### Set up a shared Claude subscription
 
-1. Choose **Routes → Add route → Claude Code** and click **Create route & get
-   launcher**.
-2. Copy the launcher command, run it on your device and sign in normally in Claude.
+Claude Code routes use a subscription that you sign in to as the proxy operator.
+Clients share its limits, so only approve devices you trust.
 
-The proxy creates the route and gives the launcher scoped access. The route
-appears in the same list as other providers; there is no upstream URL, billing
-choice, or separate login form. The launcher token is shown once; save it
-privately. Use **Add device** on the route for another device or a replacement
-launcher.
+1. Choose **Providers → Add provider → Claude Code** and click
+   **Create shared route & get sign-in launcher**.
+2. Copy the **Operator sign-in launcher command** and run it on your own device
+   with an updated `term-llm`. Finish the Claude browser sign-in. The proxy holds
+   the subscription credentials; workers do not get them. Keep the operator
+   launcher private and do not give it to a worker.
+3. Dismiss the one-time launcher after saving it securely. Use **Refresh** on
+   **Providers** after finishing sign-in. When the route says **Shared Claude
+   subscription ready**, open **Manage** and click **Add device**.
+   Run that command on the worker with an updated `term-llm`. The worker uses the
+   proxy’s shared sign-in without opening a browser. Issue a separate launcher
+   for each worker so you can remove its access without signing out Claude or
+   affecting other workers.
+4. If the shared sign-in needs attention, open **Manage** and click
+   **Get operator sign-in launcher** (or **Reconnect**) for the same
+   route. Finish sign-in and refresh **Providers**. **Add device** does not sign
+   in or reconnect the subscription, and is unavailable while it is not ready.
 
-Under **Advanced**, **Clear all Claude setup** removes the Claude routes, stored proxy sign-ins and Claude
-access. Other providers, request history and your ordinary `~/.claude` are left
-alone. Clients shared with other providers keep their other grants. Already-sent
-requests may finish. Clearing does not revoke your subscription at Anthropic.
+Remove a worker’s access from the provider’s **Client approval** section under
+**Manage**, or revoke its client in **Clients**. Do not use **Delete provider**
+to remove just one worker: it removes all Claude routes, grants and saved proxy
+sign-ins.
 
 ### Optional: use the same connection with term-llm
 
@@ -99,22 +147,24 @@ term-llm proxy run claude -- --resume
 ```
 
 The launcher is opt-in per invocation. Supply both `--url` and `--token` to use a
-different route root and scoped token for one run; they do not create a route or grant.
+different route root and scoped token for one run; they do not create a route or
+provider approval.
 Everything after `--` is passed to native Claude. Prefer a `file://` token reference
 over a literal value on the command line.
 
-Sign in normally when Claude starts. The native client runs its usual sign-in and
-refresh flow; the proxy intercepts HTTPS token exchange on `platform.claude.com`
-and API traffic on `api.anthropic.com`. Real access and refresh tokens stay in the
-proxy's encrypted vault for that caller, route and account; Claude receives opaque
-placeholders. The worker cannot reuse those placeholders as vendor credentials.
+Only the operator launcher signs in. The proxy intercepts the HTTPS token
+exchange on `platform.claude.com` and encrypts the real OAuth tokens. It refreshes
+the shared login and gives each client launcher a scoped placeholder, not a
+reusable Anthropic credential.
 
 The launcher sets a private, term-owned `CLAUDE_CONFIG_DIR` for the child, so normal
 Claude state stays separate. The proxy CA is fetched for that launch and trusted
 only through the process's `NODE_EXTRA_CA_CERTS`; it is not installed in the
 operating-system trust store, and TLS verification is never disabled. Competing
 vendor credentials, cloud auth switches and ambient proxy settings are removed
-from the child environment.
+from the child environment. The launcher sets its own `HTTP_PROXY` and
+`HTTPS_PROXY` for Claude and marks routing as host-managed so Claude settings
+cannot replace them. The calling shell's proxy settings are unchanged.
 
 The tunnel is not a general web proxy or MITM. Only `api.anthropic.com:443` and
 `platform.claude.com:443` are accepted. The public startup checks `GET/HEAD
@@ -122,19 +172,19 @@ The tunnel is not a general web proxy or MITM. Only `api.anthropic.com:443` and
 require a granted proxy client, send no credentials upstream, and check the real
 upstream response. Other platform traffic is limited to the fixed token endpoint.
 On the API host, the proxy forwards validated API-host paths over the authenticated
-native tunnel using that caller's own signed-in OAuth session, subject to any
-operator route Allow. This can include Claude background calls such as telemetry
-or hosted MCP reaching Anthropic; Anthropic still decides OAuth permissions and
-response status. Platform token exchange remains limited to the fixed token endpoint,
-and the public tokenless startup probes remain credentialless and restricted to their
-fixed paths. There is no credentialless API pass-through or expansion to other
+native tunnel using the operator’s OAuth session, subject to the shared-session
+endpoint restrictions and any route Allow rules. Anthropic still decides OAuth
+permissions and response status. Platform token exchange remains limited to the
+fixed token endpoint, and the public startup probes stay credentialless and
+restricted to their fixed paths. There is no credentialless API pass-through or expansion to other
 providers. Loopback and safe existing `NO_PROXY` entries stay direct so local tools
 and MCP servers keep working; other HTTPS destinations sent through the proxy are
 refused. Each connection lasts at most one hour. An intervening reverse proxy must
 support HTTP/1.1 CONNECT; otherwise point the launcher at the credential proxy
-listener directly. Revoking the client or grant, or signing out the account, closes
-open tunnels and requires a new native sign-in. A compromised worker can still use
-its granted route and isolated profile; this is not an OS sandbox.
+listener directly. Revoking a client or grant closes its open tunnels. The worker
+loses access, but the shared subscription and other workers stay connected. A
+compromised worker can still use its granted route and isolated profile; this
+is not an OS sandbox.
 
 `term-llm usage -p claude-bin` uses Claude's native `get_usage` control request
 through the same binding. There is no separate quota-query implementation, and it
@@ -147,6 +197,71 @@ If an older release installed its connector settings into your Claude profile, u
 owned. The old connector and its browser-approval flow are retired; the native
 launcher does not use them and never edits your Claude settings.
 
+## Run personal Antigravity through the proxy
+
+This setup is for the **Antigravity personal subscription**, not Antigravity
+Enterprise and not the Gemini API key preset. The launcher requires Linux and
+`agy 1.5.12` or newer. Version `1.5.12` was tested in isolation against synthetic
+Google endpoints. Live subscription acceptance and macOS credential isolation
+have not been verified. Use HTTPS for remote proxy URLs; plain HTTP is accepted
+only on loopback.
+
+1. Choose **Providers → Add provider → Antigravity personal subscription**, then
+   **Create shared route & get sign-in launcher**. The route uses the fixed
+   personal service `https://daily-cloudcode-pa.googleapis.com`.
+2. Run the private **Operator sign-in launcher command** on your Linux device with
+   an updated `term-llm`. This command ends in `-- acp --login`. Follow the prompt
+   to sign in with your personal Google account. If `agy` prints a sign-in link,
+   open it in your own browser. Do not share the operator launcher with workers.
+3. Dismiss the one-time launcher after saving it securely. Refresh **Providers**
+   after signing in. When the route says **Shared Antigravity subscription ready**,
+   open **Manage** and click **Add device** to issue a separate
+   launcher for each worker. Run it as shown, without `-- acp --login`. Workers
+   use the shared subscription and its limits without signing in to Google.
+4. Open **Manage** and click **Get operator sign-in launcher** or **Reconnect** if
+   the subscription needs attention. Remove a worker’s provider approval or
+   revoke its client token to remove only its access. **Manage → Delete provider**
+   removes all Antigravity proxy routes, their grants and saved proxy sign-ins.
+   Other providers, request history and your normal Antigravity setup are unchanged.
+
+For term-llm's `agy-bin` provider, use the optional provider YAML shown with the
+launcher. For example:
+
+```yaml
+providers:
+  agy-bin:
+    proxy:
+      url: https://proxy.example.test/agy-bin/
+      token: file:///run/secrets/agy-proxy-token
+```
+
+Use the worker’s route URL and scoped proxy token, not the bare proxy origin or
+a Google credential. After saving this block, launch the worker with:
+
+```sh
+term-llm proxy run agy
+```
+
+The launcher isolates native credential state from normal `agy` use. The proxy
+handles the operator’s OAuth exchange and refresh through its provider-scoped
+tunnel: real Google OAuth tokens stay in the proxy vault, while the client
+receives opaque tokens bound to its grant, route and account slot. The tunnel is limited to the personal
+service, token exchange on `oauth2.googleapis.com`, and the specific user-info
+endpoint `GET /oauth2/v2/userinfo` on `www.googleapis.com`. It does not proxy
+arbitrary Google APIs or browser traffic. See [Forwarding behavior](#forwarding-behavior) for the worker
+isolation requirements.
+
+### Upgrade an existing native route
+
+The proxy’s schema v8 upgrade keeps routes, client tokens, grants, and existing
+shared Claude sign-ins. It does not turn any old per-device Claude Code or
+Antigravity sign-in into a shared login. For each converted account, open
+**Providers → Manage → Get operator sign-in launcher** on its route and complete one new operator
+sign-in. Refresh **Providers** afterward. The operator sign-in restores access
+for existing clients; workers do not need new tokens or a vendor login. New
+worker launchers and approvals are unavailable until the shared route is enabled
+and ready.
+
 ## Provision clients with an admin API key
 
 In **Admin → API keys**, create a named key and save the token when shown.
@@ -157,10 +272,16 @@ A key can create clients for **any** grantable route, including routes added
 later. Any active key can list, regrant, revoke or purge API-created clients,
 regardless of which key created them. Keys cannot see or change browser-created
 clients, modify routes, access secrets, accounts, history, money, debug,
-passkeys or Claude setup, authorize forwarding, or sign in to the browser UI.
+passkeys or native provider setup, authorize forwarding, or sign in to the browser UI.
 Revoking a key stops provisioning immediately. Select **also revoke clients
 created by this key** to revoke its clients too; otherwise those tokens keep
 working under their existing grants.
+
+Browser provider approvals apply only to browser-managed clients. The public
+management API remains route-based: create and regrant API-created clients with
+explicit route grants. Approving a provider in the browser never widens an
+API-created client, and adding a route to a provider never adds it to a client
+automatically.
 
 Fetch the route names and current configuration `revision` first:
 
@@ -198,13 +319,14 @@ leaves request and money history intact.
 
 ## Provider presets and client settings
 
-Choose the preset from **Routes → Add route**. Keep provider sign-in and client
-access separate: provider credentials let the proxy call the vendor, while a
-route grant lets a particular app or device call the proxy. For a service
+Choose the preset from **Providers → Add provider**. Keep provider sign-in and client
+access separate: provider credentials let the proxy call the vendor, while
+approving a provider lets a particular app or device call the proxy through each
+of that provider's current routes. For a service
 that uses an API key, you can select a saved key or add one while setting up the
 route. The setup guide disappears after the first recorded request and stays
 complete across restarts and history cleanup. Route YAML download and
-replacement live under **Admin**, not Routes.
+replacement live under **Admin**, not Providers.
 
 Presets supply editable creation defaults, not vendor guarantees or discovery.
 Existing routes do not change when presets change. Available families include
@@ -224,8 +346,8 @@ Use the route URL without duplicating the vendor version prefix. Client headers:
 | ElevenLabs | `xi-api-key` |
 | Flux | `x-key` |
 
-Query-key auth is unsupported. Claude and Grok CLI gateway paths have fixture
-proof; Cursor, Antigravity and Vibe remain gated. Version/session headers come
+Query-key auth is unsupported. Claude, personal Antigravity and Grok CLI gateway
+paths have fixture evidence; Cursor and Vibe remain gated. Version/session headers come
 from clients. Advanced route fields enable `websocket: true` and `usage: auto`.
 WebSockets require HTTP/1.1 and have a one-hour cap; revocation closes live use.
 For Responses WebSockets, **Requests** gets one row per observed response turn,
@@ -247,10 +369,11 @@ request bodies or invent missing counts. Existing unmeasured records cannot be
 backfilled from responses that were not retained.
 
 
-### OpenCode Go: one key, one route, one grant
+### OpenCode Go: one key, one provider, one approval
 
 Choose the **OpenCode Go** preset and store one upstream OpenCode Go API key.
-The parent route prefix is `/opencode-go/`; grant that single route to the client.
+The parent route prefix is `/opencode-go/`; approve the OpenCode Go provider once
+to cover that route.
 All protocols use the same scoped client token, not the upstream key. Configure
 term-llm's OpenCode Go native base URL as `https://proxy.example.test/opencode-go`.
 Its protocol clients select these three API roots:
@@ -270,31 +393,35 @@ headers still come from the client.
 
 Named term-llm providers of type `opencode-go` use their own parent namespace:
 for example, `household` uses `/household`, `/household/messages` and
-`/household/gemini`. Create and grant that parent route explicitly; it does not
+`/household/gemini`. Create and approve that provider explicitly; it does not
 borrow the built-in OpenCode Go route or another named provider's subpaths.
 
 **Existing sibling-route installations require explicit migration.** Older
 `/opencode-go-messages/` and `/opencode-go-gemini/` routes are not silently moved,
-merged or granted by changing presets. Review and explicitly replace the old
-setup with the consolidated parent and its three rules, then review/regrant
-client access and update client roots; remove obsolete sibling routes/grants.
-Route authority/rule changes invalidate existing grants. Global term-llm proxy
+merged or approved by changing presets. Review and explicitly replace the old
+setup with the consolidated parent and its three rules, then reapprove the
+provider and update client roots; remove obsolete sibling routes/grants.
+Route authority/rule changes invalidate existing grants, so the provider shows
+as needing approval until you approve it again. Global term-llm proxy
 configuration now registers only the nested roots, so migrate the server and
-regrant before switching those clients. Explicitly manually registered legacy
+reapprove before switching those clients. Explicitly manually registered legacy
 sibling roots remain compatible when bound to the same client principal; missing
 protocol roots fail closed rather than contacting a public vendor endpoint.
 
 ## Trusted accounts
 
-Under **Routes → Advanced**, manual credential JSON is still supported for
+Under **Providers**, open **Manage** on a provider and choose **Edit → Advanced**;
+manual credential JSON is still supported for
 `chatgpt`, `grok`, `copilot` and `aws-sigv4`. Use the guided sign-in for new
 ChatGPT plan routes.
 Select the account when creating its route. Credentials are write-only; metadata
 contains state, mode and expiry. Account-managed headers cannot also have static
 substitutions. Origins and API paths are restricted to that integration. Sign-out
 clears credentials and closes streams; requests fail closed until credentials are
-replaced. Claude uses **Add device** on the route and **Clear all Claude setup**
-under **Advanced**, not this account editor.
+replaced. Claude Code and personal Antigravity use **Manage → Add device**
+and **Manage → Delete provider**, not this account editor.
+For either shared subscription, use **Get operator sign-in launcher** or
+**Reconnect** to manage the operator sign-in.
 
 For rotating accounts, move custody to the proxy: do not leave another process
 refreshing the same token. Rotation is durably fenced and committed before use.
@@ -319,9 +446,9 @@ A different existing kind rejects startup. The Admin UI cannot introduce files.
 ## Using term-llm as a client
 
 To proxy only built-in ChatGPT, add this top-level block to the client's
-`config.yaml`. The proxy shows this example when you create a client from the
-canonical ChatGPT route. Use the proxy origin, not the `/chatgpt/` route URL,
-and point `token` at a private file containing the scoped client token.
+`config.yaml`. The proxy shows this example when you create a client for the
+ChatGPT provider. Use the proxy origin, not the `/chatgpt/` route URL, and point
+`token` at a private file containing the scoped client token.
 
 ```yaml
 proxy:
@@ -332,9 +459,11 @@ proxy:
 
 `proxy.providers` is an exact allowlist. `chatgpt` selects built-in ChatGPT and
 its related features, including those that use `/chatgpt-backend/` (usage and
-dictation) or `/chatgpt-openai/` (embeddings and realtime sideband). Grant the
-same client every route it needs. Other providers, including named providers
-of type `chatgpt`, keep using their own endpoints and credentials.
+dictation) or `/chatgpt-openai/` (embeddings and realtime sideband). Approve the
+ChatGPT provider once for the client; that covers every route the provider has
+at approval time. If you add a route later, approve the provider again for
+clients that need it. Other providers, including named providers of type
+`chatgpt`, keep using their own endpoints and credentials.
 
 - To proxy a configured named provider, list its exact configuration name. This
   selects only that provider, not other providers of the same type or their
@@ -348,8 +477,8 @@ of type `chatgpt`, keep using their own endpoints and credentials.
 Selected integrations use the scoped client token instead of resolving local
 provider secrets, including when they previously used custom API roots. Built-ins
 use their canonical route IDs. A missing route or grant never falls back to the
-vendor. OpenCode Go uses one parent grant with nested `/messages` and `/gemini`
-API roots.
+vendor. OpenCode Go uses one parent approval with nested `/messages` and
+`/gemini` API roots.
 
 In legacy mode, `direct: [opencode-go]` keeps the whole OpenCode Go protocol
 family direct, including named providers of that type. A named provider's own
@@ -364,11 +493,30 @@ identity per process.
 `claude-bin` is the term-llm provider name; `/claude-code/` is its canonical
 proxy route. With `claude-bin` in the top-level `proxy.providers` list, term-llm
 adds `/claude-code/` to `proxy.url` and uses the top-level `proxy.token`. That
-client must have a route grant **and** its own Claude sign-in. If you signed in
-using a different launcher token or proxy URL, use that exact URL and token in
+client must be approved for the Claude Code provider. If your launcher uses a
+different token or route URL (including a noncanonical shared route), use that
+exact URL and token in
 `providers.claude-bin.proxy` instead, and remove `claude-bin` from the top-level
-list. Alternatively, run `term-llm proxy run claude` without flags to sign in
-with the binding already in your config.
+list. Alternatively, run `term-llm proxy run claude` without flags to use the
+binding already in your config.
+
+## DNS SRV discovery
+
+Use a `srv://` URL in client configuration to discover the proxy’s HTTPS host
+and port through DNS. For example, set `proxy.url` to
+`srv://_term-llm-proxy._tcp.example.test`. If the proxy is mounted under `/team`,
+use `srv://_term-llm-proxy._tcp.example.test/team`; term-llm appends each
+integration’s route beneath that prefix.
+
+For `providers.<name>.proxy.url` or `term-llm proxy run claude` / `agy` with
+`--url`, include the full scoped route path, for example
+`srv://_term-llm-proxy._tcp.example.test/team/claude-code`.
+
+Use a DNS zone you trust. Term-llm connects over HTTPS to the first result in
+the resolver’s priority/weight order, and the certificate must be valid for
+that target hostname. If discovery fails, the connection fails without falling
+back to a vendor endpoint. The server’s `--public-url` still takes a concrete
+browser origin, not an SRV URL.
 
 ## Usage and spending
 
@@ -474,9 +622,46 @@ such as `POST /responses`. Account routes always enforce integration restriction
 unspecified; choices are `pay_as_you_go`, `plan`, `local`, `unspecified`.
 
 Changing upstream authority/base, credential rules, account or access policy removes
-existing grants; review/regrant explicitly. Delete/recreate never restores grants.
-Disabling retains grants; rotating a same-origin secret retains them. A replacement
-credential may have broader vendor privileges: the proxy cannot infer those.
+existing grants for the affected routes, so clients need provider approval again.
+Delete/recreate never restores grants or approvals. Disabling retains grants;
+rotating a same-origin secret retains them. A replacement credential may have
+broader vendor privileges: the proxy cannot infer those.
+
+Provider approval is not part of route YAML. It is stored per client and expands
+into route grants for the routes that existed when the approval was made. A
+configuration reload or import that changes route authority can therefore leave
+a client marked as needing approval.
+
+### DNS SRV upstreams
+
+A route’s `upstream` (or any subpath rule’s `upstream`) can be a DNS SRV URL,
+for example `srv://_inference._tcp.example.com/v1`. The server selects the first
+result in the resolver’s priority/weight order and connects to that host and
+port over HTTPS, preserving the base path. Use a DNS zone you trust and a TLS
+certificate valid for the discovered hostname. For example, if the record
+points to `api.example.com` on port `8443`:
+
+```yaml
+routes:
+  - name: inference
+    local_prefix: /inference/
+    upstream: srv://_inference._tcp.example.com/v1
+    set_headers:
+      Authorization: {secret: inference-key, prefix: "Bearer "}
+secrets:
+  inference-key:
+    origin: https://api.example.com:8443
+    file: /run/secrets/inference-key
+```
+
+Bind secrets to the concrete HTTPS origin, including any nondefault port, not
+to the SRV record. The proxy checks that origin before activating a route.
+Discovery runs on startup, when saving routes, and on operator file **Reload**,
+not on each request or when rotating a secret. If discovery fails, the new
+configuration is rejected and any active routes stay unchanged. If a new result
+changes the origin, any configured secret or account must match it and clients
+must be approved again. DNS changes alone do not move active traffic or
+implicitly transfer credentials.
 
 ## Explicit setup and production administration
 
@@ -542,11 +727,10 @@ upstream Host is fixed and Set-Cookie removed. Opaque bodies, escaped identifier
 and raw queries pass through. Usage-enabled routes request identity encoding;
 unexpected encodings/extensions remain unmeasured. Redirects are never followed.
 Traversal, controls, absolute targets, CONNECT and unsupported upgrades are refused
-by ordinary forwarding; the constrained Claude tunnel above is the separate CONNECT
-path.
-
-This is not a general forward proxy or MITM; the Claude tunnel is the only TLS
-intercept, and only for its two fixed Anthropic hosts. A trusted upstream can echo
+by ordinary forwarding. The constrained Claude Code and personal Antigravity
+tunnels above are separate CONNECT paths that intercept TLS only for their fixed
+provider hosts and require a matching route grant. This is not a general forward
+proxy or TLS interceptor. A trusted upstream can echo
 its own credential. Credential custody also requires separate worker
 filesystems/identities and egress policy: routing settings alone are not an OS
 sandbox.
@@ -556,12 +740,14 @@ sandbox.
 State defaults to the user config directory's `term-llm/proxy`; override with
 `--state-dir`. Run one process per store. `proxy.db` holds plaintext credentials,
 client hashes/grants and history; `admin-auth/` holds passkeys/sessions. Native
-Claude vault rows are authenticated ciphertext keyed to proxy-owned material, but
-the database is not a general encrypted vault. Use 0700 directories and 0600 files
-and owner-only Windows ACLs. No credentials are stored in browser storage. Protect
+Claude and Antigravity shared sign-ins use authenticated ciphertext keyed to
+proxy-owned material, but the database is not a general encrypted vault. Use
+0700 directories and 0600 files and owner-only Windows ACLs. No credentials are stored in browser storage. Protect
 backups like credentials; use consistent SQLite backup or stop the process, not a
-live DB-only copy. Include `claude-forward-ca-v2.pem`: its private key is also
-needed to decrypt native Claude custody. Losing it requires new native sign-ins.
+live DB-only copy. Include `claude-forward-ca-v2.pem` and `agy-forward-ca-v2.pem`
+for the native integrations you use. Each private key is also needed to decrypt
+that provider’s stored sign-in. Losing one requires a new operator sign-in for
+that provider.
 General ledger writes use WAL/NORMAL; credential custody uses FULL-synchronous
 commits before returning tokens or dispatching refreshes.
 
@@ -653,10 +839,10 @@ capture off.
 Synthetic upstreams, native-binary fixtures and client/browser fixtures cover scoped
 routing, the launcher environment, CA handling, vault placeholders, token exchange
 and refresh, cancellation, consent and charts. They do not prove live vendor
-issuance, subscription acceptance, native Claude live sign-in, billing or
-non-Linux compatibility. Do not treat this flow as live-accepted until an isolated
-real-account test establishes it. Cursor/Vibe/Antigravity and exact custom-URL
-mappings remain gated. No invoice/refund, FX, plan-quota or hard financial-limit
+issuance, subscription acceptance, live native sign-in, billing or non-Linux
+compatibility. In particular, Antigravity was tested with an isolated Linux
+`agy 1.5.12` and synthetic OAuth, not with a real Google account. Cursor, Vibe and
+exact custom-URL mappings remain gated. No invoice/refund, FX, plan-quota or hard financial-limit
 support is claimed.
 
 See the [deployment example](https://github.com/term-llm/term-llm/tree/main/examples/proxy)

@@ -3,10 +3,10 @@ package clibin
 import (
 	"context"
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 // agyBinMinimumVersion is the first agy release that honours the MCP
@@ -17,40 +17,9 @@ const agyBinMinimumVersion = "1.3.3"
 
 const agyVersionCheckTimeout = 10 * time.Second
 
-var agySemverPattern = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*))?(\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$`)
-
-// AgyVersionAtLeast reports whether `agy --version` output names a release at
-// or above the requested version. Unparseable or ambiguous output fails closed.
-func AgyVersionAtLeast(version string, wantMajor, wantMinor, wantPatch int) bool {
-	var matches [][]string
-	for _, field := range strings.Fields(version) {
-		candidate := strings.Trim(strings.TrimSpace(field), "()[]{}<>,;")
-		if match := agySemverPattern.FindStringSubmatch(candidate); match != nil {
-			matches = append(matches, match)
-		}
-	}
-	// Fail closed if the output is unparseable or contains another version-like
-	// token (for example, a runtime version before the actual agy version).
-	if len(matches) != 1 {
-		return false
-	}
-	match := matches[0]
-	got := make([]int, 3)
-	for i := range got {
-		value, err := strconv.Atoi(match[i+1])
-		if err != nil {
-			return false
-		}
-		got[i] = value
-	}
-	want := []int{wantMajor, wantMinor, wantPatch}
-	for i := range got {
-		if got[i] != want[i] {
-			return got[i] > want[i]
-		}
-	}
-	// A prerelease of the minimum version sorts below the release itself.
-	return match[4] == ""
+// AgyVersionAtLeast reports whether agy names a release at or above the requested version.
+func AgyVersionAtLeast(version string, major, minor, patch int) bool {
+	return proxyclient.AgyVersionAtLeast(version, major, minor, patch)
 }
 
 // agyVersionOutput runs `agy --version` with the provider's configured

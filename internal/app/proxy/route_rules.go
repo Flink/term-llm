@@ -13,7 +13,7 @@ import (
 
 // compileRoute keeps one public parent and one authority for all destinations.
 // Selected copies inherit the parent's identity, accounting and lifecycle policy.
-func compileRoute(r *Route, secrets map[string]material) (activeRoute, error) {
+func compileRoute(r *Route, secrets map[string]material, discovery *upstreamDiscovery) (activeRoute, error) {
 	defaultRouteUsage(r)
 	if err := validatePolicy(r); err != nil {
 		return activeRoute{}, err
@@ -22,7 +22,7 @@ func compileRoute(r *Route, secrets map[string]material) (activeRoute, error) {
 		return activeRoute{}, fmt.Errorf("invalid request ID header")
 	}
 	if len(r.Rules) == 0 {
-		return compileDestination(r, secrets)
+		return compileDestination(r, secrets, discovery)
 	}
 	if len(r.Rules) > 32 {
 		return activeRoute{}, fmt.Errorf("at most 32 subpath rules per route")
@@ -47,7 +47,7 @@ func compileRoute(r *Route, secrets map[string]material) (activeRoute, error) {
 		if err := validatePolicy(&child); err != nil {
 			return activeRoute{}, err
 		}
-		ar, err := compileDestination(&child, secrets)
+		ar, err := compileDestination(&child, secrets, discovery)
 		if err != nil {
 			return activeRoute{}, fmt.Errorf("rule %s: %w", rule.PathPrefix, err)
 		}
@@ -72,12 +72,16 @@ func compileRoute(r *Route, secrets map[string]material) (activeRoute, error) {
 	return parent, nil
 }
 
-func compileDestination(r *Route, secrets map[string]material) (activeRoute, error) {
-	origin, err := Origin(r.Upstream)
+func compileDestination(r *Route, secrets map[string]material, discovery *upstreamDiscovery) (activeRoute, error) {
+	upstream, err := discovery.resolve(r.Upstream)
+	if err != nil {
+		return activeRoute{}, fmt.Errorf("resolve upstream: %w", err)
+	}
+	origin, err := Origin(upstream)
 	if err != nil {
 		return activeRoute{}, err
 	}
-	u, _ := url.Parse(r.Upstream)
+	u, _ := url.Parse(upstream)
 	if u.Scheme == "http" && !r.AllowHTTP {
 		return activeRoute{}, fmt.Errorf("HTTP upstream requires allow_insecure_http")
 	}
@@ -94,7 +98,14 @@ func compileDestination(r *Route, secrets map[string]material) (activeRoute, err
 	if err != nil {
 		return activeRoute{}, err
 	}
-	return activeRoute{Route: *r, target: u, origin: origin, authority: routeAuthority(*r, origin, u), headers: headers}, nil
+	// Request-time integrations (e.g. accounting) use the concrete URL. The
+	// configured reference remains untouched in snapshot.config.
+	active := *r
+	if active.Upstream != upstream {
+		active.Upstream = upstream
+		defaultRouteUsage(&active)
+	}
+	return activeRoute{Route: active, target: u, origin: origin, authority: routeAuthority(active, origin, u), headers: headers}, nil
 }
 
 // Rule order and local credential formatting do not change the delegated scope.

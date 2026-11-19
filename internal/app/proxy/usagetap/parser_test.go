@@ -85,6 +85,15 @@ func TestGeminiLastWins(t *testing.T) {
 		t.Fatal(u)
 	}
 }
+func TestGeminiCloudCodeWrapsUsage(t *testing.T) {
+	p := ForResponse("/v1internal:streamGenerateContent", "text/event-stream")
+	p.Feed([]byte("data: {\"response\":{\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":4,\"totalTokenCount\":14}}}\n\n"))
+	u := p.Finish(true)
+	if u.Source != Reported || u.Input != 10 || u.Output != 4 || u.Total != 14 {
+		t.Fatal(u)
+	}
+}
+
 func TestOllamaFinalRecord(t *testing.T) {
 	p := New(Ollama, NDJSON)
 	data := `{"done":false,"eval_count":100}` + "\n" + `{"done":true,"model":"local","prompt_eval_count":6,"eval_count":3}`

@@ -76,25 +76,11 @@ func TestClaudeForwardNativeBinaryUsage(t *testing.T) {
 		}
 		return (&net.Dialer{}).DialContext(ctx, network, vendor.Listener.Addr().String())
 	}
-	a := accountRecord{AccountInfo: AccountInfo{Name: "native", Kind: "claude-code", State: "native_login", Generation: 1}, credentials: accountCredentials{Mode: "vault"}}
-	if err := s.store.replaceAccount(context.Background(), a, 0); err != nil {
-		t.Fatal(err)
-	}
-	s.rememberAccount(a.Name, a.credentials)
+	a, key := seedReadyClaudeShared(t, s, "native", "synthetic-native-vendor", "synthetic-native-refresh")
 	configure(t, s, Config{Routes: []Route{{Name: "native", LocalPrefix: "/native/", Upstream: "https://" + claudeAPIHost, Enabled: true, Account: "native", CallerAuth: Auth{Header: "Authorization", Prefix: "Bearer "}, Allow: []string{"GET /api/oauth/usage", "GET /api/oauth/profile"}}}}, nil)
 	token := caller(t, s, "native")
-	principal, err := s.store.authorize(token, s.snap.routes[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	forwarder, err := s.claudeForwarder()
-	if err != nil {
-		t.Fatal(err)
-	}
-	placeholder, err := s.store.claudeVaultSave(context.Background(), forwarder.ca.vaultKey, claudeForwardScope{caller: principal.ID, route: "native", authority: s.snap.routes[0].authority, account: "native", identity: a.identityVersion}, claudeVaultReply{AccessToken: "synthetic-native-vendor", RefreshToken: "synthetic-native-refresh", ExpiresIn: 3600, TokenType: "Bearer", Scope: "user:profile user:inference"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scope := claudeSharedTestCallerScope(t, s, s.snap.routes[0], token)
+	placeholder := claudeSharedAliasReply(key, a, scope, claudeVaultReply{})
 
 	server := httptest.NewServer(s)
 	defer server.Close()

@@ -23,6 +23,11 @@ const opencodeKey = {
   origin: 'https://opencode.ai',
   source: 'stored',
 } as const;
+const srvSecret = {
+  name: 'srv-key',
+  origin: '',
+  source: 'stored',
+} as const;
 const rules: ProxyRouteRule[] = [
   {
     path_prefix: '/',
@@ -128,8 +133,18 @@ function setup(overrides: Partial<ProxyState> = {}) {
   };
 }
 function choose(root: HTMLElement) {
-  fireEvent.click(getByRole(root, 'button', { name: 'Add route' }));
+  fireEvent.click(getByRole(root, 'button', { name: 'Add provider' }));
   fireEvent.click(getByRole(root, 'button', { name: 'OpenCode Go' }));
+}
+function openManage(root: HTMLElement, routeName: string) {
+  const line = root.querySelector<HTMLElement>(`[data-focus="route:${routeName}"]`);
+  if (!line) throw new Error(`Missing route line: ${routeName}`);
+  const details = line
+    .closest('article.route-card')
+    ?.querySelector<HTMLDetailsElement>('details.provider-manage');
+  if (!details) throw new Error(`Missing provider Manage: ${routeName}`);
+  details.open = true;
+  return details;
 }
 function ruleRows(root: HTMLElement): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>('.subpath-rule')];
@@ -273,6 +288,7 @@ it('never serializes parent destination fields for a rules route from a stale pr
 it('loads and saves a unified route unchanged without asking to drop grants', async () => {
   const { root, save } = setup({ routes: [unified], secrets: [opencodeKey] });
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  openManage(root, 'opencode-go');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go' }));
   expect(ruleRows(root)).toHaveLength(3);
   expect(root.querySelector<HTMLDetailsElement>('details.route-rule-editors')?.open).toBe(false);
@@ -286,6 +302,7 @@ it('loads and saves a unified route unchanged without asking to drop grants', as
 it('edits subpaths and upstreams through the same agency-bearing rules', async () => {
   const { root, save } = setup({ routes: [unified], secrets: [opencodeKey] });
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  openManage(root, 'opencode-go');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go' }));
   openRuleEditors(root);
   const rows = ruleRows(root);
@@ -330,6 +347,7 @@ it('treats subpath mappings as authority but ignores rule order and the envelope
 it('asks before a subpath mapping edit but not for billing-only edits', async () => {
   const { root, save } = setup({ routes: [unified], secrets: [opencodeKey] });
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  openManage(root, 'opencode-go');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go' }));
   fireEvent.change(getByLabelText(root, 'Billing'), { target: { value: 'pay_as_you_go' } });
   fireEvent.click(getByRole(root, 'button', { name: 'Save route' }));
@@ -347,6 +365,7 @@ it('asks before a subpath mapping edit but not for billing-only edits', async ()
 
 it('keeps one key across all rules and refuses a mixed upstream origin', async () => {
   const { root, save, announce } = setup({ routes: [unified], secrets: [opencodeKey] });
+  openManage(root, 'opencode-go');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go' }));
   openRuleEditors(root);
   const rows = ruleRows(root);
@@ -405,6 +424,85 @@ it('reuses one Add API key dialog for every rule with the shared origin', async 
   ]);
 });
 
+it('allows a stored key for SRV subpath rules and leaves target validation to the server', async () => {
+  const srvRules = rules.map((rule) => ({
+    ...rule,
+    upstream: 'srv://_api._tcp.example.test/base',
+    set_headers: Object.fromEntries(
+      Object.entries(rule.set_headers).map(([header, config]) => [
+        header,
+        { ...config, secret: 'srv-key' },
+      ]),
+    ),
+  }));
+  const srvRoute = { ...unified, rules: srvRules };
+  const { root, save } = setup({ routes: [srvRoute], secrets: [srvSecret] });
+  openManage(root, 'opencode-go');
+  fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go' }));
+  expect(getByLabelText(root, 'Secret name')).toHaveValue('srv-key');
+  expect(root).toHaveTextContent('server validates');
+  expect(root).toHaveTextContent('discovered HTTPS host and port');
+  fireEvent.click(getByRole(root, 'button', { name: 'Save route' }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(save.mock.calls[0][1][0].rules?.every((rule) => rule.upstream.startsWith('srv://'))).toBe(
+    true,
+  );
+  expect(
+    save.mock.calls[0][1][0].rules?.every((rule) =>
+      Object.values(rule.set_headers).some((header) => header.secret === 'srv-key'),
+    ),
+  ).toBe(true);
+});
+
+it('keeps mixed direct and SRV key choices filtered to the direct origin', () => {
+  const mixed = {
+    ...unified,
+    rules: rules.map((rule, index) => ({
+      ...rule,
+      upstream: index === 0 ? 'srv://_api._tcp.example.test/base' : 'https://opencode.ai/v1',
+    })),
+  };
+  const otherKey = { name: 'other-key', origin: 'https://other.test', source: 'stored' } as const;
+  const { root } = setup({ routes: [mixed], secrets: [opencodeKey, otherKey] });
+  openManage(root, 'opencode-go');
+  fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go' }));
+  const options = [...(getByLabelText(root, 'Secret name') as HTMLSelectElement).options];
+  expect(options.map((option) => option.value)).toEqual(['', 'opencode-go-key']);
+});
+
+it('shows an unset binding origin when adding a key for an SRV rule', async () => {
+  const srvPreset = {
+    ...preset,
+    rules: preset.rules!.map((rule) => ({
+      ...rule,
+      upstream: 'srv://_api._tcp.example.test/base',
+    })),
+  };
+  const { root } = setup({ presets: [srvPreset] });
+  fireEvent.click(getByRole(root, 'button', { name: 'Add provider' }));
+  fireEvent.click(getByRole(root, 'button', { name: 'OpenCode Go' }));
+  fireEvent.click(getByRole(root, 'button', { name: 'Add API key' }));
+  const dialog = root.querySelector('dialog')!;
+  expect(within(dialog).getByLabelText('Bound origin')).toHaveValue('');
+  expect(dialog).toHaveTextContent('concrete HTTPS target and port');
+});
+
+it('preserves exact-origin filtering for concrete upstreams', async () => {
+  const srvRules = rules.map((rule, index) => ({
+    ...rule,
+    upstream: index === 0 ? 'https://opencode.ai/v1' : 'https://different.test/v1',
+  }));
+  const concrete = { ...unified, rules: srvRules };
+  const { root, save, announce } = setup({ routes: [concrete], secrets: [opencodeKey] });
+  openManage(root, 'opencode-go');
+  fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go' }));
+  fireEvent.click(getByRole(root, 'button', { name: 'Save route' }));
+  await waitFor(() =>
+    expect(announce).toHaveBeenCalledWith(expect.stringContaining("stored secret's exact origin")),
+  );
+  expect(save).not.toHaveBeenCalled();
+});
+
 it('leaves an existing single-upstream route on the legacy editor and save shape', async () => {
   const legacy: ProxyRoute = {
     name: 'opencode-go',
@@ -418,6 +516,7 @@ it('leaves an existing single-upstream route on the legacy editor and save shape
   };
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
   const { root, save } = setup({ routes: [legacy], secrets: [opencodeKey] });
+  openManage(root, 'opencode-go');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go' }));
   expect(ruleRows(root)).toHaveLength(0);
   expect(root.querySelector('.route-key')).toBeNull();
@@ -436,9 +535,21 @@ it('shows one route card for a unified route with subpaths and one key badge', (
   const cards = root.querySelectorAll('.route-card');
   expect(cards).toHaveLength(1);
   const card = cards[0] as HTMLElement;
-  expect(getByRole(card, 'heading', { name: 'opencode-go' })).toBeVisible();
-  const settings = card.querySelector<HTMLDetailsElement>('.route-row-settings')!;
-  expect(settings.open).toBe(false);
+  expect(getByRole(card, 'heading', { name: 'OpenCode Go' })).toBeVisible();
+  const line = card.querySelector<HTMLElement>('.provider-route-line')!;
+  expect(line).toHaveAttribute('tabindex', '-1');
+  expect(line).toHaveAttribute('data-focus', 'route:opencode-go');
+  expect(line.querySelector('code')).toHaveTextContent('/opencode-go/');
+  const manage = card.querySelectorAll<HTMLDetailsElement>('details.provider-manage');
+  expect(manage).toHaveLength(1);
+  expect(manage[0].open).toBe(false);
+  expect(manage[0].querySelector('summary')).toHaveTextContent('Manage');
+  expect(getByRole(card, 'button', { name: 'Edit opencode-go' })).not.toBeVisible();
+  openManage(root, 'opencode-go');
+  expect(manage[0].open).toBe(true);
+  expect(getByRole(card, 'button', { name: 'Edit opencode-go' })).toBeVisible();
+  const settings = card.querySelector<HTMLElement>('.route-row-settings')!;
+  expect(settings).toBeVisible();
   expect(settings).toHaveTextContent('3 subpath rules');
   expect(card).toHaveTextContent(
     'One key opencode-go-key → Authorization, x-api-key, x-goog-api-key',
@@ -473,6 +584,7 @@ it('leaves saved sibling routes independent and never converts them on edit', ()
   const { root } = setup({ routes: siblings, secrets: [opencodeKey] });
   expect(root.querySelectorAll('.route-card')).toHaveLength(3);
   expect(ruleRows(root)).toHaveLength(0);
+  openManage(root, 'opencode-go-messages');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go-messages' }));
   expect(ruleRows(root)).toHaveLength(0);
   expect(root.querySelector('.route-key')).toBeNull();

@@ -240,7 +240,7 @@ func (s *store) purgeCaller(ctx context.Context, id string) (Caller, error) {
 func purgeCallerTx(ctx context.Context, tx *sql.Tx, id string) error {
 	for _, stmt := range []string{
 		"DELETE FROM grants WHERE caller=?",
-		"DELETE FROM claude_vault WHERE caller=?",
+		"DELETE FROM claude_shared_enrollment WHERE caller=?",
 		"DELETE FROM callers WHERE id=? AND revoked!=0",
 	} {
 		if _, err := tx.ExecContext(ctx, stmt, id); err != nil {
