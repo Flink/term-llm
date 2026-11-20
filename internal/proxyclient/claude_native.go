@@ -79,8 +79,29 @@ func prepareClaudeNativeCommand(cmd *exec.Cmd, bootstrap *nativeBootstrap, token
 	if err != nil {
 		return nil, err
 	}
+	if bootstrap.claudeAccess.placeholder == "" {
+		if err := clearClaudeNativeLogin(stateDir); err != nil {
+			return nil, err
+		}
+	}
 	cmd.Env = env
 	return bootstrap.claudeAccess.apply(cmd)
+}
+
+// claudeNativeCredentialsFile is where Claude keeps its file-based login
+// inside CLAUDE_CONFIG_DIR (macOS uses the keychain instead).
+const claudeNativeCredentialsFile = ".credentials.json"
+
+// The proxy returns classic bootstrap only while an operator sign-in is armed
+// for this client. Its isolated profile may still hold an earlier proxy-issued
+// login alias (never a vendor token); remove it so Claude starts the sign-in
+// instead of reusing that login and leaving the enrollment unused.
+func clearClaudeNativeLogin(stateDir string) error {
+	err := os.Remove(filepath.Join(filepath.Clean(stateDir), claudeNativeCredentialsFile))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errors.New("Claude proxy could not clear the previous login for operator sign-in")
+	}
+	return nil
 }
 
 func prepareClaudeNativeEnv(env []string, bootstrap *nativeBootstrap, token, stateDir string) ([]string, error) {

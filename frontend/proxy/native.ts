@@ -16,6 +16,9 @@ export interface NativeProvider {
   operatorArgs: string;
   setupRequirements?: string;
   operatorSignIn: string;
+  /** The sign-in step after the command starts, for an existing client. */
+  operatorSignInStep: string;
+  operatorSignInHint?: string;
   credentialHelp: string;
 }
 
@@ -28,6 +31,8 @@ export const claudeProvider: NativeProvider = {
   operatorArgs: '',
   operatorSignIn:
     'Run this command on your own device with an updated term-llm, then sign in to Claude in your browser.',
+  operatorSignInStep: 'Then sign in to Claude in your browser.',
+  operatorSignInHint: 'If Claude does not ask you to sign in, run /login.',
   credentialHelp:
     'Uses a scoped proxy token, not a Claude credential. Your normal Claude setup stays unchanged.',
 };
@@ -43,6 +48,8 @@ export const agyProvider: NativeProvider = {
     'Personal subscriptions only, not Enterprise. Use Linux with agy 1.5.12 or newer. macOS credential isolation has not been verified.',
   operatorSignIn:
     'Run this command on your own Linux device with an updated term-llm and follow the Antigravity prompt to sign in with your personal Google account.',
+  operatorSignInStep:
+    'Use a Linux device, then follow the Antigravity prompt to sign in with your personal Google account.',
   credentialHelp:
     'Share only the scoped proxy token, not Google account credentials. Your normal Antigravity setup stays unchanged.',
 };
@@ -93,14 +100,18 @@ export const legacyNativeNotice =
 
 export type NativeConnectionUse = 'shared-worker' | 'shared-operator';
 
+/** Stands in for an existing client's token, which the proxy cannot show again. */
+export const clientTokenVariable = 'TERM_LLM_PROXY_TOKEN';
+
 export function nativeLauncher(
   provider: NativeProvider,
   url: string,
-  token: string,
+  token: string | undefined,
   use: NativeConnectionUse,
 ): string {
   const args = use === 'shared-operator' ? provider.operatorArgs : '';
-  return `term-llm proxy run ${provider.launcher} --url ${shellQuote(url)} --token ${shellQuote(token)}${args}`;
+  const credential = token === undefined ? `"$${clientTokenVariable}"` : shellQuote(token);
+  return `term-llm proxy run ${provider.launcher} --url ${shellQuote(url)} --token ${credential}${args}`;
 }
 export function nativeProviderYAML(provider: NativeProvider, url: string, token: string): string {
   const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
@@ -108,11 +119,13 @@ export function nativeProviderYAML(provider: NativeProvider, url: string, token:
 }
 
 // Both the dedicated flow and generic Clients use the same native connection examples.
+// An operator connection without a token armed an existing client, named by clientName.
 export function nativeConnectionDetails(
   provider: NativeProvider,
   connection: Pick<ProxyNativeConnection, 'url' | 'token'>,
   context: UIContext,
   use: NativeConnectionUse,
+  clientName = '',
 ): HTMLElement {
   function copyField(label: string, value: string, copyLabel: string, rows: number) {
     const text = el('textarea');
@@ -137,25 +150,34 @@ export function nativeConnectionDetails(
     return el('div', field(label, text), copy);
   }
   const command = nativeLauncher(provider, connection.url, connection.token, use);
-  if (use === 'shared-operator')
+  if (use === 'shared-operator') {
+    const existing = connection.token === undefined;
+    const steps = existing
+      ? `Run this command on the device that uses ${clientName}, with an updated term-llm. Set ${clientTokenVariable} to that client’s token first, or replace it with the token or a credential reference. ${provider.operatorSignInStep}`
+      : provider.operatorSignIn;
     return el(
       'div',
       el(
         'p',
-        `${provider.operatorSignIn} When sign-in finishes, refresh the Providers page to check that the shared subscription is ready.`,
+        `${steps} When sign-in finishes, refresh the Providers page to check that the shared subscription is ready.`,
       ),
-      copyField('Operator sign-in launcher command', command, 'Copy operator launcher command', 3),
+      copyField('Operator sign-in command', command, 'Copy sign-in command', 3),
       el(
         'small',
-        'Keep this operator launcher private. Use Add device to give workers their own launcher with separately revocable access.',
+        `Start sign-in within 15 minutes. Until it finishes, this client’s ${provider.shortName} launches sign in instead of using the shared subscription.${provider.operatorSignInHint ? ` ${provider.operatorSignInHint}` : ''} Use Add device to give workers their own separately revocable access.`,
       ),
     );
+  }
   const integration = el(
     'div',
     el('h4', 'Optional term-llm integration'),
     copyField(
       'Provider YAML',
-      nativeProviderYAML(provider, connection.url, connection.token),
+      nativeProviderYAML(
+        provider,
+        connection.url,
+        connection.token ?? `\${${clientTokenVariable}}`,
+      ),
       'Copy provider YAML',
       5,
     ),

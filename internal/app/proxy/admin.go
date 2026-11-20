@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -319,23 +320,7 @@ func (s *Service) adminAPI(w http.ResponseWriter, r *http.Request, path string, 
 	case path == "callers" && (r.Method == "POST" || r.Method == "PUT"):
 		s.changeCaller(w, r)
 	case path == "callers" && r.Method == "DELETE":
-		var in struct {
-			ID string `json:"id"`
-		}
-		if !readJSON(w, r, &in) {
-			return
-		}
-		s.mu.Lock()
-		err := s.store.revokeCaller(r.Context(), in.ID)
-		if err == nil {
-			s.cancelCallerSockets(in.ID)
-		}
-		s.mu.Unlock()
-		if err != nil {
-			fail(w, 503, "Could not revoke client")
-			return
-		}
-		jsonReply(w, 200, map[string]bool{"ok": true})
+		s.deleteCaller(w, r)
 	case (path == "requests" || path == "requests/export") && r.Method == "GET":
 		s.requests(w, r, path == "requests/export")
 	case path == "logout" && r.Method == "POST":
@@ -511,6 +496,41 @@ func (s *Service) reload(w http.ResponseWriter) {
 	s.snap = next
 	jsonReply(w, 200, map[string]int64{"revision": next.revision})
 }
+
+// deleteCaller revokes a client, or deletes one (purge) or all (purge_revoked) revoked clients.
+func (s *Service) deleteCaller(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ID           string `json:"id"`
+		Purge        bool   `json:"purge"`
+		PurgeRevoked bool   `json:"purge_revoked"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if in.PurgeRevoked == (in.ID != "") || in.PurgeRevoked && in.Purge {
+		fail(w, 400, "Send a client id, or purge_revoked without one")
+		return
+	}
+	var err error
+	s.mu.Lock()
+	if in.Purge || in.PurgeRevoked {
+		err = s.store.purgeRevokedCallers(r.Context(), in.ID)
+	} else if err = s.store.revokeCaller(r.Context(), in.ID); err == nil {
+		s.cancelCallerSockets(in.ID)
+	}
+	s.mu.Unlock()
+	switch {
+	case err == nil:
+		jsonReply(w, 200, map[string]bool{"ok": true})
+	case errors.Is(err, errCallerActive):
+		fail(w, 409, err.Error())
+	case errors.Is(err, errCallerMissing):
+		fail(w, 404, err.Error())
+	default:
+		fail(w, 503, "Could not change client")
+	}
+}
+
 func callerFailure(w http.ResponseWriter, err error) {
 	if safe, ok := err.(inputError); ok {
 		fail(w, 400, safe.Error())

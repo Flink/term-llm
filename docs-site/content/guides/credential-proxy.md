@@ -107,21 +107,27 @@ Claude Code routes use a subscription that you sign in to as the proxy operator.
 Clients share its limits, so only approve devices you trust.
 
 1. Choose **Providers → Add provider → Claude Code** and click
-   **Create shared route & get sign-in launcher**.
-2. Copy the **Operator sign-in launcher command** and run it on your own device
-   with an updated `term-llm`. Finish the Claude browser sign-in. The proxy holds
-   the subscription credentials; workers do not get them. Keep the operator
-   launcher private and do not give it to a worker.
-3. Dismiss the one-time launcher after saving it securely. Use **Refresh** on
+   **Create shared route & sign in**.
+2. Choose the client to sign in from, usually the one on your own device, or
+   name a new client. The proxy does not create a separate launcher client. An
+   existing client keeps its token and other approvals, and gets access to the
+   new route. Do not choose a worker's client.
+3. Copy the **Operator sign-in command** and run it on that device with an
+   updated `term-llm`. For an existing client, first set `TERM_LLM_PROXY_TOKEN`
+   to that client's token, or replace it in the command with the token or a
+   credential reference. Start within 15 minutes and finish the Claude browser
+   sign-in. If Claude does not ask you to sign in, run `/login`. The proxy holds
+   the subscription credentials; workers do not get them.
+4. Use **Refresh** on
    **Providers** after finishing sign-in. Once the shared subscription is ready, open
    **Manage** and click **Add device**.
    Run that command on the worker with an updated `term-llm`. The worker uses the
    proxy’s shared sign-in without opening a browser. Issue a separate launcher
    for each worker so you can remove its access without signing out Claude or
    affecting other workers.
-4. If the shared sign-in needs attention, open **Manage** and click
-   **Get operator sign-in launcher** (or **Reconnect**) for the same
-   route. Finish sign-in and refresh **Providers**. **Add device** does not sign
+5. If the shared sign-in needs attention, open **Manage** and click
+   **Sign in to shared subscription** (or **Reconnect**) for the same
+   route, then choose the client to sign in from. Finish sign-in and refresh **Providers**. **Add device** does not sign
    in or reconnect the subscription, and is unavailable while it is not ready.
 
 Remove a worker’s access from the provider’s **Client approval** section under
@@ -216,18 +222,20 @@ have not been verified. Use HTTPS for remote proxy URLs; plain HTTP is accepted
 only on loopback.
 
 1. Choose **Providers → Add provider → Antigravity personal subscription**, then
-   **Create shared route & get sign-in launcher**. The route uses the fixed
+   **Create shared route & sign in**. The route uses the fixed
    personal service `https://daily-cloudcode-pa.googleapis.com`.
-2. Run the private **Operator sign-in launcher command** on your Linux device with
-   an updated `term-llm`. This command ends in `-- acp --login`. Follow the prompt
+2. Choose the client to sign in from, or name a new one, as for Claude Code.
+   Run the **Operator sign-in command** on your Linux device with
+   an updated `term-llm`, using that client's token. This command ends in
+   `-- acp --login`. Follow the prompt within 15 minutes
    to sign in with your personal Google account. If `agy` prints a sign-in link,
-   open it in your own browser. Do not share the operator launcher with workers.
-3. Dismiss the one-time launcher after saving it securely. Refresh **Providers**
+   open it in your own browser.
+3. Refresh **Providers**
    after signing in. Once the shared subscription is ready, open **Manage**
    and click **Add device** to issue a separate
    launcher for each worker. Run it as shown, without `-- acp --login`. Workers
    use the shared subscription and its limits without signing in to Google.
-4. Open **Manage** and click **Get operator sign-in launcher** or **Reconnect** if
+4. Open **Manage** and click **Sign in to shared subscription** or **Reconnect** if
    the subscription needs attention. Remove a worker’s provider approval or
    revoke its client token to remove only its access. **Manage → Delete provider**
    removes all Antigravity proxy routes, their grants and saved proxy sign-ins.
@@ -269,7 +277,7 @@ shared subscription's quota and does not fall back to your local agy login.
 The proxy’s schema v8 upgrade keeps routes, client tokens, grants, and existing
 shared Claude sign-ins. It does not turn any old per-device Claude Code or
 Antigravity sign-in into a shared login. For each converted account, open
-**Providers → Manage → Get operator sign-in launcher** on its route and complete one new operator
+**Providers → Manage → Sign in to shared subscription** on its route and complete one new operator
 sign-in. Refresh **Providers** afterward. The operator sign-in restores access
 for existing clients; workers do not need new tokens or a vendor login. New
 worker launchers and approvals are unavailable until the shared route is enabled
@@ -462,7 +470,7 @@ substitutions. Origins and API paths are restricted to that integration. Sign-ou
 clears credentials and closes streams; requests fail closed until credentials are
 replaced. Claude Code and personal Antigravity use **Manage → Add device**
 and **Manage → Delete provider**, not this account editor.
-For either shared subscription, use **Get operator sign-in launcher** or
+For either shared subscription, use **Sign in to shared subscription** or
 **Reconnect** to manage the operator sign-in.
 
 For rotating accounts, move custody to the proxy: do not leave another process
@@ -859,7 +867,10 @@ Schema v5 replaced browser pairing with the native Claude vault. Schema v6 adds
 admin API key hashes and provisioning metadata; existing clients stay browser-managed. The v5 binary rejects v6 for read-write use: stop
 older writers before upgrading, and restore a protected backup to downgrade.
 The proxy allows up to 1,024 active clients and keeps up to 4,096 client rows;
-new clients can evict the oldest revoked rows without removing history.
+new clients can evict the oldest revoked rows without removing history. In the
+admin UI, open **Clients → Revoked** to permanently delete one client or select
+**Delete all revoked**. The **Requests** page still shows their past activity,
+and spending history is kept.
 
 ```sh
 term-llm serve proxy health --host 127.0.0.1 --port 8082

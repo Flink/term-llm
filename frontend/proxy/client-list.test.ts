@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, getByLabelText, getByRole, queryByRole } from '@testing-library/preact';
+import {
+  fireEvent,
+  getByLabelText,
+  getByRole,
+  queryByRole,
+  waitFor,
+} from '@testing-library/preact';
 import {
   ProxyClient,
   type ProxyAdminKey,
@@ -39,7 +45,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function render(callers: ProxyCaller[], adminKeys: ProxyAdminKey[] = []) {
+function setup(callers: ProxyCaller[], adminKeys: ProxyAdminKey[] = []) {
   const state: ProxyState = {
     defaults: null,
     providers: [],
@@ -62,9 +68,14 @@ function render(callers: ProxyCaller[], adminKeys: ProxyAdminKey[] = []) {
     navigate: vi.fn(),
     protectToken: vi.fn(),
   };
-  const root = callersView(state, new ProxyClient(vi.fn()), context);
+  const fetcher = vi.fn<typeof fetch>(async () => Response.json({ ok: true }));
+  const root = callersView(state, new ProxyClient(fetcher), context);
   document.body.append(root);
-  return root;
+  return { root, fetcher, context };
+}
+
+function render(callers: ProxyCaller[], adminKeys: ProxyAdminKey[] = []) {
+  return setup(callers, adminKeys).root;
 }
 
 describe('shortDate', () => {
@@ -141,7 +152,7 @@ it('labels API-created clients with their key name or revoked status and externa
   expect(browser).not.toHaveTextContent(/Created by|External ID/);
 });
 
-it('keeps one row expanded and folds revoked clients away without actions', () => {
+it('keeps one active row expanded and folds revoked clients away by default', () => {
   const root = render([
     caller({ id: 'c_aaaa1', name: 'Claude Code', grants: ['venice'] }),
     caller({ id: 'c_bbbb2', name: 'Claude Code', grants: ['chatgpt'] }),
@@ -159,5 +170,43 @@ it('keeps one row expanded and folds revoked clients away without actions', () =
   const revoked = root.querySelector('details.client-revoked')!;
   expect(revoked.querySelector('summary')).toHaveTextContent('Revoked (1)');
   expect(revoked).toHaveTextContent('term');
-  expect(queryByRole(revoked as HTMLElement, 'button')).toBeNull();
+  expect(revoked).not.toHaveAttribute('open');
+});
+
+it.each([
+  {
+    control: 'Delete Archived #old1',
+    confirmation: 'Permanently delete Archived #old1? Request history is kept.',
+    body: { id: 'c_old1', purge: true },
+    announcement: 'Deleted Archived #old1. Request history is kept.',
+  },
+  {
+    control: 'Delete all revoked',
+    confirmation: 'Permanently delete all revoked clients? Request history is kept.',
+    body: { purge_revoked: true },
+    announcement: 'Deleted all revoked clients. Request history is kept.',
+  },
+])('confirms $control before deleting and refreshing', async (test) => {
+  const { root, fetcher, context } = setup([
+    caller({ name: 'Active' }),
+    caller({ id: 'c_old1', name: 'Archived', revoked: true }),
+    caller({ id: 'c_old2', name: 'Archived', revoked: true }),
+  ]);
+  expect(queryByRole(root, 'button', { name: 'Delete Active' })).toBeNull();
+  const revoked = root.querySelector<HTMLDetailsElement>('details.client-revoked')!;
+  revoked.open = true;
+  const remove = getByRole(revoked, 'button', { name: test.control });
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+  fireEvent.click(remove);
+  expect(confirm).toHaveBeenCalledWith(test.confirmation);
+  expect(fetcher).not.toHaveBeenCalled();
+  expect(context.refresh).not.toHaveBeenCalled();
+
+  fireEvent.click(remove);
+  await waitFor(() => expect(context.announce).toHaveBeenCalledWith(test.announcement));
+  expect(fetcher).toHaveBeenCalledExactlyOnceWith(
+    '/_proxy/api/callers',
+    expect.objectContaining({ method: 'DELETE', body: JSON.stringify(test.body) }),
+  );
+  expect(context.refresh).toHaveBeenCalledTimes(1);
 });

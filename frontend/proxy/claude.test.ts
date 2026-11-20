@@ -176,6 +176,16 @@ function setup(initial = snapshot()) {
 async function click(root: HTMLElement, name: string) {
   fireEvent.click(await waitFor(() => getByRole(root, 'button', { name })));
 }
+async function chooseSignInClient(root: HTMLElement, client: string | { name: string }) {
+  const select = await waitFor(() => getByLabelText(root, 'Sign in from client'));
+  if (typeof client === 'string') {
+    fireEvent.change(select, { target: { value: client } });
+  } else {
+    fireEvent.change(select, { target: { value: 'new' } });
+    fireEvent.input(getByLabelText(root, 'New client name'), { target: { value: client.name } });
+  }
+  await click(root, 'Get sign-in command');
+}
 function providerFixture(state = snapshot(), refresh = vi.fn().mockResolvedValue(state)) {
   const api = new ProxyClient(vi.fn());
   const errors: unknown[] = [];
@@ -217,16 +227,19 @@ it('keeps the operator launcher token out of browser storage and clears it only 
   const storageWrite = vi.spyOn(Storage.prototype, 'setItem');
   const view = providerOnboarding(presets[0], snapshot(), api, context, vi.fn())!;
   document.body.append(view);
-  await click(view, 'Create shared route & get sign-in launcher');
+  await click(view, 'Create shared route & sign in');
+  await chooseSignInClient(view, { name: 'laptop' });
   const command = await waitFor(
-    () => getByLabelText(view, 'Operator sign-in launcher command') as HTMLTextAreaElement,
+    () => getByLabelText(view, 'Operator sign-in command') as HTMLTextAreaElement,
   );
   expect(command.value).toContain('scoped-canary-1');
   expect(command).toHaveFocus();
-  expect(api.setupNative).toHaveBeenCalledExactlyOnceWith('claude', 7, undefined, 'create');
+  expect(api.setupNative).toHaveBeenCalledExactlyOnceWith('claude', 7, undefined, 'create', {
+    name: 'laptop',
+  });
   expect(context.hasProtectedToken!()).toBe(true);
   expect(storageWrite).not.toHaveBeenCalled();
-  await click(view, 'Copy operator launcher command');
+  await click(view, 'Copy sign-in command');
   await waitFor(() => expect(writeText).toHaveBeenCalledWith(command.value));
   refresh.mockRejectedValueOnce(new ProxyAPIError(503, 'State unavailable.'));
   await click(view, 'I saved it — dismiss');
@@ -278,20 +291,21 @@ it('offers only shared Claude setup and presents an operator-only launcher', asy
   expect(getByText(root, 'Sign in once, then add devices')).toBeVisible();
   await click(root, 'Claude Code');
   expect(queryByRole(root, 'button', { name: 'Create route & get launcher' })).toBeNull();
-  expect(
-    getByRole(root, 'button', { name: 'Create shared route & get sign-in launcher' }),
-  ).toBeVisible();
+  expect(getByRole(root, 'button', { name: 'Create shared route & sign in' })).toBeVisible();
   expect(api.setupNative).not.toHaveBeenCalled();
-  await click(root, 'Create shared route & get sign-in launcher');
+  await click(root, 'Create shared route & sign in');
+  await chooseSignInClient(root, { name: 'laptop' });
   const command = await waitFor(
-    () => getByLabelText(root, 'Operator sign-in launcher command') as HTMLTextAreaElement,
+    () => getByLabelText(root, 'Operator sign-in command') as HTMLTextAreaElement,
   );
-  expect(api.setupNative).toHaveBeenCalledExactlyOnceWith('claude', 7, undefined, 'create');
+  expect(api.setupNative).toHaveBeenCalledExactlyOnceWith('claude', 7, undefined, 'create', {
+    name: 'laptop',
+  });
   expect(command.value).toBe(
     "term-llm proxy run claude --url 'https://proxy.example/native/' --token 'scoped-canary-1'",
   );
   expect(command).toHaveFocus();
-  expect(root).toHaveTextContent('Keep this operator launcher private.');
+  expect(root).toHaveTextContent('Start sign-in within 15 minutes.');
   expect(queryByLabelText(root, 'Provider YAML')).toBeNull();
 
   vi.mocked(api.state).mockResolvedValueOnce(sharedSnapshot('needs_login'));
@@ -299,7 +313,7 @@ it('offers only shared Claude setup and presents an operator-only launcher', asy
   await waitFor(() => expect(root).toHaveTextContent('Sign-in needed'));
   const summary = getByText(root, 'Manage', { selector: 'summary' });
   fireEvent.click(summary);
-  expect(getByRole(root, 'button', { name: 'Get operator sign-in launcher' })).toBeVisible();
+  expect(getByRole(root, 'button', { name: 'Sign in to shared subscription' })).toBeVisible();
   expect(queryByRole(root, 'button', { name: 'Add device' })).toBeNull();
   expect(summary.parentElement!.querySelectorAll('details')).toHaveLength(0);
 
@@ -310,7 +324,7 @@ it('offers only shared Claude setup and presents an operator-only launcher', asy
 });
 
 it.each([
-  ['needs_login', 'Get operator sign-in launcher'],
+  ['needs_login', 'Sign in to shared subscription'],
   ['refreshing', 'Reconnect'],
   ['ready', 'Reconnect'],
 ])(
@@ -333,23 +347,34 @@ it.each([
 
 it('separates reconnect from Add device on the same ready shared route', async () => {
   const state = sharedSnapshot('ready');
-  const { api, context } = providerFixture(state);
+  const { api, context, connection, errors } = providerFixture(state);
   const view = providerRouteAction(route, state, api, context)!;
   document.body.append(view);
   await click(view, 'Reconnect');
-  await waitFor(() =>
-    expect(getByLabelText(view, 'Operator sign-in launcher command')).toBeVisible(),
+  await click(view, 'Get sign-in command');
+  await waitFor(() => expect(errors).toHaveLength(1));
+  expect(api.setupNative).not.toHaveBeenCalled();
+  // An armed existing client keeps its token, so the reply carries none.
+  vi.mocked(api.setupNative).mockResolvedValueOnce({ ...connection, token: undefined });
+  await chooseSignInClient(view, caller.id);
+  const command = await waitFor(() => getByLabelText(view, 'Operator sign-in command'));
+  expect(command).toHaveValue(
+    'term-llm proxy run claude --url \'https://proxy.example/native/\' --token "$TERM_LLM_PROXY_TOKEN"',
   );
-  expect(api.setupNative).toHaveBeenCalledExactlyOnceWith('claude', 7, route.name, 'connect');
+  expect(view).toHaveTextContent(`Run this command on the device that uses ${caller.name}`);
+  expect(api.setupNative).toHaveBeenCalledExactlyOnceWith('claude', 7, route.name, 'connect', {
+    caller: caller.id,
+  });
+  expect(context.hasProtectedToken!()).toBe(false);
   expect(queryByRole(view, 'button', { name: 'Add device' })).toBeNull();
-  await click(view, 'I saved it — dismiss');
-  await waitFor(() => expect(context.hasProtectedToken!()).toBe(false));
+  await click(view, 'Done');
+  await waitFor(() => expect(getByRole(view, 'button', { name: 'Add device' })).toBeVisible());
   await click(view, 'Add device');
   await waitFor(() => expect(getByLabelText(view, 'Launcher command')).toBeVisible());
   expect(api.setupNative).toHaveBeenNthCalledWith(2, 'claude', 7, route.name);
   expect(view).toHaveTextContent('with an updated term-llm');
   expect(view).toHaveTextContent('does not open a browser');
-  expect(queryByLabelText(view, 'Operator sign-in launcher command')).toBeNull();
+  expect(queryByLabelText(view, 'Operator sign-in command')).toBeNull();
 });
 
 it('keeps clearing all Claude setup separate and requires confirmation', async () => {
@@ -420,8 +445,8 @@ it.each(['claude', 'agy'] as const)(
     };
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => Response.json(connection));
     const api = new ProxyClient(fetcher);
-    await api.setupNative(launcher, 7, undefined, 'create');
-    await api.setupNative(launcher, 8, route.name, 'connect');
+    await api.setupNative(launcher, 7, undefined, 'create', { name: 'laptop' });
+    await api.setupNative(launcher, 8, route.name, 'connect', { caller: 'c_dev' });
     await api.setupNative(launcher, 9, route.name);
     expect(
       fetcher.mock.calls.map(([url, request]) => [
@@ -430,11 +455,15 @@ it.each(['claude', 'agy'] as const)(
         JSON.parse(String(request?.body)),
       ]),
     ).toEqual([
-      [`/_proxy/api/${launcher}/setup`, 'POST', { revision: 7, shared_action: 'create' }],
       [
         `/_proxy/api/${launcher}/setup`,
         'POST',
-        { revision: 8, route: route.name, shared_action: 'connect' },
+        { revision: 7, shared_action: 'create', name: 'laptop' },
+      ],
+      [
+        `/_proxy/api/${launcher}/setup`,
+        'POST',
+        { revision: 8, route: route.name, shared_action: 'connect', caller: 'c_dev' },
       ],
       [`/_proxy/api/${launcher}/setup`, 'POST', { revision: 9, route: route.name }],
     ]);
@@ -575,7 +604,7 @@ it.each(
     await click(root, 'Create client');
     expect(create).toHaveBeenCalledExactlyOnceWith('Worker', [ready ? 'native' : 'openai-api'], 7);
     await waitFor(() => expect(getByLabelText(root, 'Client token')).toBeVisible());
-    expect(queryByLabelText(root, 'Operator sign-in launcher command')).toBeNull();
+    expect(queryByLabelText(root, 'Operator sign-in command')).toBeNull();
     if (ready) {
       expect(getByLabelText(root, 'Launcher command')).toHaveValue(
         `term-llm proxy run ${launcher} --url '${location.origin + route.local_prefix}' --token 'shared-worker-canary'`,
@@ -607,9 +636,12 @@ it('creates a shared Antigravity route and shows an operator-only login command'
   expect(root).toHaveTextContent('macOS credential isolation has not been verified');
   expect(queryByRole(root, 'button', { name: 'Connect new account' })).toBeNull();
   expect(queryByRole(root, 'button', { name: 'Create route & get launcher' })).toBeNull();
-  await click(root, 'Create shared route & get sign-in launcher');
-  const command = await waitFor(() => getByLabelText(root, 'Operator sign-in launcher command'));
-  expect(api.setupNative).toHaveBeenCalledExactlyOnceWith('agy', 7, undefined, 'create');
+  await click(root, 'Create shared route & sign in');
+  await chooseSignInClient(root, { name: 'laptop' });
+  const command = await waitFor(() => getByLabelText(root, 'Operator sign-in command'));
+  expect(api.setupNative).toHaveBeenCalledExactlyOnceWith('agy', 7, undefined, 'create', {
+    name: 'laptop',
+  });
   expect(command).toHaveValue(
     "term-llm proxy run agy --url 'https://proxy.example/native/' --token 'scoped-canary-1' -- acp --login",
   );
@@ -625,9 +657,14 @@ it('signs in and adds workers to the same shared Antigravity route without sendi
 
   expect(pending.querySelector('details')).toBeNull();
   expect(queryByRole(pending, 'button', { name: 'Add device' })).toBeNull();
-  await click(pending, 'Get operator sign-in launcher');
-  expect(api.setupNative).toHaveBeenCalledExactlyOnceWith('agy', 7, agyRoute.name, 'connect');
-  expect(getByLabelText(pending, 'Operator sign-in launcher command')).toHaveValue(
+  await click(pending, 'Sign in to shared subscription');
+  await chooseSignInClient(pending, { name: 'laptop' });
+  await waitFor(() =>
+    expect(api.setupNative).toHaveBeenCalledExactlyOnceWith('agy', 7, agyRoute.name, 'connect', {
+      name: 'laptop',
+    }),
+  );
+  expect(getByLabelText(pending, 'Operator sign-in command')).toHaveValue(
     "term-llm proxy run agy --url 'https://proxy.example/native/' --token 'scoped-canary-1' -- acp --login",
   );
   await click(pending, 'I saved it — dismiss');

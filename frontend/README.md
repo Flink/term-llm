@@ -129,13 +129,18 @@ values and client tokens are never persisted in browser storage; server-stored
 secrets are plaintext at rest.
 
 **Providers → Add provider** uses shared subscriptions for Claude Code and
-personal Antigravity. **Create shared route & get sign-in launcher** posts
-`{ revision, shared_action: "create" }` to `/_proxy/api/claude/setup` or
-`/_proxy/api/agy/setup`. **Manage → Get operator sign-in launcher** or
-**Reconnect** posts `{ revision, route, shared_action: "connect" }` to get a
-private operator launcher for an existing shared route. The operator signs in
-once and refreshes the UI. Only the Antigravity operator command appends
-`-- acp --login`.
+personal Antigravity. **Create shared route & sign in** posts
+`{ revision, shared_action: "create", caller | name }` to
+`/_proxy/api/claude/setup` or `/_proxy/api/agy/setup`. **Manage → Sign in to
+shared subscription** or **Reconnect** posts
+`{ revision, route, shared_action: "connect", caller | name }` for an existing
+shared route. Sign-in always runs from a real client: `caller` arms an existing
+active client, which keeps its token and other approvals, gains the route grant
+and gets a 15-minute enrollment; the reply omits `token`, and the command uses
+`"$TERM_LLM_PROXY_TOKEN"` in its place. `name` creates a new client instead,
+whose token is shown once. No separate launcher client is created. The operator
+signs in once and refreshes the UI. Only the Antigravity operator command
+appends `-- acp --login`.
 
 **Manage → Add device** posts `{ revision, route }` to issue a separately
 revocable worker launcher, never to retrieve an existing token. It is available
@@ -173,6 +178,14 @@ Client grants start unchecked and create/edit submits the state revision. Grant
 edits do not reissue tokens. Tokens are shown once with a Copy action; curl examples
 use `$TOKEN`. Tabs, refresh and sign-out confirm dismissal while a token is shown;
 browser leave requests a native warning, but shutdown can still discard it.
+
+In **Clients → Revoked**, permanently delete a single revoked client or select
+**Delete all revoked**. Both actions require confirmation and keep request and
+spending history. `DELETE /_proxy/api/callers` with `{ "id": "…" }` still revokes
+without deleting. Send `{ "id": "…", "purge": true }` to delete one revoked
+client (`409` for an active client, `404` if missing), or
+`{ "purge_revoked": true }` without an ID to delete all revoked clients. A
+successful delete returns `{ "ok": true }`.
 
 Upstream origin/base-path or canonical substitution changes invalidate grants;
 local-prefix, enabled and local-auth-format changes and same-name secret rotation

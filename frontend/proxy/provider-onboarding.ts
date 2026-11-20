@@ -14,6 +14,7 @@ import {
   type NativeProvider,
 } from './native';
 import { actions, button, disclosure, el, field, input, submit, type UIContext } from './dom';
+import { nativeSignInClientForm, type NativeSignInChoice } from './native-signin';
 
 import { requireProviderName, slugPattern } from './provider-name';
 
@@ -172,6 +173,10 @@ function chatGPTSignIn(
   return view;
 }
 
+type NativeIssue =
+  | [use: 'shared-operator', route: ProxyRoute | undefined, choice: NativeSignInChoice]
+  | [use: 'shared-worker', route: ProxyRoute];
+
 function issueNativeLauncher(
   view: HTMLElement,
   provider: NativeProvider,
@@ -179,9 +184,8 @@ function issueNativeLauncher(
   api: ProxyClient,
   context: UIContext,
   source: HTMLButtonElement,
-  onDismiss: (() => void) | undefined,
-  ...[use, route]:
-    [use: 'shared-operator', route?: ProxyRoute] | [use: 'shared-worker', route: ProxyRoute]
+  onDismiss: () => void,
+  route: ProxyRoute,
 ) {
   if (context.hasProtectedToken?.()) {
     context.announce(
@@ -189,37 +193,107 @@ function issueNativeLauncher(
     );
     return;
   }
-  const operator = use === 'shared-operator';
-  void context.run(async () => {
-    context.protectToken(true, true);
-    let issued = false;
-    try {
-      const connection = operator
-        ? route
-          ? await api.setupNative(provider.launcher, state.revision, route.name, 'connect')
-          : await api.setupNative(provider.launcher, state.revision, undefined, 'create')
-        : await api.setupNative(provider.launcher, state.revision, route.name);
-      const details = nativeConnectionDetails(provider, connection, context, use);
-      const dismiss = button('I saved it — dismiss', () => {
-        void context.run(async () => {
-          await context.refresh(route?.name ?? provider.launcher);
-          details.querySelectorAll('textarea').forEach((text) => (text.value = ''));
-          context.protectToken(false);
-          onDismiss?.();
-        }, dismiss);
-      });
-      issued = true;
-      context.protectToken(true);
-      view.replaceChildren(
-        el('p', 'Shown once. Save this launcher securely; its token cannot be retrieved later.'),
-        details,
-        dismiss,
-      );
-      view.querySelector('textarea')?.focus();
-    } finally {
-      if (!issued) context.protectToken(false);
-    }
-  }, source);
+  void context.run(
+    () =>
+      issueNativeConnection(view, provider, state, api, context, onDismiss, 'shared-worker', route),
+    source,
+  );
+}
+
+// Runs inside the caller's context.run. Arming an existing client issues no
+// token, so there is nothing to protect.
+async function issueNativeConnection(
+  view: HTMLElement,
+  provider: NativeProvider,
+  state: ProxyState,
+  api: ProxyClient,
+  context: UIContext,
+  onDismiss: () => void,
+  ...[use, route, choice]: NativeIssue
+): Promise<void> {
+  const mintsToken = !choice || 'name' in choice.client;
+  if (mintsToken) context.protectToken(true, true);
+  let issued = false;
+  try {
+    const connection = !choice
+      ? await api.setupNative(provider.launcher, state.revision, route!.name)
+      : route
+        ? await api.setupNative(
+            provider.launcher,
+            state.revision,
+            route.name,
+            'connect',
+            choice.client,
+          )
+        : await api.setupNative(
+            provider.launcher,
+            state.revision,
+            undefined,
+            'create',
+            choice.client,
+          );
+    const details = nativeConnectionDetails(provider, connection, context, use, choice?.label);
+    const dismiss = button(mintsToken ? 'I saved it — dismiss' : 'Done', () => {
+      void context.run(async () => {
+        await context.refresh(route?.name ?? provider.launcher);
+        details.querySelectorAll('textarea').forEach((text) => (text.value = ''));
+        if (mintsToken) context.protectToken(false);
+        onDismiss();
+      }, dismiss);
+    });
+    issued = true;
+    if (mintsToken) context.protectToken(true);
+    view.replaceChildren(
+      el(
+        'p',
+        mintsToken
+          ? 'Shown once. Save this launcher securely; its token cannot be retrieved later.'
+          : `${choice!.label} keeps its existing token; this command does not contain it.`,
+      ),
+      details,
+      dismiss,
+    );
+    view.querySelector('textarea')?.focus();
+  } finally {
+    if (mintsToken && !issued) context.protectToken(false);
+  }
+}
+
+// Shared sign-in first asks which client to arm, then shows its command.
+function startNativeSignIn(
+  view: HTMLElement,
+  provider: NativeProvider,
+  state: ProxyState,
+  api: ProxyClient,
+  context: UIContext,
+  route: ProxyRoute | undefined,
+  restore: () => void,
+) {
+  if (context.hasProtectedToken?.()) {
+    context.announce('Save or dismiss the open launcher or client token before signing in.');
+    return;
+  }
+  const form = nativeSignInClientForm(
+    provider,
+    state,
+    context,
+    route,
+    (choice) =>
+      issueNativeConnection(
+        view,
+        provider,
+        state,
+        api,
+        context,
+        restore,
+        'shared-operator',
+        route,
+        choice,
+      ),
+    restore,
+  );
+  view.replaceChildren(form);
+  form.querySelector('select')?.focus();
 }
 
 function nativeLauncherSetup(
@@ -230,18 +304,21 @@ function nativeLauncherSetup(
 ): HTMLElement {
   const view = el('div');
   view.className = 'provider-onboarding';
-  const create = button('Create shared route & get sign-in launcher', () =>
-    issueNativeLauncher(view, provider, state, api, context, create, undefined, 'shared-operator'),
-  );
-  create.className = 'primary';
-  view.append(
-    el(
-      'p',
-      'Sign in once with the operator launcher. Authorized devices use your subscription and its limits without signing in themselves. Only grant access to devices you trust.',
-    ),
-  );
-  if (provider.setupRequirements) view.append(el('p', provider.setupRequirements));
-  view.append(create);
+  const render = () => {
+    const create = button('Create shared route & sign in', () =>
+      startNativeSignIn(view, provider, state, api, context, undefined, render),
+    );
+    create.className = 'primary';
+    view.replaceChildren(
+      el(
+        'p',
+        'Sign in once from one of your own clients. Authorized devices use your subscription and its limits without signing in themselves. Only grant access to devices you trust.',
+      ),
+    );
+    if (provider.setupRequirements) view.append(el('p', provider.setupRequirements));
+    view.append(create);
+  };
+  render();
   return view;
 }
 
@@ -277,8 +354,8 @@ export function providerRouteAction(
     const help = ready
       ? 'Create a separately revocable device launcher for each worker, or reconnect the shared sign-in.'
       : needsLogin
-        ? 'Use an operator launcher on your own device to sign in to the shared subscription. This launcher is not for workers.'
-        : 'Shared sign-in is refreshing. You can reconnect with a fresh operator launcher if needed.';
+        ? 'Sign in to the shared subscription from one of your own clients, not a worker.'
+        : 'Shared sign-in is refreshing. You can reconnect from one of your own clients if needed.';
     const renderControls = () => {
       const parts: HTMLElement[] = [el('p', help)];
       if (provider.setupRequirements) {
@@ -297,25 +374,14 @@ export function providerRouteAction(
             context,
             addDevice,
             renderControls,
-            'shared-worker',
             route,
           ),
         );
         addDevice.className = 'primary';
         buttons.push(addDevice);
       }
-      const operator = button(needsLogin ? 'Get operator sign-in launcher' : 'Reconnect', () =>
-        issueNativeLauncher(
-          view,
-          provider,
-          state,
-          api,
-          context,
-          operator,
-          renderControls,
-          'shared-operator',
-          route,
-        ),
+      const operator = button(needsLogin ? 'Sign in to shared subscription' : 'Reconnect', () =>
+        startNativeSignIn(view, provider, state, api, context, route, renderControls),
       );
       if (needsLogin) operator.className = 'primary';
       buttons.push(operator);

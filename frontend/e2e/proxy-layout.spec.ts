@@ -1282,7 +1282,7 @@ for (const width of [1440, 390]) {
           }
           const caller = {
             id: operator ? 'operator' : 'worker',
-            name: operator ? `${provider} sign-in launcher` : `${shortName} worker`,
+            name: operator ? 'laptop' : `${shortName} worker`,
             grants: [kind],
             revoked: false,
             created: 1,
@@ -1309,7 +1309,7 @@ for (const width of [1440, 390]) {
       await expect(heading).toBeVisible();
       const setup = page.locator('section').filter({ has: heading });
       const setupActions = setup.getByRole('button').filter({ hasNotText: /^Cancel$/ });
-      await expect(setupActions).toHaveText(['Create shared route & get sign-in launcher']);
+      await expect(setupActions).toHaveText(['Create shared route & sign in']);
       await expect(
         setup.getByRole('button', {
           name: 'Create route & get launcher',
@@ -1318,23 +1318,32 @@ for (const width of [1440, 390]) {
         }),
       ).toHaveCount(0);
       await setupActions.click();
+      // No client exists yet, so sign-in names a new one instead of minting a launcher.
+      await expect(setup.getByLabel('Sign in from client')).toHaveValue('new');
+      await setup.getByLabel('New client name').fill('laptop');
+      await page.screenshot({
+        path: testInfo.outputPath(`native-${launcherName}-signin-client-${width}.png`),
+        fullPage: true,
+      });
+      await setup.getByRole('button', { name: 'Get sign-in command', exact: true }).click();
+      await expect
+        .poll(() => mutations[0]?.body)
+        .toMatchObject({ shared_action: 'create', name: 'laptop' });
 
       const launcher = (token: string) =>
         `term-llm proxy run ${launcherName} --url '${url}' --token '${token}'`;
       const operatorLauncher = `${launcher(operatorToken)}${agy ? ' -- acp --login' : ''}`;
-      const operatorCommand = page.getByLabel('Operator sign-in launcher command', { exact: true });
+      const operatorCommand = page.getByLabel('Operator sign-in command', { exact: true });
       const workerCommand = page.getByLabel('Launcher command', { exact: true });
       await expect(operatorCommand).toHaveValue(operatorLauncher);
       await expect(operatorCommand).toBeFocused();
-      await expect(setup).toContainText('Keep this operator launcher private.');
+      await expect(setup).toContainText('Start sign-in within 15 minutes.');
       await expect(workerCommand).toHaveCount(0);
       await expect(page.getByLabel('Provider YAML')).toHaveCount(0);
-      const copyOperator = page.getByRole('button', { name: 'Copy operator launcher command' });
+      const copyOperator = page.getByRole('button', { name: 'Copy sign-in command' });
       await expect(copyOperator).toHaveClass('primary');
       await copyOperator.click();
-      await expect(page.getByRole('status')).toContainText(
-        'Operator sign-in launcher command copied',
-      );
+      await expect(page.getByRole('status')).toContainText('Operator sign-in command copied');
       expect(
         await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage })),
       ).not.toContain('scoped-browser-canary');
@@ -1358,7 +1367,7 @@ for (const width of [1440, 390]) {
       const manage = await openManage(page, kind);
       await expect(manage.locator('details')).toHaveCount(0);
       await expect(
-        manage.getByRole('button', { name: 'Get operator sign-in launcher', exact: true }),
+        manage.getByRole('button', { name: 'Sign in to shared subscription', exact: true }),
       ).toBeVisible();
       const addDevice = manage.getByRole('button', { name: 'Add device', exact: true });
       await expect(addDevice).toHaveCount(0);
@@ -1419,7 +1428,7 @@ for (const width of [1440, 390]) {
       ).toBeVisible();
       await expect(page.getByRole('status')).toContainText(`Deleted provider ${kind}`);
       expect(mutations).toEqual([
-        { method: 'POST', body: { revision: 1, shared_action: 'create' } },
+        { method: 'POST', body: { revision: 1, shared_action: 'create', name: 'laptop' } },
         { method: 'POST', body: { revision: 2, route: kind } },
         { method: 'DELETE', body: { revision: 3 } },
       ]);

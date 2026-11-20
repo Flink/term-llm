@@ -96,12 +96,20 @@ func TestClaudeNativeCommandHandoffOffline(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// A reused client profile may hold an earlier proxy login alias.
+			credentials := filepath.Join(stateDir, claudeNativeCredentialsFile)
+			if err := os.WriteFile(credentials, []byte(`{"claudeAiOauth":{}}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
 			cleanup, err := prepareClaudeNativeCommand(cmd, bootstrap, claudeNativeTestToken, stateDir)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if cleanup != nil {
 				defer cleanup()
+			}
+			if _, err := os.Stat(credentials); (tt.placeholder == "") != errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("operator login must clear only a stale profile login: placeholder=%q stat=%v", tt.placeholder, err)
 			}
 			output, err := cmd.Output()
 			if err != nil {

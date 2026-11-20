@@ -1,9 +1,11 @@
 package proxy
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -233,6 +235,28 @@ func (s *store) purgeCaller(ctx context.Context, id string) (Caller, error) {
 		return purgeCallerTx(ctx, tx, id)
 	})
 	return c, err
+}
+
+// purgeRevokedCallers deletes one revoked client, or all of them if id is "".
+func (s *store) purgeRevokedCallers(ctx context.Context, id string) error {
+	return s.accountWrite(ctx, func(tx *sql.Tx) error {
+		ids, err := selectStrings(ctx, tx, "SELECT id FROM callers WHERE revoked!=0 AND (?='' OR id=?)", id, id)
+		if err != nil {
+			return fmt.Errorf("list revoked clients: %w", err)
+		}
+		if id != "" && len(ids) == 0 {
+			if ids, err = selectStrings(ctx, tx, "SELECT id FROM callers WHERE id=?", id); err == nil && len(ids) == 0 {
+				return errCallerMissing
+			}
+			return cmp.Or(err, errCallerActive)
+		}
+		for _, id := range ids {
+			if err := purgeCallerTx(ctx, tx, id); err != nil {
+				return fmt.Errorf("purge revoked client: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 // No request or money history is joined or removed. Its independent snapshots

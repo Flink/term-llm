@@ -648,8 +648,6 @@ it('keeps pending shared Claude out of the generic credentials form', () => {
   expect(root.querySelector('.provider-status')).toHaveTextContent('Sign-in needed');
   expect(root.querySelector('.provider-status')).not.toHaveTextContent('ready');
   choose(root, 'Claude Code');
-  expect(
-    getByRole(root, 'button', { name: 'Create shared route & get sign-in launcher' }),
-  ).toBeVisible();
+  expect(getByRole(root, 'button', { name: 'Create shared route & sign in' })).toBeVisible();
   expect(queryByLabelText(root, 'Trusted account')).toBeNull();
 });

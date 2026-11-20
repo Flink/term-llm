@@ -96,6 +96,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it('renders the saved client name even after the client is deleted', async () => {
+  const { root, requests } = setup(1);
+  requests.mockImplementation(async () => ({
+    requests: [{ ...record(1), caller_id: 'c_deleted', caller_name: 'Deleted client' }],
+    next: 0,
+    total: 1,
+    page: 1,
+    page_size: 25,
+  }));
+  // The state fixture has no callers. The ledger must use the request snapshot.
+  await waitFor(() =>
+    expect(root.querySelector('.request-client')).toHaveTextContent('Deleted client'),
+  );
+});
+
 describe('first-page polling', () => {
   async function mount() {
     vi.useFakeTimers();

@@ -332,7 +332,7 @@ describe('provider-wide client approval', () => {
       () => getByLabelText(root, 'Launcher command') as HTMLTextAreaElement,
     );
     expect(command.value).toContain("--token 'scope'\\''token'");
-    expect(queryByLabelText(root, 'Operator sign-in launcher command')).toBeNull();
+    expect(queryByLabelText(root, 'Operator sign-in command')).toBeNull();
     expect(root).toHaveTextContent('Your normal Claude setup stays unchanged.');
   });
 

@@ -1,6 +1,6 @@
-import type { ProxyCaller } from '../src/api/proxy-client';
+import type { ProxyCaller, ProxyClient } from '../src/api/proxy-client';
 import type { ProviderGroup } from './provider-groups';
-import { badge, dateTime, el } from './dom';
+import { actions, badge, confirmAction, dateTime, disclosure, el, type UIContext } from './dom';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -118,13 +118,13 @@ export function clientListHeader(): HTMLElement {
   return head;
 }
 
-/** A one-line client summary; active rows toggle the given detail panel. */
+// A client summary; active rows toggle a detail panel, revoked rows can be deleted.
 export function clientRow(
   caller: ProxyCaller,
   suffixes: Map<string, string>,
   keyNames: ReadonlyMap<string, string>,
   groups: ProviderGroup[],
-  detail?: { panel: HTMLElement; toggle: (open: boolean) => void },
+  options: { panel: HTMLElement; toggle: (open: boolean) => void } | { action: HTMLElement },
   now = new Date(),
 ): HTMLElement {
   const heading = el('h2');
@@ -136,9 +136,10 @@ export function clientRow(
     metadata.push(keyName ? `Created by API key ‹${keyName}›` : 'Created by a revoked API key');
   }
   if (caller.external_id) metadata.push(`External ID: ${caller.external_id}`);
-  const identity = metadata.length
-    ? el('div', heading, ...metadata.map((text) => el('p', el('small', text))))
-    : heading;
+  const detail = 'panel' in options ? options : undefined;
+  const metadataNodes: HTMLElement[] = metadata.map((text) => el('p', el('small', text)));
+  if ('action' in options) metadataNodes.push(options.action);
+  const identity = metadataNodes.length ? el('div', heading, ...metadataNodes) : heading;
   const main = el('div', identity, approvalBadges(caller, groups), lastUsed(caller, now));
   main.className = 'client-row-main';
   const row = el('article', main);
@@ -163,6 +164,53 @@ export function clientRow(
   main.append(chevron);
   row.append(detail.panel);
   return row;
+}
+
+export function revokedClients(
+  callers: ProxyCaller[],
+  suffixes: Map<string, string>,
+  keyNames: ReadonlyMap<string, string>,
+  groups: ProviderGroup[],
+  api: ProxyClient,
+  context: UIContext,
+): HTMLDetailsElement {
+  const focusKey = 'revoked-clients';
+  const historyNote = 'Request history is kept.';
+  const deleteAll = confirmAction(
+    'Delete all revoked',
+    async () => {
+      await api.purgeAllRevokedCallers();
+      await context.refresh();
+      context.announce(`Deleted all revoked clients. ${historyNote}`);
+    },
+    context,
+    `Permanently delete all revoked clients? ${historyNote}`,
+  );
+  const rows = callers.map((caller) => {
+    const label = clientLabel(caller, suffixes);
+    const remove = confirmAction(
+      'Delete…',
+      async () => {
+        await api.purgeCaller(caller.id);
+        await context.refresh(focusKey);
+        context.announce(`Deleted ${label}. ${historyNote}`);
+      },
+      context,
+      `Permanently delete ${label}? ${historyNote}`,
+    );
+    remove.setAttribute('aria-label', `Delete ${label}`);
+    return clientRow(caller, suffixes, keyNames, groups, { action: actions(remove) });
+  });
+  const list = el('div', ...rows);
+  list.className = 'client-list revoked-list';
+  const group = disclosure(`Revoked (${callers.length})`, actions(deleteAll), list);
+  group.className = 'client-revoked';
+  const summary = group.querySelector('summary');
+  if (summary) {
+    summary.dataset.focus = focusKey;
+    summary.tabIndex = 0;
+  }
+  return group;
 }
 
 export function setRowExpanded(row: HTMLElement, open: boolean): void {

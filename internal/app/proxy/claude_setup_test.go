@@ -18,7 +18,7 @@ import (
 func (s *store) createClaudeSetup(ctx context.Context, next *snapshot, account *accountRecord, route, id, token string) error {
 	for _, r := range next.routes {
 		if r.Name == route {
-			return s.createNativeSetup(ctx, next, account, r.Route, id, token, claudeSetup.callerName, false, []string{route})
+			return s.createNativeSetup(ctx, next, account, r.Route, nativeSetupCaller{id: id, token: token, name: claudeSetup.callerName}, false, []string{route})
 		}
 	}
 	return fmt.Errorf("missing route")
@@ -93,7 +93,7 @@ func TestClaudeSetupDefaultsToCreateAndConnectReusesRoute(t *testing.T) {
 		t.Fatalf("clients=%+v err=%v", clients, err)
 	}
 	for _, c := range clients {
-		if c.Name != "Claude Code sign-in launcher" || c.Revoked || !reflect.DeepEqual(c.Grants, []string{route.Name}) {
+		if c.Name != "Claude Code" || c.Revoked || !reflect.DeepEqual(c.Grants, []string{route.Name}) {
 			t.Fatalf("unscoped client: %+v", c)
 		}
 	}

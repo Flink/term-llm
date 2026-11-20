@@ -5,6 +5,7 @@ import {
   clientRow,
   duplicateSuffixes,
   providerChips,
+  revokedClients,
   setRowExpanded,
   sortCallers,
   type ProviderApprovalState,
@@ -19,7 +20,6 @@ import {
   card,
   confirmAction,
   dateTime,
-  disclosure,
   el,
   field,
   input,
@@ -495,15 +495,7 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
     list.className = 'client-list';
     view.append(list);
   }
-  if (revoked.length) {
-    const list = el(
-      'div',
-      ...revoked.map((caller) => clientRow(caller, suffixes, keyNames, groups)),
-    );
-    list.className = 'client-list revoked-list';
-    const group = disclosure(`Revoked (${revoked.length})`, list);
-    group.className = 'client-revoked';
-    view.append(group);
-  }
+  if (revoked.length)
+    view.append(revokedClients(revoked, suffixes, keyNames, groups, api, context));
   return view;
 }

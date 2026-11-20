@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"net/http"
@@ -29,11 +30,14 @@ type nativeSetupInput struct {
 	Revision     *int64 `json:"revision"`
 	Route        string `json:"route,omitempty"`
 	SharedAction string `json:"shared_action,omitempty"`
+	// Shared sign-in arms an existing client or creates one; never a launcher.
+	Caller string `json:"caller,omitempty"`
+	Name   string `json:"name,omitempty"`
 }
 
 type nativeSetupReply struct {
 	URL      string `json:"url"`
-	Token    string `json:"token"`
+	Token    string `json:"token,omitempty"` // Empty when an existing client was armed.
 	CallerID string `json:"caller_id"`
 	Revision int64  `json:"revision"`
 }
@@ -72,37 +76,52 @@ func (s *Service) nativeSetupAPI(w http.ResponseWriter, r *http.Request, provide
 		fail(w, 403, "Admin Host is not allowed")
 		return
 	}
-	if err := in.validateSharedAction(r.Method); err != nil {
-		provider.setupFailure(w, err)
-		return
-	}
 	if in.SharedAction == "" && in.Route == "" {
 		in.SharedAction = "create"
+	}
+	target, err := in.setupCaller(r.Method, provider)
+	if err != nil {
+		provider.setupFailure(w, err)
+		return
 	}
 	next, chosen, account, err := s.prepareNativeSetup(r, provider, in.Route, in.SharedAction)
 	if err != nil {
 		provider.setupFailure(w, err)
 		return
 	}
-	id, token := randomToken("c_")[:26], randomToken("sk-tlp-")
-	callerName := provider.callerName
-	if in.SharedAction != "" {
-		callerName += " sign-in launcher"
-	}
-	// Shared sign-in launchers enroll on one route and are not device grants.
+	// Shared sign-in enrolls one route and is not a device grant.
 	operator := in.SharedAction != ""
 	grants, err := s.nativeSetupGrants(next, chosen, provider.proxy, operator)
 	if err != nil {
 		provider.setupFailure(w, err)
 		return
 	}
-	if err = s.store.createNativeSetup(r.Context(), next, account, chosen, id, token, callerName, operator, grants); err != nil {
+	if err = s.store.createNativeSetup(r.Context(), next, account, chosen, target, operator, grants); err != nil {
 		provider.setupFailure(w, err)
 		return
 	}
 	s.reconcileSockets(next)
 	s.snap = next
-	jsonReply(w, 201, nativeSetupReply{URL: origin + chosen.LocalPrefix, Token: token, CallerID: id, Revision: next.revision})
+	jsonReply(w, 201, nativeSetupReply{URL: origin + chosen.LocalPrefix, Token: target.token, CallerID: target.id, Revision: next.revision})
+}
+
+// setupCaller validates the request and selects the client that receives the
+// setup grant. Only shared sign-in may arm an existing client or name a new one.
+func (in nativeSetupInput) setupCaller(method string, provider nativeSetupProvider) (nativeSetupCaller, error) {
+	caller, name := strings.TrimSpace(in.Caller), strings.TrimSpace(in.Name)
+	switch {
+	case in.SharedAction != "" && method != http.MethodPost:
+		return nativeSetupCaller{}, inputError("Shared sign-in requires a setup POST")
+	case in.SharedAction != "" && (in.SharedAction != "create" || in.Route != "") && (in.SharedAction != "connect" || in.Route == ""):
+		return nativeSetupCaller{}, inputError("Invalid shared native sign-in action")
+	case in.SharedAction == "" && (caller != "" || name != ""):
+		return nativeSetupCaller{}, inputError("Add device always issues a new worker client")
+	case caller != "" && name != "", len(name) > 80:
+		return nativeSetupCaller{}, inputError("Choose an existing client or name a new one (1–80 characters)")
+	case caller != "":
+		return nativeSetupCaller{id: caller}, nil
+	}
+	return nativeSetupCaller{id: randomToken("c_")[:26], token: randomToken("sk-tlp-"), name: cmp.Or(name, provider.callerName)}, nil
 }
 
 func (p nativeSetupProvider) setupFailure(w http.ResponseWriter, err error) {
@@ -338,17 +357,4 @@ func (s *Service) clearNativeSetup(w http.ResponseWriter, r *http.Request, provi
 		s.cancelCallerSockets(id)
 	}
 	jsonReply(w, 200, map[string]int64{"revision": next.revision})
-}
-
-func (in nativeSetupInput) validateSharedAction(method string) error {
-	if in.SharedAction == "" {
-		return nil
-	}
-	if method != http.MethodPost {
-		return inputError("Shared sign-in requires a setup POST")
-	}
-	if in.SharedAction == "create" && in.Route == "" || in.SharedAction == "connect" && in.Route != "" {
-		return nil
-	}
-	return inputError("Invalid shared native sign-in action")
 }

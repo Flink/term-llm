@@ -89,9 +89,12 @@ export type ProxyNativeLauncher = 'claude' | 'agy';
 export interface ProxyNativeConnection {
   revision: number;
   url: string;
-  token: string;
+  /** Omitted when shared sign-in armed an existing client, which keeps its token. */
+  token?: string;
   caller_id: string;
 }
+/** Shared sign-in arms an existing client or creates one with this name. */
+export type ProxyNativeSignInClient = { caller: string } | { name: string };
 export interface ProxySecret {
   name: string;
   source: 'stored' | 'file';
@@ -632,14 +635,27 @@ export class ProxyClient {
   setupNative(
     ...args:
       | [launcher: ProxyNativeLauncher, revision: number, route: string]
-      | [launcher: ProxyNativeLauncher, revision: number, route: undefined, sharedAction: 'create']
-      | [launcher: ProxyNativeLauncher, revision: number, route: string, sharedAction: 'connect']
+      | [
+          launcher: ProxyNativeLauncher,
+          revision: number,
+          route: undefined,
+          sharedAction: 'create',
+          client: ProxyNativeSignInClient,
+        ]
+      | [
+          launcher: ProxyNativeLauncher,
+          revision: number,
+          route: string,
+          sharedAction: 'connect',
+          client: ProxyNativeSignInClient,
+        ]
   ): Promise<ProxyNativeConnection> {
-    const [launcher, revision, route, sharedAction] = args;
+    const [launcher, revision, route, sharedAction, client] = args;
     return this.request(`${launcher}/setup`, 'POST', {
       revision,
       ...(route ? { route } : {}),
       ...(sharedAction ? { shared_action: sharedAction } : {}),
+      ...client,
     });
   }
   clearNative(launcher: ProxyNativeLauncher, revision: number): Promise<void> {
@@ -780,6 +796,12 @@ export class ProxyClient {
   }
   revokeCaller(id: string): Promise<void> {
     return this.request('callers', 'DELETE', { id });
+  }
+  purgeCaller(id: string): Promise<void> {
+    return this.request('callers', 'DELETE', { id, purge: true });
+  }
+  purgeAllRevokedCallers(): Promise<void> {
+    return this.request('callers', 'DELETE', { purge_revoked: true });
   }
   async accounts(): Promise<ProxyAccount[]> {
     const result = await this.request<{ accounts: ProxyAccount[] | null }>('accounts');

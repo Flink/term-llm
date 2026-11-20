@@ -10,7 +10,7 @@ import (
 
 // All inputs are prepared under s.mu before entering accountWrite: the store
 // has one SQLite connection, so no db-level helper may run inside this callback.
-func (s *store) createNativeSetup(ctx context.Context, next *snapshot, account *accountRecord, route Route, id, token, callerName string, operator bool, grants []string) error {
+func (s *store) createNativeSetup(ctx context.Context, next *snapshot, account *accountRecord, route Route, target nativeSetupCaller, operator bool, grants []string) error {
 	return s.accountWrite(ctx, func(tx *sql.Tx) error {
 		if account != nil {
 			if err := insertAccount(ctx, tx, *account); err != nil {
@@ -20,23 +20,38 @@ func (s *store) createNativeSetup(ctx context.Context, next *snapshot, account *
 		if err := saveSetupConfig(ctx, tx, next); err != nil {
 			return err
 		}
-		if err := makeCallerRoom(ctx, tx, inputError("Client limit reached (1024)")); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO callers(id,name,hash,created) VALUES(?,?,?,?)", id, callerName, hashToken(token), time.Now().UnixMilli()); err != nil {
-			return err
-		}
-		if err := writeGrants(tx, id, grants, next); err != nil {
+		if err := target.write(ctx, tx, grants, next); err != nil {
 			return err
 		}
 		if operator {
 			result, err := tx.ExecContext(ctx, `INSERT INTO claude_shared_enrollment(account,caller,route,authority,expires)
 				SELECT ?,caller,route,authority,? FROM grants WHERE caller=? AND route=?
-				ON CONFLICT(account) DO UPDATE SET caller=excluded.caller,route=excluded.route,authority=excluded.authority,expires=excluded.expires,reserved=0`, route.Account, time.Now().Add(claudeSharedEnrollmentTTL).Unix(), id, route.Name)
+				ON CONFLICT(account) DO UPDATE SET caller=excluded.caller,route=excluded.route,authority=excluded.authority,expires=excluded.expires,reserved=0`, route.Account, time.Now().Add(claudeSharedEnrollmentTTL).Unix(), target.id, route.Name)
 			return claudeSharedRequireChange(result, err)
 		}
 		return nil
 	})
+}
+
+// nativeSetupCaller is a new client (token set) or an existing, still-active one.
+type nativeSetupCaller struct{ id, token, name string }
+
+func (c nativeSetupCaller) write(ctx context.Context, tx *sql.Tx, grants []string, next *snapshot) error {
+	if c.token == "" {
+		if err := editableCaller(tx, c.id); err != nil {
+			return err
+		}
+		for _, route := range grants { // Re-grant at the current route authority.
+			if _, err := tx.ExecContext(ctx, "DELETE FROM grants WHERE caller=? AND route=?", c.id, route); err != nil {
+				return err
+			}
+		}
+	} else if err := makeCallerRoom(ctx, tx, inputError("Client limit reached (1024)")); err != nil {
+		return err
+	} else if _, err := tx.ExecContext(ctx, "INSERT INTO callers(id,name,hash,created) VALUES(?,?,?,?)", c.id, c.name, hashToken(c.token), time.Now().UnixMilli()); err != nil {
+		return err
+	}
+	return writeGrants(tx, c.id, grants, next)
 }
 
 // Only config changes here. The canonical money singleton and all secret bytes
