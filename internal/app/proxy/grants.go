@@ -36,6 +36,24 @@ func writeGrants(tx *sql.Tx, id string, grants []string, snap *snapshot) error {
 	}
 	return nil
 }
+
+// rebindGrants keeps approvals across an administrator's own route edits: a
+// grant follows its route name to the edited route's new authority instead of
+// being dropped as stale. Grants for deleted routes are still removed by
+// reconcileGrants, and pending native enrollments bound to the old authority
+// are cleared so they cannot complete against the edited route.
+func rebindGrants(tx *sql.Tx, snap *snapshot) error {
+	for _, r := range snap.routes {
+		if _, err := tx.Exec("UPDATE grants SET authority=? WHERE route=? AND authority!=?", r.authority, r.Name, r.authority); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM claude_shared_enrollment WHERE route=? AND authority!=?", r.Name, r.authority); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *store) updateGrants(id string, grants []string, snap *snapshot) error {
 	tx, err := s.db.Begin()
 	if err != nil {

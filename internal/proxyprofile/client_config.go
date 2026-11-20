@@ -426,6 +426,15 @@ var allowedProviderMappingKeys = map[string]bool{
 	"proxy":       true,
 }
 
+// upstreamBaseURL turns a pasted base_url into a route upstream. term-llm's
+// OpenAI-compatible providers accept a full .../chat/completions endpoint as
+// base_url, but a route upstream is a prefix the client's own
+// /chat/completions is appended to; keeping the suffix would double it.
+func upstreamBaseURL(raw string) string {
+	value := strings.TrimRight(strings.TrimSpace(raw), "/")
+	return strings.TrimRight(strings.TrimSuffix(value, "/chat/completions"), "/")
+}
+
 // ImportTermLLMProviderYAML parses a pasted term-llm provider YAML snippet,
 // extracts any provider name and base_url, strips local-only secret/transport
 // fields without evaluating them, and validates the remaining ClientProviderConfig.
@@ -457,7 +466,7 @@ func ImportTermLLMProviderYAML(data []byte) (ParsedTermLLMProvider, error) {
 		kNode, vNode := mapping.Content[i], mapping.Content[i+1]
 		key := strings.TrimSpace(kNode.Value)
 		if key == "base_url" && vNode.Kind == yaml.ScalarNode {
-			out.Upstream = strings.TrimSpace(vNode.Value)
+			out.Upstream = upstreamBaseURL(vNode.Value)
 		}
 		if forbiddenLocalProviderFields[key] {
 			stripped = append(stripped, key)

@@ -662,6 +662,24 @@ describe('proxy configuration and credential operations', () => {
     );
   });
 
+  it('rejects a chat endpoint as the upstream base URL', async () => {
+    const { root, api } = setup();
+    const config = vi.spyOn(api, 'config').mockResolvedValue();
+    await click(root, 'Add provider');
+    await click(root, 'Custom endpoint');
+    fireEvent.input(getByLabelText(root, 'Name'), { target: { value: 'frontier' } });
+    fireEvent.input(getByLabelText(root, 'Upstream base URL'), {
+      target: { value: 'https://llm.example.com/class/frontier/v1/chat/completions' },
+    });
+    await click(root, 'Save route');
+    await waitFor(() =>
+      expect(root.textContent).toContain(
+        'Use the API base URL, not the chat endpoint: https://llm.example.com/class/frontier/v1',
+      ),
+    );
+    expect(config).not.toHaveBeenCalled();
+  });
+
   it('handles null empty-install collections from Go', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
@@ -1306,7 +1324,7 @@ describe('acceptance refinements', () => {
     );
     expect(document.activeElement?.textContent).toBe('Workstation');
   });
-  it('confirms authority changes, keeps cancellation safe, then focuses the saved route', async () => {
+  it('saves upstream changes without a grant-loss prompt, then focuses the saved route', async () => {
     const { root, api } = setup(state({ routes: [route] }));
     const write = vi.spyOn(api, 'config').mockResolvedValue();
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
@@ -1316,11 +1334,8 @@ describe('acceptance refinements', () => {
       target: { value: 'https://example.com/wider/' },
     });
     await click(root, 'Save route');
-    expect(write).not.toHaveBeenCalled();
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('grants will be dropped'));
-    confirm.mockReturnValue(true);
-    await click(root, 'Save route');
     await waitFor(() => expect(write).toHaveBeenCalledOnce());
+    expect(confirm).not.toHaveBeenCalled();
     await waitFor(() => expect(root.textContent).toContain('Saved route Example'));
     expect(document.activeElement).toBe(root.querySelector('[data-focus="route:Example"]'));
     expect(document.activeElement?.tagName).toBe('LI');

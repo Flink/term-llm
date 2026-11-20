@@ -376,6 +376,19 @@ func (p *Parser) gemini(o object) {
 	if malformedCounts(m, "promptTokenCount", "cachedContentTokenCount", "candidatesTokenCount", "thoughtsTokenCount", "totalTokenCount") {
 		p.MarkUnknown()
 	}
+	// Gemini serializes usageMetadata as proto3 JSON, which omits zero-valued
+	// fields. Alongside a reported prompt count, an absent cache-hit or thinking
+	// count is an attested zero, not an unobserved component.
+	if u.Input >= 0 {
+		for _, v := range []struct {
+			key string
+			dst *int64
+		}{{"cachedContentTokenCount", &u.CachedInput}, {"thoughtsTokenCount", &u.Reasoning}} {
+			if _, ok := m[v.key]; !ok {
+				*v.dst = 0
+			}
+		}
+	}
 	if hasCounts(u) {
 		p.set(u)
 	}

@@ -145,6 +145,36 @@ it('shows one row per provider with one approval summary and header Manage', () 
   expect(chat.querySelector('.provider-manage [aria-label="Edit chatgpt"]')).not.toBeVisible();
 });
 
+it('keeps provider renaming closed until requested and does not repeat an unchanged label', async () => {
+  const state = snapshot();
+  state.providers[1].label = 'openai';
+  const api = new ProxyClient(vi.fn());
+  const rename = vi.spyOn(api, 'renameProviderLabel').mockResolvedValue({ revision: 8 });
+  const context: UIContext = {
+    run: async (operation) => {
+      await operation();
+      return true;
+    },
+    refresh: vi.fn().mockResolvedValue(undefined),
+    announce: vi.fn(),
+    navigate: vi.fn(),
+    protectToken: vi.fn(),
+  };
+  const root = routesView(state, api, context);
+  document.body.append(root);
+  const card = getByRole(root, 'article', { name: 'openai' });
+  expect(card.querySelector('.provider-title')!.textContent).not.toContain('openaiopenai');
+  card.querySelector<HTMLDetailsElement>('.provider-manage')!.open = true;
+  const label = getByLabelText(card, 'Provider label') as HTMLInputElement;
+  expect(label).not.toBeVisible();
+  fireEvent.click(getByRole(card, 'button', { name: 'Rename openai' }));
+  expect(label).toBeVisible();
+  expect(label).toHaveFocus();
+  fireEvent.input(label, { target: { value: 'Frontier' } });
+  fireEvent.click(getByRole(card, 'button', { name: 'Save label' }));
+  await waitFor(() => expect(rename).toHaveBeenCalledWith(7, 'openai', 'Frontier'));
+});
+
 it('adds a missing companion to its provider without changing other routes or approvals', async () => {
   const state = snapshot({ routes: [chat, openai] });
   state.providers[0].routes = [chat.name];

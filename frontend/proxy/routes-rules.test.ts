@@ -16,7 +16,6 @@ import {
   type ProxyState,
 } from '../src/api/proxy-client';
 import type { UIContext } from './dom';
-import { routeAuthority } from './route-rules';
 import { routesView } from './routes';
 
 const opencodeKey = {
@@ -220,8 +219,8 @@ it('edits subpaths and upstreams through the same agency-bearing rules', async (
   });
   fireEvent.click(getByRole(root, 'button', { name: 'Save route' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  // Changing a rule upstream or its subpath mapping is an authority edit.
-  expect(confirm).toHaveBeenCalledWith(expect.stringContaining('grants will be dropped'));
+  // Saving keeps existing client grants, so there is nothing to confirm.
+  expect(confirm).not.toHaveBeenCalled();
   const saved = save.mock.calls[0][1][0];
   expect(saved.rules?.[1]).toEqual({
     path_prefix: '/anthropic/',
@@ -232,25 +231,7 @@ it('edits subpaths and upstreams through the same agency-bearing rules', async (
   expect(saved.upstream).toBe('');
 });
 
-it('treats subpath mappings as authority but ignores rule order and the envelope', () => {
-  const reordered = [rules[2], rules[0], rules[1]];
-  expect(routeAuthority({ ...unified, rules: reordered })).toBe(routeAuthority(unified));
-  expect(
-    routeAuthority({
-      ...unified,
-      rules: [{ ...rules[1], path_prefix: '/anthropic/' }, rules[0], rules[2]],
-    }),
-  ).not.toBe(routeAuthority(unified));
-  const singleRule = { ...unified, rules: [rules[0]], set_headers: rules[0].set_headers };
-  const legacySameUpstream = {
-    ...singleRule,
-    rules: undefined,
-    upstream: rules[0].upstream,
-  };
-  expect(routeAuthority(singleRule)).not.toBe(routeAuthority(legacySameUpstream));
-});
-
-it('asks before a subpath mapping edit but not for billing-only edits', async () => {
+it('saves subpath mapping and billing edits without a grant-loss prompt', async () => {
   const { root, save } = setup({ routes: [unified], secrets: [opencodeKey] });
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
   openManage(root, 'opencode-go');
@@ -265,8 +246,8 @@ it('asks before a subpath mapping edit but not for billing-only edits', async ()
     target: { value: '/anthropic/' },
   });
   fireEvent.click(getByRole(root, 'button', { name: 'Save route' }));
-  await waitFor(() => expect(confirm).toHaveBeenCalledOnce());
-  expect(save).toHaveBeenCalledOnce();
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  expect(confirm).not.toHaveBeenCalled();
 });
 
 it('allows the same key across subpaths with different upstream origins', async () => {
@@ -495,6 +476,6 @@ it('renders catch-alls as prose and sends raw catch-all syntax from the editor',
   fireEvent.input(allow, { target: { value: 'GET /v2/*' } });
   fireEvent.click(getByRole(root, 'button', { name: 'Save route' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  expect(confirm).toHaveBeenCalledOnce();
+  expect(confirm).not.toHaveBeenCalled();
   expect(save.mock.calls[0][1][0].rules?.[0].allow).toEqual(['GET /v2/*']);
 });

@@ -15,6 +15,9 @@ export interface ModelOption {
 }
 
 const NATURAL_SUFFIX_MODELS = new Set(['o3-mini-high', 'o4-mini-high']);
+const MODEL_EFFORT_SUFFIX = new RegExp(`^(.+)[-_](${EFFORTS.join('|')})$`, 'i');
+export const matchModelEffortSuffix = (model: string) => model.match(MODEL_EFFORT_SUFFIX);
+
 export function splitModelEffort(
   model: string,
   separateEffort = '',
@@ -23,12 +26,13 @@ export function splitModelEffort(
   const separate = String(separateEffort || '')
     .trim()
     .toLowerCase();
-  for (const effort of [...EFFORTS].sort((left, right) => right.length - left.length)) {
-    const match = value.match(new RegExp(`^(.*?)[-_]${effort}$`, 'i'));
-    if (!match || !match[1] || NATURAL_SUFFIX_MODELS.has(value.toLowerCase())) continue;
-    if (!separate || separate === effort || EFFORTS.includes(separate as Effort))
-      return { model: match[1], effort: separate || effort };
-  }
+  const match = matchModelEffortSuffix(value);
+  if (
+    match &&
+    !NATURAL_SUFFIX_MODELS.has(value.toLowerCase()) &&
+    (!separate || EFFORTS.includes(separate as Effort))
+  )
+    return { model: match[1], effort: separate || match[2].toLowerCase() };
   return { model: value, effort: separate };
 }
 
@@ -38,23 +42,20 @@ export function compactModelLabel(value: string): string {
     .replace(/-\d{4}-\d{2}-\d{2}$/i, '');
 }
 
-export function supportedEfforts(model: ModelOption | undefined): string[] {
-  const values =
+function advertisedEfforts(model: ModelOption | undefined): string[] | undefined {
+  return (
     model?.efforts ||
-    (Array.isArray(model?.reasoning_efforts) ? (model.reasoning_efforts as string[]) : []);
-  return ['', ...new Set((values.length ? values : EFFORTS).map(String).filter(Boolean))];
+    (Array.isArray(model?.reasoning_efforts) ? model.reasoning_efforts : undefined)
+  );
 }
 
-export function effectiveEffortForModel(model: ModelOption | undefined, effort: string): string {
-  const normalized = String(effort || '')
-    .trim()
-    .toLowerCase();
-  if (!normalized) return '';
-  const values =
-    model?.efforts ||
-    (Array.isArray(model?.reasoning_efforts) ? (model.reasoning_efforts as string[]) : []);
-  if (values.length > 0 && !values.includes(normalized)) return '';
-  return normalized;
+export function supportedEfforts(model: ModelOption | undefined): string[] {
+  const values = advertisedEfforts(model);
+  return ['', ...new Set((values?.length ? values : EFFORTS).map(String).filter(Boolean))];
+}
+
+function effectiveEffort(effort: string, values: string[] | undefined): string {
+  return !values?.length || values.includes(effort) ? effort : '';
 }
 
 export function defaultProvider(providers: ModelOption[]): ModelOption | undefined {
@@ -103,19 +104,6 @@ export interface RuntimeSelection {
   reasoningMode: string;
   fast: boolean;
 }
-export function runtimeDiffers(
-  active: Partial<RuntimeSelection>,
-  selected: RuntimeSelection,
-): boolean {
-  return Boolean(
-    (selected.provider && selected.provider !== (active.provider || '')) ||
-    (selected.model &&
-      splitModelEffort(selected.model, selected.effort).model !==
-        splitModelEffort(active.model || '', active.effort || '').model) ||
-    (selected.effort && selected.effort !== (active.effort || '')),
-  );
-}
-
 export function applyRuntimeToRequest(
   body: Record<string, unknown>,
   active: Partial<RuntimeSelection>,
@@ -124,18 +112,29 @@ export function applyRuntimeToRequest(
   providerInfo?: ModelOption,
 ): void {
   const split = splitModelEffort(selected.model, selected.effort);
-  const effort = effectiveEffortForModel(modelInfo, split.effort);
+  const values = advertisedEfforts(modelInfo);
+  const effort = effectiveEffort(split.effort, values);
   if (split.model) body.model = split.model;
-  const differs = runtimeDiffers(active, { ...selected, model: split.model, effort });
-  if (differs) {
-    body.provider = selected.provider || active.provider || undefined;
-    if (effort) body.reasoning_effort = effort;
-    body.model_swap = { mode: 'auto', fallback: 'handover' };
-  } else {
-    if (active.provider || selected.provider) body.provider = active.provider || selected.provider;
-    const activeEffort = effectiveEffortForModel(modelInfo, active.effort || '');
-    if (effort || activeEffort) body.reasoning_effort = effort || activeEffort;
-  }
+  const { provider } = selected;
+  const differs =
+    (provider && provider !== active.provider) ||
+    (split.model &&
+      splitModelEffort(split.model, effort).model !==
+        splitModelEffort(active.model || '', active.effort).model) ||
+    (effort && effort !== active.effort);
+  if (provider || active.provider || differs)
+    body.provider = provider || active.provider || undefined;
+  const requestEffort =
+    effort ||
+    (!differs &&
+      effectiveEffort(
+        String(active.effort || '')
+          .trim()
+          .toLowerCase(),
+        values,
+      ));
+  if (requestEffort) body.reasoning_effort = requestEffort;
+  if (differs) body.model_swap = { mode: 'auto', fallback: 'handover' };
   if (supportsReasoningMode(modelInfo, selected.reasoningMode))
     body.reasoning = { mode: selected.reasoningMode === 'pro' ? 'pro' : 'standard' };
   if (supportsFastMode(modelInfo) && !isFastServiceTier(providerInfo?.service_tier))

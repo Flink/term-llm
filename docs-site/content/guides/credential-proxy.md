@@ -414,9 +414,11 @@ borrow the built-in OpenCode Go route or another named provider's subpaths.
 merged or approved by changing presets. Review and explicitly replace the old
 setup with the consolidated parent and its three rules, then reapprove the
 provider and update client roots; remove obsolete sibling routes/grants.
-Route authority/rule changes invalidate existing grants, so the provider shows
-as needing approval until you approve it again. Global term-llm proxy
-configuration now registers only the nested roots, so migrate the server and
+Clients approved before the migration may cover only some of the provider's
+routes, so the provider shows as needing approval until you approve it again.
+Editing an existing route's upstream, credentials or rules in the browser keeps
+its client approvals; a file-managed reload still drops grants whose route
+changed. Global term-llm proxy configuration now registers only the nested roots, so migrate the server and
 reapprove before switching those clients. Explicitly manually registered legacy
 sibling roots remain compatible when bound to the same client principal; missing
 protocol roots fail closed rather than contacting a public vendor endpoint.

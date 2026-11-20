@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { applyRuntimeToRequest, supportsFastMode, supportsReasoningMode } from './runtime';
+import {
+  applyRuntimeToRequest,
+  splitModelEffort,
+  supportsFastMode,
+  supportsReasoningMode,
+} from './runtime';
+
+it.each([
+  ['model_XHIGH', '', 'model', 'xhigh'],
+  ['model-high', ' MAX ', 'model', 'max'],
+  ['model-high', 'custom', 'model-high', 'custom'],
+  ['o3-mini-high', '', 'o3-mini-high', ''],
+  ['-high', '', '-high', ''],
+])('splits reasoning effort from %s with explicit effort %j', (input, explicit, model, effort) => {
+  expect(splitModelEffort(input, explicit)).toEqual({ model, effort });
+});
 
 describe('runtime request selection', () => {
   it('omits reasoning.mode unless the selected model advertises support', () => {

@@ -345,7 +345,9 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
     const heading = el('h3', group.id);
     const statusText = el('span', group.reason);
     statusText.className = 'provider-status';
-    const title = el('div', dot, heading, el('span', group.label), statusText);
+    const title = el('div', dot, heading);
+    if (group.label !== group.id) title.append(el('span', group.label));
+    title.append(statusText);
     title.className = 'provider-title';
     const list = el('ul');
     list.className = 'provider-routes';
@@ -410,23 +412,40 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
       details.append(providerConfigSection(group, state, api, componentContext(), readonly));
 
     if (!readonly) {
+      // Renaming is rare: keep the editor closed until asked for.
       const label = input(group.label);
       const labelForm = el('form', field('Provider label', label));
-      labelForm.append(
-        submit(
-          labelForm,
-          componentContext(),
-          async () => {
-            await api.renameProviderLabel(state.revision, group.id, label.value.trim());
-            await context.refresh(`route:${group.routes[0].name}`);
-            context.announce(`Saved label for ${group.id}.`);
-          },
-          'Save label',
-        ),
+      submit(
+        labelForm,
+        componentContext(),
+        async () => {
+          await api.renameProviderLabel(state.revision, group.id, label.value.trim());
+          await context.refresh(`route:${group.routes[0].name}`);
+          context.announce(`Saved label for ${group.id}.`);
+        },
+        'Save label',
       );
-      const labelEditor = el('div', el('h4', 'Provider label'), labelForm);
-      labelEditor.className = 'provider-section';
-      details.append(labelEditor);
+      const rename = button('Rename', () => {
+        if (blocked()) return;
+        setRenaming(true);
+        label.focus();
+        label.select();
+      });
+      rename.setAttribute('aria-label', `Rename ${group.label}`);
+      labelForm.append(
+        button('Cancel', () => {
+          setRenaming(false);
+          rename.focus();
+        }),
+      );
+      labelForm.className = 'provider-section provider-label-form';
+      const setRenaming = (renaming: boolean) => {
+        if (!renaming) label.value = group.label;
+        labelForm.hidden = !renaming;
+        rename.setAttribute('aria-expanded', String(renaming));
+      };
+      setRenaming(false);
+      details.append(labelForm);
       const additions = missingCompanions(group, state).map((preset) => {
         const addRoute = button(`Add ${presetLabel(preset)} route`, () => {
           if (blocked()) return;
@@ -450,7 +469,7 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
         });
         return addRoute;
       });
-      const footer = el('div', actions(...additions), actions(deleteProviderButton(group)));
+      const footer = el('div', actions(rename, ...additions), actions(deleteProviderButton(group)));
       footer.className = 'provider-manage-footer';
       details.append(footer);
     }

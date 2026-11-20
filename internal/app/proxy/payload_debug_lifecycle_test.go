@@ -218,11 +218,28 @@ func TestPayloadDebugDisableDoesNotInterruptWebSocket(t *testing.T) {
 		}
 	}
 	echo()
+	id := resp.Header.Get("X-Term-LLM-Proxy-Request-ID")
+	dir := filepath.Join(s.payloadDebug.root, id)
+	// The echo can arrive before the client-to-upstream Write returns and
+	// records the forwarded bytes. Wait for that capture before disabling it.
+	clientFrames := filepath.Join(dir, "websocket-client.frames")
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if info, err := os.Stat(clientFrames); err == nil && info.Size() >= int64(len(wire)) {
+			break
+		}
+		select {
+		case <-tick.C:
+		case <-deadline.C:
+			t.Fatal("timed out waiting for client frames to be captured")
+		}
+	}
 	if err := s.setPayloadDebugEnabled(false); err != nil {
 		t.Fatal(err)
 	}
-	id := resp.Header.Get("X-Term-LLM-Proxy-Request-ID")
-	dir := filepath.Join(s.payloadDebug.root, id)
 	for _, name := range []string{"websocket-client.frames", "websocket-server.frames"} {
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil || !bytes.Equal(data, wire) {

@@ -96,6 +96,24 @@ func TestImportTermLLMProviderYAMLProvidersWrapperAndBare(t *testing.T) {
 	}
 }
 
+// A local base_url may be the full chat endpoint; the route upstream must be
+// the API base so the client's appended /chat/completions is not doubled.
+func TestImportTermLLMProviderYAMLStripsChatCompletionsEndpoint(t *testing.T) {
+	for _, base := range []string{
+		"srv://_api._tcp.example.test/class/frontier/v1/chat/completions",
+		"srv://_api._tcp.example.test/class/frontier/v1/chat/completions/",
+		" srv://_api._tcp.example.test/class/frontier/v1/ ",
+	} {
+		parsed, err := ImportTermLLMProviderYAML([]byte("type: vllm\nbase_url: \"" + base + "\"\nmodel: m1\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := "srv://_api._tcp.example.test/class/frontier/v1"; parsed.Upstream != want {
+			t.Fatalf("Upstream for %q = %q, want %q", base, parsed.Upstream, want)
+		}
+	}
+}
+
 func TestParseClientProviderYAMLRejectsForbiddenAndUnknownFields(t *testing.T) {
 	for _, field := range []string{
 		"api_key: secret",

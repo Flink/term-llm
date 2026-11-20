@@ -314,6 +314,10 @@ func (s *store) saveConfigAndMoney(snap *snapshot) error {
 		return err
 	}
 	defer tx.Rollback()
+	// Browser and API edits are the administrator's decision; keep approvals.
+	if err := rebindGrants(tx, snap); err != nil {
+		return err
+	}
 	dropped, err := reconcileGrants(tx, snap)
 	if err != nil {
 		return err

@@ -35,53 +35,6 @@ export function joinLocalPrefix(localPrefix: string, subpath: string): string {
   return `${localPrefix.replace(/\/+$/, '')}/${subpath.replace(/^\/+/, '')}`;
 }
 
-function headerAuthority(setHeaders: ProxyRoute['set_headers']): unknown[] {
-  return Object.entries(setHeaders)
-    .map(([name, rule]) => [
-      name.toLowerCase(),
-      rule.secret ?? null,
-      rule.prefix ?? '',
-      rule.value ?? null,
-    ])
-    .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-}
-
-/**
- * Authority-bearing route settings for grant invalidation. A rules envelope is
- * distinct from a single upstream, subpath mappings count, and rule order does
- * not. Local prefixes, enabled state and client auth formats are excluded.
- */
-export function routeAuthority(route: ProxyRoute): string {
-  const shared = [
-    route.account || '',
-    !!route.websocket,
-    [...(route.allow ?? [])].sort(),
-    route.redirects || 'passthrough',
-  ];
-  const rules = routeRules(route);
-  if (rules.length) {
-    const mappings = rules
-      .map((rule) => {
-        const url = new URL(rule.upstream);
-        return [
-          rule.path_prefix,
-          url.origin,
-          url.pathname.replace(/\/$/, ''),
-          headerAuthority(rule.set_headers),
-          [...(rule.allow ?? [])].sort(),
-        ];
-      })
-      .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-    return JSON.stringify(['rules', mappings, ...shared]);
-  }
-  const url = new URL(route.upstream);
-  return JSON.stringify([
-    'single',
-    [url.origin, url.pathname.replace(/\/$/, ''), headerAuthority(route.set_headers)],
-    ...shared,
-  ]);
-}
-
 export function allowLabel(entry: string): string {
   const catchAll = /^(\S+) (\/(?:[^*]*\/)?)\*$/.exec(entry);
   if (!catchAll) return entry;

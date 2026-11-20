@@ -14,12 +14,7 @@ import {
   type ProxyRouteRule,
   type ProxyState,
 } from '../src/api/proxy-client';
-import {
-  authLabel,
-  routeAuthority as authority,
-  ruleCredentialHeader,
-  ruleNeedsSecret,
-} from './route-rules';
+import { authLabel, ruleCredentialHeader, ruleNeedsSecret } from './route-rules';
 import {
   actions,
   button,
@@ -297,10 +292,6 @@ export function routeForm(
   );
   if (rulesMode)
     advanced.append(
-      el(
-        'p',
-        'Changing a subpath mapping, rule upstream or rule credential can remove client grants and require explicit regranting. Dispatched requests may continue.',
-      ),
       el(
         'p',
         'Client protocol authentication is per subpath; a unified route has no parent client authentication.',
@@ -695,17 +686,6 @@ export function routeForm(
     clientConfigDisclosure.className = 'provider-config-create';
     form.append(clientConfigDisclosure);
   }
-  if (route) {
-    const affected = state.callers
-      .filter((c) => !c.revoked && c.grants.includes(route.name))
-      .map((c) => c.name);
-    form.append(
-      el(
-        'p',
-        `Upstream, credential or transport changes can remove client grants${affected.length ? ` for ${affected.join(', ')}` : ''}. In-flight requests may continue.`,
-      ),
-    );
-  }
   const save = submit(
     form,
     context,
@@ -725,6 +705,13 @@ export function routeForm(
         if (url.protocol === 'http:' && !http.checked)
           throw new Error('Explicitly allow insecure HTTP, or use HTTPS.');
       }
+      // Clients append /chat/completions themselves; an endpoint URL here
+      // would forward to .../chat/completions/chat/completions and 404.
+      const endpoint = /\/chat\/completions\/*$/;
+      if (!rulesMode && endpoint.test(upstream.value.trim()))
+        throw new Error(
+          `Use the API base URL, not the chat endpoint: ${upstream.value.trim().replace(endpoint, '')}`,
+        );
       if (
         !local.value.startsWith('/') ||
         !local.value.endsWith('/') ||
@@ -868,14 +855,6 @@ export function routeForm(
       if (!route && !provider) requireProviderName(next.provider, state);
       if (state.providers.some((item) => item.id === next.name && item.id !== next.provider))
         throw new Error('Route name belongs to another provider.');
-      if (
-        route &&
-        authority(route) !== authority(next) &&
-        !window.confirm(
-          `Save authority changes to ${route.name}? Affected client grants will be dropped and must be explicitly granted again. Dispatched requests may continue.`,
-        )
-      )
-        return;
       const rawClientYAML = clientConfigYAML?.value.trim();
       const nextRoutes = route
         ? state.routes.map((item) => (item === route ? next : item))

@@ -58,7 +58,10 @@ func TestAgySharedSeedNativeEnvelope(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux-only native storage")
 	}
-	home := t.TempDir()
+	home, err := os.MkdirTemp(t.TempDir(), "private-")
+	if err != nil {
+		t.Fatal(err)
+	}
 	metadata := `{"access_placeholder":"` + agySharedTestAccess + `","refresh_placeholder":"` + agySharedTestRefresh + `","expires_in":3600,"scopes":"oidc-canary","vendor_credential":"vendor-canary"}`
 	identity, err := parseAgySharedIdentity([]byte(metadata))
 	if err != nil {

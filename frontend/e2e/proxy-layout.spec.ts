@@ -2,7 +2,7 @@ import { withSingletonProviders } from '../proxy/test-fixtures';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Request } from '@playwright/test';
 import type { ProxyState } from '../src/api/proxy-client';
 
 // Exercise the built standalone bundle without a server, credentials, or upstreams.
@@ -74,6 +74,30 @@ async function openManage(page: Page, routeName: string): Promise<Locator> {
   }
   await expect(manage).toHaveAttribute('open', '');
   return manage;
+}
+
+/**
+ * Wait for a ledger list request carrying the given query. The ledger polls
+ * page one every second with the applied filters, so waiting for the next
+ * `/api/requests` call alone can capture a poll instead of the control under
+ * test.
+ */
+function waitForLedgerRequest(
+  page: Page,
+  expected: (params: URLSearchParams) => boolean,
+): Promise<Request> {
+  return page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === '/_proxy/api/requests' && expected(url.searchParams);
+  });
+}
+
+function requestQuery(request: Request): URLSearchParams {
+  return new URL(request.url()).searchParams;
+}
+
+function expectQuery(request: Request, expected: Record<string, string>): void {
+  expect(Object.fromEntries(requestQuery(request))).toEqual(expected);
 }
 
 for (const scheme of ['light', 'dark'] as const) {
@@ -657,13 +681,23 @@ for (const width of [1440, 320]) {
     await page.route('http://proxy.test/_proxy/api/requests?*', (route) =>
       route.fulfill({ json: { total: 0, page: 1, page_size: 25, requests: [] } }),
     );
+    // The ledger re-fetches page one every second with the applied filters.
+    // Freeze the page clock before the first poll so every list request below
+    // is attributable to the control under test.
+    await page.clock.install();
+    const initialLoad = waitForLedgerRequest(page, (params) => params.get('page') === '1');
     await page.goto('http://proxy.test/_proxy/?tab=requests');
+    await page.clock.pauseAt(Date.now() + 250);
     const disclosure = page.locator('.request-filters');
     const summary = disclosure.locator('summary');
     const refresh = page.getByRole('button', { name: 'Refresh', exact: true });
     await expect(page.getByRole('button', { name: 'Refresh state', exact: true })).toHaveCount(0);
     await expect(summary).toHaveText('Filters');
     await expect(refresh).toBeEnabled();
+    expectQuery(await initialLoad, { page: '1', page_size: '25' });
+    await expect(page.getByLabel('Request results', { exact: true })).toContainText(
+      'No matching requests',
+    );
     const controlStyle = (element: Element) => {
       const style = getComputedStyle(element);
       return [
@@ -731,9 +765,9 @@ for (const width of [1440, 320]) {
     expect(await rotation()).toBe('90deg');
     await path.fill('/v1/messages');
     await expect(summary).toHaveText('Filters');
-    const apply = page.waitForRequest(/\/_proxy\/api\/requests\?/);
+    const apply = waitForLedgerRequest(page, (params) => params.get('path') === '/v1/messages');
     await path.press('Enter');
-    expect(new URL((await apply).url()).searchParams.get('path')).toBe('/v1/messages');
+    expectQuery(await apply, { path: '/v1/messages', page: '1', page_size: '25' });
     await expect(summary).toHaveText('Filters (1)');
     await path.fill('/draft');
     await summary.focus();
@@ -743,17 +777,22 @@ for (const width of [1440, 320]) {
     await expect(summary).toHaveText('Filters (1)');
     expect(await rotation()).toBe('none');
 
-    const reload = page.waitForRequest(/\/_proxy\/api\/requests\?/);
+    const reload = waitForLedgerRequest(
+      page,
+      (params) => params.get('path') === '/v1/messages' && params.get('page') === '1',
+    );
     await refresh.click();
-    expect(new URL((await reload).url()).searchParams.get('path')).toBe('/v1/messages');
+    expectQuery(await reload, { path: '/v1/messages', page: '1', page_size: '25' });
     await expect(disclosure).not.toHaveAttribute('open');
+    await expect(refresh).toBeEnabled();
     await summary.press('Enter');
     await expect(path).toHaveValue('/draft');
-    const clear = page.waitForRequest(/\/_proxy\/api\/requests\?/);
+    const clear = waitForLedgerRequest(
+      page,
+      (params) => params.get('page') === '1' && !params.has('path'),
+    );
     await clearFilters.click();
-    const cleared = new URL((await clear).url()).searchParams;
-    expect(cleared.has('path')).toBe(false);
-    expect(cleared.get('page')).toBe('1');
+    expectQuery(await clear, { page: '1', page_size: '25' });
     await expect(summary).toHaveText('Filters');
     await expect(path).toHaveValue('');
   });
@@ -1771,8 +1810,8 @@ test('ChatGPT sign-in creates a route before approving the provider', async ({ p
   await expect(code).toHaveCount(0);
   expect(approvals).toEqual([]);
   const manage = await openManage(page, 'chatgpt');
-  await manage.getByLabel('Client', { exact: true }).selectOption('desktop');
-  await manage.getByRole('button', { name: 'Approve access', exact: true }).click();
+  await manage.getByLabel('Desktop', { exact: true }).check();
+  await manage.getByRole('button', { name: 'Approve selected', exact: true }).click();
   await expect(card.locator('.provider-approval-summary')).toHaveText('Approved: Desktop');
   await expect(row).not.toContainText('Desktop');
   await expect(row.locator('.provider-route-clients')).toHaveCount(0);
@@ -2139,8 +2178,8 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
   await expect(current).toContainText('jarvis');
   await expect(current).toContainText('Needs approval');
   const grantForm = chatgptManage.locator('.route-access-grant');
-  await grantForm.getByLabel('Client', { exact: true }).selectOption('jarvis');
-  await grantForm.getByRole('button', { name: 'Approve access', exact: true }).click();
+  await grantForm.getByLabel('jarvis (needs approval)', { exact: true }).check();
+  await grantForm.getByRole('button', { name: 'Approve selected', exact: true }).click();
   expect(approvals).toEqual([
     {
       id: 'jarvis',

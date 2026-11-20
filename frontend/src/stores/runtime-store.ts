@@ -3,6 +3,7 @@ import type { Session } from '../domain/types';
 import type { RuntimeOption } from './store-types';
 import { listFrom } from './store-utils';
 import { agentChoiceValue, type AgentChoice } from '../domain/agent-choice';
+import { matchModelEffortSuffix } from '../domain/runtime';
 import type { AppStoreServices } from './app-store-services';
 import { MODEL_CATALOG_FRESH_MS, providerFingerprint } from './workspace-cache';
 
@@ -305,21 +306,18 @@ export class RuntimeStore {
       this.selectedModel.value &&
       !this.models.value.some((model) => model.id === this.selectedModel.value)
     ) {
-      const suffixMatch = this.selectedModel.value.match(
-        /^(.*?)[-_](none|minimal|low|medium|high|xhigh|max)$/i,
-      );
-      const matching = suffixMatch
-        ? this.models.value.find((model) => model.id === suffixMatch[1])
-        : undefined;
-      if (matching) {
-        this.setPreference('model', matching.id, false);
-        const migratedEffort = suffixMatch![2].toLowerCase();
-        if (
-          !this.selectedEffort.peek() &&
-          (!matching.efforts?.length || matching.efforts.includes(migratedEffort))
-        ) {
-          this.setPreference('effort', migratedEffort, false);
-        }
+      const suffixMatch = matchModelEffortSuffix(this.selectedModel.value);
+      if (!suffixMatch) return;
+      const [, modelID, suffix] = suffixMatch;
+      const matching = models.find((model) => model.id === modelID);
+      if (!matching) return;
+      this.setPreference('model', matching.id, false);
+      const migratedEffort = suffix.toLowerCase();
+      if (
+        !this.selectedEffort.peek() &&
+        (!matching.efforts?.length || matching.efforts.includes(migratedEffort))
+      ) {
+        this.setPreference('effort', migratedEffort, false);
       }
     }
   }

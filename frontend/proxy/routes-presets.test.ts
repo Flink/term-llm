@@ -476,7 +476,7 @@ it('preserves an existing route’s account, transport and admission policy when
   expect(confirm).not.toHaveBeenCalled();
 });
 
-it('asks before a transport change that drops grants on an existing route', async () => {
+it('saves a transport change on an existing route without a grant-loss prompt', async () => {
   const existing: ProxyAdminRoute = {
     serves: [],
     profile: '',
@@ -496,8 +496,8 @@ it('asks before a transport change that drops grants on an existing route', asyn
   expect(queryByLabelText(root, 'Trusted account')).toBeNull();
   fireEvent.click(getByLabelText(root, 'Forward WebSocket upgrades'));
   fireEvent.click(getByRole(root, 'button', { name: 'Save route' }));
-  await waitFor(() => expect(confirm).toHaveBeenCalledOnce());
-  expect(save).not.toHaveBeenCalled();
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(confirm).not.toHaveBeenCalled();
 });
 
 it('keeps billing choices concise and technical guidance and preview in closed Advanced', () => {
@@ -553,7 +553,7 @@ it.each<ProxyAdminRoute['set_headers']>([
   expect(form.querySelectorAll('details')).toHaveLength(0);
   const advanced = form.querySelector<HTMLElement>('.route-form-advanced')!;
   expect(advanced.querySelector('.header-substitution')).not.toBeNull();
-  expect(form.textContent).toContain('changes can remove client grants');
+  expect(form.textContent).not.toContain('remove client grants');
   fireEvent.click(getByRole(form, 'button', { name: 'Save route' }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
   expect(save.mock.calls[0][1]).toEqual([existing]);
@@ -564,12 +564,9 @@ it.each<ProxyAdminRoute['set_headers']>([
   expect(queryByRole(form, 'heading', { name: 'Upstream headers' })).toBeNull();
   expect(queryByRole(form, 'button', { name: 'Add substitution' })).toBeNull();
   fireEvent.click(getByRole(form, 'button', { name: 'Save route' }));
-  await waitFor(() => expect(confirm).toHaveBeenCalledOnce());
-  expect(confirm).toHaveBeenCalledWith(expect.stringContaining('grants will be dropped'));
-  expect(save).toHaveBeenCalledOnce();
-  confirm.mockReturnValue(true);
-  fireEvent.click(getByRole(form, 'button', { name: 'Save route' }));
   await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  // Credential edits keep client grants, so saving needs no confirmation.
+  expect(confirm).not.toHaveBeenCalled();
   expect(save.mock.calls[1][1][0].set_headers).toEqual({});
 });
 

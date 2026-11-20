@@ -61,6 +61,24 @@ func TestMoneyModelsDevHaikuPlanAndAPI(t *testing.T) {
 		})
 	}
 }
+func TestMoneyModelsDevAgyPlanUsesGoogleCatalog(t *testing.T) {
+	s := testService(t)
+	s.pricing = proxyCatalog(t, `{"google":{"models":{"gemini-3.5-flash-lite":{"cost":{"input":0.3,"output":2.5,"cache_read":0.03}}}}}`)
+	route := Route{Name: "agy", Upstream: "https://daily-cloudcode-pa.googleapis.com", Account: "agy", Billing: "plan"}
+	tap := usagetap.ForResponse("/v1internal:streamGenerateContent", "text/event-stream")
+	tap.Feed([]byte("data: {\"response\":{\"modelVersion\":\"gemini-3.5-flash-lite\",\"usageMetadata\":{\"promptTokenCount\":10995,\"candidatesTokenCount\":62,\"totalTokenCount\":11057}}}\n\n"))
+	observed := ObservedUsage{Protocol: usagetap.Gemini, Usage: tap.Finish(true)}
+	rec := Record{Outcome: "complete", Usage: &observed}
+	s.finalizeMoney(&rec, route)
+	q := quotedMoney(*rec.Money)
+	// 10995 * 0.30 + 62 * 2.50 = 3298.5 + 155 micros.
+	if q == nil || q.Kind != "estimated" || q.Amount == nil || *q.Amount != 3454 || q.Source != "models.dev/google" {
+		t.Fatalf("agy catalog quote: %+v", q)
+	}
+	if rec.Money.Amount != nil || rec.Money.Kind != "included" {
+		t.Fatal("hypothetical price became spending", rec.Money)
+	}
+}
 func TestMoneyModelsDevContextTierBoundary(t *testing.T) {
 	s := testService(t)
 	s.pricing = proxyCatalog(t, haikuCatalogFixture)
@@ -140,6 +158,8 @@ func TestMoneyModelsDevProviderIdentity(t *testing.T) {
 		{"https://api.venice.ai/api/v1", "", "venice"},
 		{"https://generativelanguage.googleapis.com/v1beta", "", "google"},
 		{"https://chatgpt.com/backend-api/codex", "family", "openai"},
+		{"https://daily-cloudcode-pa.googleapis.com", "agy", "google"},
+		{"https://daily-cloudcode-pa.googleapis.com", "", ""},
 		{"https://chatgpt.com/backend-api/codex", "", ""},
 		{"https://independent.example/v1", "", "independent"},
 		{"https://api.anthropic.com.attacker.example", "", ""},

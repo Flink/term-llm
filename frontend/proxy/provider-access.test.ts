@@ -241,17 +241,16 @@ it('approves every route of a provider for an existing client in one explicit wr
     chatgptGroup,
     { callers: [docs, revoked] },
   );
-  const choice = getByLabelText(root, 'Client') as HTMLSelectElement;
-  expect([...choice.options].map((option) => option.textContent)).toEqual([
-    'Choose a client',
-    'Docs app',
-  ]);
-  expect(choice.value).toBe('');
-  fireEvent.click(getByRole(root, 'button', { name: 'Approve access' }));
-  await waitFor(() => expect(announce).toHaveBeenCalledWith('Choose an existing client.'));
+  const docsChoice = getByLabelText(root, 'Docs app') as HTMLInputElement;
+  expect(root.querySelectorAll('.route-access-grant input[type="checkbox"]')).toHaveLength(1);
+  expect(docsChoice.checked).toBe(false);
+  fireEvent.click(getByRole(root, 'button', { name: 'Approve selected' }));
+  await waitFor(() =>
+    expect(announce).toHaveBeenCalledWith('Select at least one client to approve.'),
+  );
   expect(updateProviderApprovals).not.toHaveBeenCalled();
-  fireEvent.change(choice, { target: { value: 'docs' } });
-  fireEvent.click(getByRole(root, 'button', { name: 'Approve access' }));
+  fireEvent.click(docsChoice);
+  fireEvent.click(getByRole(root, 'button', { name: 'Approve selected' }));
   await waitFor(() =>
     expect(updateProviderApprovals).toHaveBeenCalledWith(
       'docs',
@@ -267,6 +266,40 @@ it('approves every route of a provider for an existing client in one explicit wr
   expect(createProviderCaller).not.toHaveBeenCalled();
 });
 
+it('approves several clients in one submit, re-reading the revision between writes', async () => {
+  const phone = caller({ id: 'phone', name: 'Phone', grants: [] });
+  const docs = caller({ id: 'docs', name: 'Docs app', grants: [] });
+  const { root, updateProviderApprovals, refresh, announce } = fixture(openaiGroup, {
+    callers: [phone, docs],
+  });
+  refresh.mockResolvedValueOnce(snapshot(openaiGroup, { revision: 8, callers: [phone, docs] }));
+  fireEvent.click(getByLabelText(root, 'Phone'));
+  fireEvent.click(getByLabelText(root, 'Docs app'));
+  fireEvent.click(getByRole(root, 'button', { name: 'Approve selected' }));
+  await waitFor(() => expect(updateProviderApprovals).toHaveBeenCalledTimes(2));
+  expect(updateProviderApprovals.mock.calls.map(([id, , revision]) => [id, revision])).toEqual([
+    ['phone', 7],
+    ['docs', 8],
+  ]);
+  expect(refresh.mock.calls).toEqual([[undefined, true], ['route:openai']]);
+  expect(announce).toHaveBeenLastCalledWith(
+    'Approved Phone, Docs app for OpenAI API. Their tokens and other approvals are unchanged.',
+  );
+});
+
+it('keeps client creation behind New client once clients exist', () => {
+  const { root } = fixture(openaiGroup, { callers: [caller()] });
+  const toggle = getByRole(root, 'button', { name: 'New client' });
+  expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  expect(queryByLabelText(root, 'Client name')).not.toBeVisible();
+  fireEvent.click(toggle);
+  expect(getByLabelText(root, 'Client name')).toBeVisible();
+  expect(getByLabelText(root, 'Client name')).toHaveFocus();
+  fireEvent.click(getByRole(root, 'button', { name: 'Cancel' }));
+  expect(queryByLabelText(root, 'Client name')).not.toBeVisible();
+  expect(getByRole(root, 'button', { name: 'New client' })).toHaveFocus();
+});
+
 it('shows legacy partial approval as needing approval and covers all routes only on an explicit click', async () => {
   const laptop = caller({ id: 'lap', name: 'Laptop', grants: ['chatgpt'] });
   const { root, updateProviderApprovals, refresh, announce } = fixture(chatgptGroup, {
@@ -274,16 +307,13 @@ it('shows legacy partial approval as needing approval and covers all routes only
   });
   expect(root.querySelector('.route-access-client')).toHaveTextContent('Laptop');
   expect(root.querySelector('.route-access-client')).toHaveTextContent('Needs approval');
-  const choice = getByLabelText(root, 'Client') as HTMLSelectElement;
-  expect([...choice.options].map((option) => option.textContent)).toEqual([
-    'Choose a client',
-    'Laptop (needs approval)',
-  ]);
+  const choice = getByLabelText(root, 'Laptop (needs approval)') as HTMLInputElement;
   // Existing route grants stay exactly as they are until the operator covers
   // the whole provider explicitly.
+  expect(choice.checked).toBe(false);
   expect(updateProviderApprovals).not.toHaveBeenCalled();
-  fireEvent.change(choice, { target: { value: 'lap' } });
-  fireEvent.click(getByRole(root, 'button', { name: 'Approve access' }));
+  fireEvent.click(choice);
+  fireEvent.click(getByRole(root, 'button', { name: 'Approve selected' }));
   await waitFor(() =>
     expect(updateProviderApprovals).toHaveBeenCalledWith(
       'lap',
@@ -496,6 +526,7 @@ it('refuses creation, provider approval, and removal while another token is on s
     },
     { hasProtectedToken: () => true },
   );
+  fireEvent.click(getByRole(root, 'button', { name: 'New client' }));
   fireEvent.input(getByLabelText(root, 'Client name'), { target: { value: 'Phone' } });
   fireEvent.click(getByRole(root, 'button', { name: 'Create client' }));
   expect(createProviderCaller).not.toHaveBeenCalled();
@@ -503,8 +534,8 @@ it('refuses creation, provider approval, and removal while another token is on s
     'Save or dismiss the open one-time client token before creating another client.',
   );
 
-  fireEvent.change(getByLabelText(root, 'Client'), { target: { value: 'docs' } });
-  fireEvent.click(getByRole(root, 'button', { name: 'Approve access' }));
+  fireEvent.click(getByLabelText(root, 'Docs app'));
+  fireEvent.click(getByRole(root, 'button', { name: 'Approve selected' }));
   expect(updateProviderApprovals).not.toHaveBeenCalled();
   expect(announce).toHaveBeenLastCalledWith(
     'Save or dismiss the open one-time client token before approving provider access.',

@@ -6,7 +6,8 @@ import {
   type ProxyState,
 } from '../src/api/proxy-client';
 import { routeAllowsClientApproval, routeNativeProvider, routeSharedNativeAccount } from './native';
-import { actions, button, dateTime, el, field, input, select, submit, type UIContext } from './dom';
+import { actions, button, check, dateTime, el, field, input, submit, type UIContext } from './dom';
+import { clientLabel, duplicateSuffixes, sortCallers } from './client-list';
 import { authLabel, joinLocalPrefix, routeRules } from './route-rules';
 import { providerApproval, type ProviderGroup } from './provider-groups';
 import { callerCurl } from './security';
@@ -194,23 +195,62 @@ export function providerAccess(
     return section;
   }
 
+  // Approval writes are per client and bump the revision, so a batch re-reads
+  // the revision between writes without re-rendering the open panel.
+  async function approveAll(chosen: ProxyCaller[]) {
+    let approved = 0;
+    try {
+      for (const caller of chosen) {
+        if (approved) {
+          const latest = await context.refresh(undefined, true);
+          if (!latest) throw new Error('Proxy state changed; review approvals and try again.');
+          current = latest;
+        }
+        await mutate(() =>
+          api.updateProviderApprovals(
+            caller.id,
+            [{ id: group.id, approved: true }],
+            current.revision,
+          ),
+        );
+        approved++;
+      }
+    } catch (error) {
+      // Show what was approved before the failure instead of a stale list.
+      if (approved) await context.refresh(focusKey).catch(() => undefined);
+      throw error;
+    }
+    await context.refresh(focusKey);
+    const names = chosen.map((caller) => caller.name).join(', ');
+    context.announce(
+      `Approved ${names} for ${group.label}. ${chosen.length === 1 ? 'Its token and other approvals are' : 'Their tokens and other approvals are'} unchanged.`,
+    );
+  }
+
   function grantExisting(): HTMLElement | undefined {
-    const eligible = current.callers.filter(
-      (caller) => !caller.revoked && providerApproval(group, caller) !== 'approved',
+    const eligible = sortCallers(
+      current.callers.filter(
+        (caller) => !caller.revoked && providerApproval(group, caller) !== 'approved',
+      ),
     );
     if (!eligible.length) return undefined;
-    const section = el('div', el('h4', 'Add existing client'));
-    section.className = 'route-access-grant';
-    const choice = select([
-      ['', 'Choose a client'],
-      ...eligible.map((caller): [string, string] => [
-        caller.id,
-        providerApproval(group, caller) === 'partial'
-          ? `${caller.name} (needs approval)`
-          : caller.name,
-      ]),
-    ]);
-    const form = el('form', field('Client', choice));
+    const suffixes = duplicateSuffixes(current.callers);
+    const choices = eligible.map((caller) => {
+      const label = clientLabel(caller, suffixes);
+      const [chip, control] = check(
+        providerApproval(group, caller) === 'partial' ? `${label} (needs approval)` : label,
+        false,
+      );
+      chip.classList.add('grant-chip');
+      chip.title = caller.last_used ? `Last used ${dateTime(caller.last_used)}` : 'Never used';
+      return { caller, control, chip };
+    });
+    const chips = el('div', ...choices.map((choice) => choice.chip));
+    chips.className = 'grant-chips';
+    const fields = el('fieldset', el('legend', 'Add clients'), chips);
+    fields.className = 'client-grant-fields';
+    const form = el('form', fields);
+    form.className = 'route-access-grant';
     submit(
       form,
       context,
@@ -221,24 +261,14 @@ export function providerAccess(
           )
         )
           return;
-        const caller = eligible.find((value) => value.id === choice.value);
-        if (!caller) throw new Error('Choose an existing client.');
-        await mutate(() =>
-          api.updateProviderApprovals(
-            caller.id,
-            [{ id: group.id, approved: true }],
-            current.revision,
-          ),
-        );
-        await context.refresh(focusKey);
-        context.announce(
-          `Approved ${caller.name} for ${group.label}. Its token and other approvals are unchanged.`,
-        );
+        // The submit guard disables controls but leaves their checked state.
+        const chosen = choices.filter((choice) => choice.control.checked);
+        if (!chosen.length) throw new Error('Select at least one client to approve.');
+        await approveAll(chosen.map((choice) => choice.caller));
       },
-      'Approve access',
+      'Approve selected',
     );
-    section.append(form);
-    return section;
+    return form;
   }
 
   function showToken(value: string, caller: ProxyCaller) {
@@ -319,13 +349,28 @@ export function providerAccess(
     context.announce(`Created client ${caller.name}. Copy the token now; it is shown once.`);
   }
 
-  function createClient(): HTMLElement {
-    const section = el('div', el('h4', 'New client'));
-    section.className = 'route-access-create';
+  // Creating a client is rare once any exist, so it stays behind New client
+  // unless there is nothing to approve yet.
+  function createClient(open: boolean): HTMLElement {
     const name = input();
     name.required = true;
     name.maxLength = 80;
     const form = el('form', field('Client name', name));
+    form.id = `route-access-create-${group.id}`;
+    let ready = false;
+    const toggle = button('New client', () => setOpen(true));
+    toggle.setAttribute('aria-controls', form.id);
+    const cancel = button('Cancel', () => {
+      setOpen(false);
+      toggle.focus();
+    });
+    function setOpen(next: boolean) {
+      form.hidden = !next;
+      toggle.hidden = next;
+      toggle.setAttribute('aria-expanded', String(next));
+      if (!next) name.value = '';
+      else if (ready) name.focus();
+    }
     submit(
       form,
       context,
@@ -368,7 +413,12 @@ export function providerAccess(
       },
       'Create client',
     );
-    section.append(form);
+    // Only the initially open form (no clients yet) has nothing to cancel to.
+    if (!open) form.append(cancel);
+    setOpen(open);
+    ready = true;
+    const section = el('div', toggle, form);
+    section.className = 'route-access-create';
     return section;
   }
 
@@ -384,15 +434,9 @@ export function providerAccess(
       parts.push(note);
     }
     if (canApprove()) {
-      const forms: HTMLElement[] = [];
       const existing = grantExisting();
-      if (existing) forms.push(existing);
-      if (!native) forms.push(createClient());
-      if (forms.length) {
-        const row = el('div', ...forms);
-        row.className = 'route-access-forms';
-        parts.push(row);
-      }
+      if (existing) parts.push(existing);
+      if (!native) parts.push(createClient(!current.callers.some((caller) => !caller.revoked)));
     } else {
       const note = el(
         'p',

@@ -832,11 +832,19 @@ button.route-preset-custom {
   color: var(--muted);
 }
 
-.route-access-forms {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-  gap: 0.65rem 1rem;
+.route-access-grant,
+.route-access-create {
   margin-top: 0.55rem;
+}
+
+.route-access-panel .route-access-grant .client-grant-fields {
+  flex: 0 1 auto;
+  margin: 0;
+}
+
+.route-access-grant legend {
+  font-size: 0.78rem;
+  color: var(--muted);
 }
 
 .route-access-clients {

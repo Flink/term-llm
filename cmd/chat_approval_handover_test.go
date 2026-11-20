@@ -170,7 +170,23 @@ agents:
 					t.Fatal(err)
 				}
 			}
-			// Query durable session state, not guessed redraw timings.
+			typeIdleCommand := func(name, description string) {
+				t.Helper()
+				mark := len(text())
+				// Durable turn counters can advance before the TUI processes StreamDone.
+				// These command completions only appear in the idle composer. Refresh
+				// the completion without pressing Enter, which could submit steering.
+				probe := name
+				wait("idle composer for "+name, func() bool {
+					if strings.Contains(text()[mark:], description) {
+						return true
+					}
+					send(probe)
+					probe = "\x7f" + name[len(name)-1:] // retype the last character
+					return false
+				})
+			}
+			// Query durable session state for the approval and MCP assertions.
 			dbPath := filepath.Join(state, "data/term-llm/sessions.db")
 			var db *sql.DB
 			defer func() {
@@ -229,21 +245,23 @@ agents:
 			if got := policy("source", false); got != tt.selected {
 				t.Fatalf("source selected=%q want=%q", got, tt.selected)
 			}
+			typeIdleCommand("/handover", "Hand conversation to another agent")
 			mark := len(text())
-			send("/handover @target debug:normal\r")
+			send(" @target debug:normal\r")
 			wait("handover preview", func() bool { return strings.Contains(text()[mark:], "Confirm handover") })
 			send("\r")
 			wait("target first turn", func() bool { return policy("target", true) != "" })
 			if got := policy("target", true); got != tt.selected {
 				t.Errorf("persisted target approval=%q want=%q", got, tt.selected)
 			}
+			typeIdleCommand("/quit", "Exit chat")
 			// Report uses the target's constructed ApprovalManager, not just the
 			// requested mode or source session metadata.
 			wantEffective := "approval: requested=" + tt.selected + " source=cli actual=" + tt.selected
 			if !strings.Contains(text()[mark:], wantEffective) {
 				t.Errorf("target effective approval report missing %q", wantEffective)
 			}
-			send("/quit\r")
+			send("\r")
 			select {
 			case err := <-exited:
 				finished = true

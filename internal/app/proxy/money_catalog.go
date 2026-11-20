@@ -144,7 +144,7 @@ func catalogProvider(route Route, catalog *modelsdev.Client) string {
 			provider = "opencode-go"
 		}
 		switch provider {
-		case "gemini":
+		case "gemini", "agy-bin":
 			provider = "google"
 		case "zen":
 			provider = "opencode"

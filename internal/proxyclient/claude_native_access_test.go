@@ -92,7 +92,10 @@ func TestClaudeNativeCommandHandoffOffline(t *testing.T) {
 				defer file.Close()
 				cmd.ExtraFiles = append(cmd.ExtraFiles, file)
 			}
-			stateDir := t.TempDir()
+			stateDir, err := os.MkdirTemp(t.TempDir(), "private-")
+			if err != nil {
+				t.Fatal(err)
+			}
 			cleanup, err := prepareClaudeNativeCommand(cmd, bootstrap, claudeNativeTestToken, stateDir)
 			if err != nil {
 				t.Fatal(err)

@@ -92,6 +92,18 @@ func TestGeminiCloudCodeWrapsUsage(t *testing.T) {
 	if u.Source != Reported || u.Input != 10 || u.Output != 4 || u.Total != 14 {
 		t.Fatal(u)
 	}
+	// proto3 JSON omits zero cache-hit and thinking counts.
+	if u.CachedInput != 0 || u.Reasoning != 0 {
+		t.Fatal("omitted Gemini zero counts became unknown", u)
+	}
+}
+
+func TestGeminiOmittedCountsNeedPromptCount(t *testing.T) {
+	p := New(Gemini, JSON)
+	p.Feed([]byte(`{"usageMetadata":{"candidatesTokenCount":4}}`))
+	if u := p.Finish(true); u.CachedInput != -1 || u.Reasoning != -1 {
+		t.Fatal("zero inferred without a prompt count", u)
+	}
 }
 
 func TestOllamaFinalRecord(t *testing.T) {
