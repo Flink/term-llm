@@ -111,7 +111,7 @@ func compileDestination(r *Route, secrets map[string]material, discovery *upstre
 		active.Upstream = upstream
 		defaultRouteUsage(&active)
 	}
-	return activeRoute{Route: active, target: u, origin: origin, authority: routeAuthority(active, origin, u), headers: headers}, nil
+	return activeRoute{Route: active, target: u, origin: origin, authority: routeAuthority(*r, origin, u), headers: headers}, nil
 }
 
 func cloudflareRootError() error {

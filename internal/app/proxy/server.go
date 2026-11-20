@@ -608,9 +608,9 @@ func (s *Service) dispatch(w http.ResponseWriter, r *http.Request, ar activeRout
 		baseTransport = websocketTransport(s.transport)
 		defer baseTransport.CloseIdleConnections()
 	}
-	var transport http.RoundTripper = baseTransport
+	transport := s.debugTransport(baseTransport, capture, r, ar, snap)
 	if ar.Account != "" {
-		custody = &accountTransport{service: s, base: baseTransport, route: ar}
+		custody = &accountTransport{service: s, base: transport, route: ar}
 		transport = custody
 	}
 	proxy := httputil.ReverseProxy{

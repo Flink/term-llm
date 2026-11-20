@@ -87,6 +87,90 @@ it.each(['deleted', 'wrong ID', 'wrong file'])('does not render a %s preview', a
   expect(section.querySelector('pre')?.textContent).toBe('');
 });
 
+it('lets Requests switch from the raw body to any available header summary', async () => {
+  const { open, lookup, preview } = setup();
+  const summaries = [
+    ['request.headers', 'Client request headers', { fields: [{ name: 'Content-Type' }] }],
+    [
+      'upstream-request.headers',
+      'Upstream request headers',
+      {
+        fields: [{ name: 'Authorization', values: 1, non_empty: true }],
+        authorization_scheme: 'bearer',
+      },
+    ],
+    ['upstream-response.headers', 'Upstream response headers', { fields: [], status: 401 }],
+  ] as const;
+  lookup.mockResolvedValueOnce({
+    ...metadata,
+    files: ['request.body', ...summaries.map(([file]) => file)],
+  });
+  preview.mockImplementation(async (id, file) => {
+    const content =
+      file === 'request.body'
+        ? '{"model":"example"}'
+        : JSON.stringify(summaries.find(([name]) => name === file)?.[2], null, 2);
+    return {
+      id,
+      file,
+      offset: 0,
+      total_bytes: content.length,
+      bytes_returned: content.length,
+      encoding: 'utf8',
+      truncated: false,
+      content,
+    };
+  });
+  const section = open();
+  const reveal = await waitFor(() => getByRole(section, 'button', revealName));
+  expect(preview).not.toHaveBeenCalled();
+  fireEvent.click(reveal);
+  const dropdown = getByRole<HTMLSelectElement>(section, 'combobox', { name: 'File' });
+  expect(dropdown).toHaveValue('request.body');
+  expect(getByRole(dropdown, 'option', { name: 'request.body' })).toBeEnabled();
+  await waitFor(() =>
+    expect(section.querySelector('pre')?.textContent).toBe('{"model":"example"}'),
+  );
+  for (const [file, label, summary] of summaries) {
+    expect(getByRole(dropdown, 'option', { name: label })).toBeEnabled();
+    fireEvent.change(dropdown, { target: { value: file } });
+    await waitFor(() =>
+      expect(section.querySelector('pre')?.textContent).toBe(JSON.stringify(summary, null, 2)),
+    );
+    expect(preview).toHaveBeenLastCalledWith(id, file, 0, 65536);
+    expect(section).toHaveTextContent('UTF-8');
+    expect(queryByRole(section, 'button', { name: 'Raw bytes' })).toBeNull();
+  }
+});
+
+it('offers header summaries when a capture has no raw payload', async () => {
+  const { open, lookup, preview } = setup();
+  const file = 'upstream-response.headers';
+  const content = '{"fields":[],"status":401}';
+  lookup.mockResolvedValueOnce({ ...metadata, files: ['manifest.json', file] });
+  preview.mockResolvedValueOnce({
+    id,
+    file,
+    offset: 0,
+    total_bytes: content.length,
+    bytes_returned: content.length,
+    encoding: 'utf8',
+    truncated: false,
+    content,
+  });
+  const section = open();
+  const reveal = await waitFor(() =>
+    getByRole(section, 'button', { name: 'View header summaries' }),
+  );
+  expect(preview).not.toHaveBeenCalled();
+  fireEvent.click(reveal);
+  const dropdown = getByRole(section, 'combobox', { name: 'File' });
+  expect(dropdown).toHaveValue(file);
+  expect(getByRole(dropdown, 'option', { name: 'Upstream request headers' })).toBeDisabled();
+  await waitFor(() => expect(section.querySelector('pre')?.textContent).toBe(content));
+  expect(preview).toHaveBeenCalledExactlyOnceWith(id, file, 0, 65536);
+});
+
 it('reveals a WebSocket capture decoded, with raw bytes available on demand', async () => {
   const { open, lookup, preview } = setup();
   const file = 'websocket-server.frames';

@@ -14,12 +14,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/term-llm/term-llm/internal/fileprivacy"
+
+	"github.com/term-llm/term-llm/internal/app/proxy/debugheaders"
 )
 
 var errInvalidDebugManifest = errors.New("capture manifest is incomplete or exceeds size limit")
 
 var errUnsafeDebugFile = errors.New("debug archive must contain private non-symlink directories and regular files")
-var debugFiles = []string{"manifest.json", "request.body", "response.body", "websocket-client.frames", "websocket-server.frames"}
+var debugFiles = []string{"manifest.json", "request.body", "response.body", "websocket-client.frames", "websocket-server.frames", debugheaders.Request, debugheaders.UpstreamRequest, debugheaders.UpstreamResponse}
 
 func allowedDebugFile(name string) bool {
 	for _, file := range debugFiles {

@@ -59,7 +59,7 @@ func TestPayloadDebugExactRequestLookup(t *testing.T) {
 	assertExact := func() {
 		t.Helper()
 		out := lookup(id)
-		if want := fmt.Sprintf(`{"files":["request.body","response.body"],"finished":true,"id":%q}`, id); out.Code != 200 || strings.TrimSpace(out.Body.String()) != want {
+		if want := fmt.Sprintf(`{"files":["request.body","response.body","request.headers","upstream-request.headers","upstream-response.headers"],"finished":true,"id":%q}`, id); out.Code != 200 || strings.TrimSpace(out.Body.String()) != want {
 			t.Fatal(out.Code, out.Body.String())
 		}
 		if out.Header().Get("Cache-Control") != "no-store" {

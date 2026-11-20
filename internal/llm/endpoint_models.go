@@ -10,6 +10,7 @@ import (
 	"github.com/term-llm/term-llm/internal/config"
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/llm/providers/opencompat"
+	"github.com/term-llm/term-llm/internal/llm/providers/responsesproviders"
 	"github.com/term-llm/term-llm/internal/openaiapi"
 )
 
@@ -31,10 +32,19 @@ func endpointModelCacheKey(providerCfg config.ProviderConfig) string {
 // the configured base_url when set, otherwise the resolved OpenAI endpoint
 // (OPENAI_BASE_URL or the public API root).
 func endpointModelBaseURL(providerCfg config.ProviderConfig) string {
+	if usesProxyOpenCodeGoCatalog(providerCfg) {
+		// Keep the exact delegated root; OpenAI-compatible URL normalization
+		// can rewrite localhost and detach requests from their proxy binding.
+		return strings.TrimRight(providerCfg.BaseURL, "/")
+	}
 	if baseURL := strings.TrimSpace(providerCfg.BaseURL); baseURL != "" {
 		return opencompat.NewOpenAICompatProvider(baseURL, "", "", "").BaseURL()
 	}
 	return providerCfg.OpenAIEndpoint().BaseURL
+}
+
+func usesProxyOpenCodeGoCatalog(providerCfg config.ProviderConfig) bool {
+	return providerCfg.Type == config.ProviderTypeOpenCodeGo && providerCfg.ProxyBinding != "" && providerCfg.BaseURL != ""
 }
 
 // UsesEndpointModelCatalog reports whether the provider's model catalog is
@@ -49,6 +59,10 @@ func UsesEndpointModelCatalog(provider string, providerCfg config.ProviderConfig
 		return true
 	case config.ProviderTypeOpenRouter, config.ProviderTypeVenice, config.ProviderTypeZen:
 		return strings.TrimSpace(providerCfg.BaseURL) != ""
+	case config.ProviderTypeOpenCodeGo:
+		// A delegated route lists IDs without the separate public metadata
+		// catalog, so it cannot populate the native OpenCode Go metadata cache.
+		return usesProxyOpenCodeGoCatalog(providerCfg)
 	case config.ProviderTypeOpenAI:
 		return endpointModelBaseURL(providerCfg) != openaiapi.DefaultBaseURL
 	default:
@@ -68,12 +82,20 @@ func RefreshEndpointModelsIfStale(ctx context.Context, providerCfg config.Provid
 	if apiKey == "" {
 		apiKey = providerCfg.APIKey
 	}
-	models, err := opencompat.NewOpenAICompatProvider(endpointModelBaseURL(providerCfg), apiKey, providerCfg.Model, "").ListModels(ctx)
+	models, err := listEndpointModels(ctx, providerCfg, apiKey)
 	if err != nil {
 		return err
 	}
 	RefreshEndpointCacheSync(providerCfg, models)
 	return nil
+}
+
+func listEndpointModels(ctx context.Context, providerCfg config.ProviderConfig, apiKey string) ([]core.ModelInfo, error) {
+	baseURL := endpointModelBaseURL(providerCfg)
+	if usesProxyOpenCodeGoCatalog(providerCfg) {
+		return responsesproviders.NewOpenCodeGoProviderWithBaseURL(apiKey, providerCfg.Model, baseURL).ListModels(ctx)
+	}
+	return opencompat.NewOpenAICompatProvider(baseURL, apiKey, providerCfg.Model, "").ListModels(ctx)
 }
 
 // GetCachedEndpointModels returns the last live model list fetched for this

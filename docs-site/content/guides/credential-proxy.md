@@ -842,10 +842,15 @@ secrets:
 
 Discovery runs on startup, when saving routes, and on operator file **Reload**,
 not on each request or when rotating a secret. If discovery fails, the new
-configuration is rejected and any active routes stay unchanged. If a new result
-changes the origin, client grants must be renewed and any trusted account must
-still permit the upstream. DNS changes alone do not move active traffic or
-implicitly transfer credentials.
+configuration is rejected and any active routes stay unchanged. For key-backed
+and keyless routes, approval is tied to the configured SRV name and base path,
+not to the selected host or port. Use SRV only where you trust every target
+published for that record with the route's credential. Trusted-account routes
+still require approval for a changed resolved origin and still enforce the
+account's permitted upstreams. DNS changes alone do not move active traffic.
+
+When upgrading from a version that keyed approvals to resolved hosts, reapprove
+existing key-backed or keyless SRV routes once; client tokens do not need to change.
 
 ## Explicit setup and production administration
 
@@ -1014,6 +1019,13 @@ returned in `X-Term-LLM-Proxy-Request-ID`), containing:
 
 - `request.body` and `response.body`: binary-safe bytes consumed on the forwarding
   path; empty or unread streams may have no file.
+- `request.headers`, `upstream-request.headers`, and `upstream-response.headers`:
+  bounded header previews from the client, after the proxy applies upstream
+  credentials, and from the upstream response. Compare the first two to see
+  whether the proxy substituted a credential. Bearer tokens show at most their
+  first three characters; short or malformed tokens, cookies, API keys, session
+  IDs and other sensitive values stay redacted. A few diagnostic values, such as
+  `Content-Type`, `User-Agent`, and `X-Opencode-Client`, are shown when available.
 - For upgraded WebSockets, `websocket-client.frames` and
   `websocket-server.frames`: raw wire frames, **not decoded JSON messages**.
 - `manifest.json`: bounded metadata, response format, reported model/usage when
@@ -1021,14 +1033,13 @@ returned in `X-Term-LLM-Proxy-Request-ID`), containing:
   While active, files may grow and the manifest is preliminary. `finished` means
   capture finalization, **not** proof of a complete payload; inspect those flags.
 
-No authorization/cookie headers, arbitrary headers or query strings are archived.
-Only bounded Content-Type/response Content-Encoding metadata is retained; bodies
-are not redacted, decompressed, replayed or pre-read. Captures describe consumed
+No full credential values, cookies, or query strings are recorded in the header
+previews; bodies are not redacted, decompressed, replayed or pre-read. Captures describe consumed
 transport bytes, not proof that all upstream work reached the client. Capture
 failures do not fail forwarding. Local pre-dispatch denials are not captured.
 To inspect one request, expand its row in **Requests** and choose **View raw
-payload**. The button appears when that request has stored body or frame data,
-even if capture has since been turned off. Expanding the row checks availability;
+payload** or **View header summaries**. The button appears when that request has
+stored capture data, even if capture has since been turned off. Expanding the row checks availability;
 it does not fetch payload bytes or turn capture on. Close the row to return to the
 same filtered list. The signed-in **Debug** view also lists captures and shows
 bounded previews, including manifests, HTTP bodies, and WebSocket frames. Frame

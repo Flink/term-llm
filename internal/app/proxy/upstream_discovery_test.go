@@ -1,9 +1,12 @@
 package proxy
 
 import (
+	"cmp"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -73,7 +76,7 @@ func TestSRVUpstreamForwardsTLSWithBoundCredential(t *testing.T) {
 	}
 }
 
-func TestSRVUpstreamRecompileKeepsPinnedOriginButRediscoveryChangesAuthority(t *testing.T) {
+func TestSRVUpstreamRecompileKeepsPinnedOriginAndRediscoveryKeepsAuthority(t *testing.T) {
 	const raw = "srv://_inference._tcp.example.test/v1"
 	const endpoint = "https://api.example.test:8443"
 	calls := 0
@@ -95,8 +98,8 @@ func TestSRVUpstreamRecompileKeepsPinnedOriginButRediscoveryChangesAuthority(t *
 		t.Fatal("secret rotation did not retain the exact pinned upstream and scope")
 	}
 	changed, err := compile(fixtureProviders(c), 2, secrets)
-	if err != nil || changed.routes[0].authority == first.routes[0].authority {
-		t.Fatalf("rediscovery must change authority for the new port: %v", err)
+	if err != nil || changed.routes[0].authority != first.routes[0].authority || changed.routes[0].target.String() != resolved {
+		t.Fatalf("rediscovery must change target but retain service authority: %v", err)
 	}
 }
 
@@ -137,9 +140,79 @@ routes:
 	if w := reload(); w.Code != http.StatusOK || s.snap.routes[0].target.String() != resolved {
 		t.Fatalf("reload did not switch to the newly discovered target: %d %s", w.Code, w.Body)
 	}
-	for _, snap := range []*snapshot{old, s.snap} {
-		if _, err := s.store.authorize(token, snap.routes[0]); err == nil {
-			t.Fatal("grant for the old SRV origin survived the change")
+	if _, err := s.store.authorize(token, s.snap.routes[0]); err != nil {
+		t.Fatalf("grant did not survive SRV target change: %v", err)
+	}
+	opts := s.opts
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resolved = "https://third.example.test:9443/v1"
+	s, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if got := s.snap.routes[0].target.String(); got != resolved {
+		t.Fatalf("restart retained old target: %s", got)
+	}
+	if _, err := s.store.authorize(token, s.snap.routes[0]); err != nil {
+		t.Fatalf("grant did not survive restart: %v", err)
+	}
+}
+
+func TestSRVServiceAuthorityStillBindsScope(t *testing.T) {
+	for _, composite := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, upstream, account, allow, headerPrefix, origin string
+			wantSame                                             bool
+		}{
+			{name: "pool members", origin: "https://other.test:9443", wantSame: true},
+			{name: "new service", upstream: "srv://_other._tcp.example.test/v1"},
+			{name: "new base", upstream: "srv://_frontier._tcp.example.test/v2"},
+			{name: "static destination", upstream: "https://first.test:8443/v1"},
+			{name: "access policy", allow: "POST =/chat/completions"},
+			{name: "credential rule", headerPrefix: "Different "},
+			{name: "trusted account", account: "plan", origin: "https://other.test:9443"},
+		} {
+			t.Run(fmt.Sprintf("%t/%s", composite, tc.name), func(t *testing.T) {
+				resolvedOrigin := "https://first.test:8443"
+				stubUpstreamSRV(t, func(raw string) (string, error) {
+					u, err := url.Parse(raw)
+					if err != nil {
+						return "", err
+					}
+					return resolvedOrigin + u.EscapedPath(), nil
+				})
+				compileAuthority := func(upstream, allow, headerPrefix string) string {
+					t.Helper()
+					r := Route{Name: "frontier", LocalPrefix: "/frontier/", Upstream: upstream, Account: tc.account, Enabled: true}
+					if allow != "" {
+						r.Allow = []string{allow}
+					}
+					if tc.account == "" {
+						r.SetHeaders = map[string]HeaderRule{"Authorization": {Secret: "key", Prefix: headerPrefix}}
+					}
+					if composite {
+						r.Rules = []RouteRule{{PathPrefix: "/", Upstream: r.Upstream, Allow: r.Allow, SetHeaders: r.SetHeaders}}
+						r.Upstream, r.Allow, r.SetHeaders = "", nil, nil
+					}
+					snap, err := compile(fixtureProviders(Config{Routes: []Route{r}}), 1, map[string]material{"key": {Value: "fixture-key"}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					return snap.routes[0].authority
+				}
+				const upstream = "srv://_frontier._tcp.example.test/v1"
+				before := compileAuthority(upstream, "", "Bearer ")
+				if tc.origin != "" {
+					resolvedOrigin = tc.origin
+				}
+				after := compileAuthority(cmp.Or(tc.upstream, upstream), tc.allow, cmp.Or(tc.headerPrefix, "Bearer "))
+				if (before == after) != tc.wantSame {
+					t.Fatalf("same approval scope = %t, want %t", before == after, tc.wantSame)
+				}
+			})
 		}
 	}
 }

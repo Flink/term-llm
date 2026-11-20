@@ -24,13 +24,17 @@ export function runWhileLive(
   }, source);
 }
 
-const files: ProxyDebugFile[] = [
-  'manifest.json',
-  'request.body',
-  'response.body',
-  'websocket-client.frames',
-  'websocket-server.frames',
-];
+const fileLabels: Record<ProxyDebugFile, string> = {
+  'manifest.json': 'manifest.json',
+  'request.body': 'request.body',
+  'response.body': 'response.body',
+  'websocket-client.frames': 'websocket-client.frames',
+  'websocket-server.frames': 'websocket-server.frames',
+  'request.headers': 'Client request headers',
+  'upstream-request.headers': 'Upstream request headers',
+  'upstream-response.headers': 'Upstream response headers',
+};
+const files = Object.keys(fileLabels) as ProxyDebugFile[];
 
 const decodedHistoryLimit = 100;
 
@@ -46,7 +50,7 @@ export function capturePreview(api: ProxyClient, context: UIContext) {
   let decoded = false;
   const history: number[] = [];
   const file = select(
-    files.map((name) => [name, name]),
+    files.map((name) => [name, fileLabels[name]]),
     'manifest.json',
   );
   const info = el('p');
@@ -168,7 +172,8 @@ export function capturePreview(api: ProxyClient, context: UIContext) {
 export function requestCapture(api: ProxyClient, context: UIContext, id: string) {
   const status = el('p', 'Checking for captured payload…');
   status.setAttribute('aria-live', 'polite');
-  const element = el('div', el('h3', 'Raw payload capture'), status);
+  const heading = el('h3', 'Raw payload capture');
+  const element = el('div', heading, status);
   const live = () => element.isConnected;
   const absent = 'No raw payload capture for this request.';
   queueMicrotask(() => {
@@ -186,20 +191,25 @@ export function requestCapture(api: ProxyClient, context: UIContext, id: string)
         status.textContent = absent;
         return;
       }
-      const payloadFiles = files.filter(
+      const captureFiles = files.filter(
         (name) => name !== 'manifest.json' && capture.files?.includes(name),
       );
-      if (!payloadFiles.length) {
+      if (!captureFiles.length) {
         status.textContent = capture.finished
           ? 'This capture has no stored payload data.'
           : 'No payload data yet. Reopen the request to check again.';
         return;
       }
-      status.textContent = `${capture.finished ? '' : 'Capture unfinished; data may be incomplete. '}Raw payloads may contain secrets.`;
-      const reveal = button('View raw payload', () => {
+      const headersOnly = captureFiles.every((name) => name.endsWith('.headers'));
+      if (headersOnly) heading.textContent = 'Header summary capture';
+      const notice = headersOnly
+        ? 'Header previews mask credentials and omit query strings.'
+        : 'Raw payloads may contain secrets.';
+      status.textContent = `${capture.finished ? '' : 'Capture unfinished; data may be incomplete. '}${notice}`;
+      const reveal = button(headersOnly ? 'View header summaries' : 'View raw payload', () => {
         const viewer = capturePreview(api, context);
         reveal.replaceWith(viewer.element);
-        viewer.show({ ...capture, files: payloadFiles });
+        viewer.show({ ...capture, files: captureFiles });
         viewer.element.querySelector('select')?.focus();
       });
       element.append(reveal);

@@ -24,6 +24,9 @@ func TestUsesEndpointModelCatalog(t *testing.T) {
 		{"muse", config.ProviderConfig{Type: config.ProviderTypeOpenAI, BaseURL: "https://api.meta.ai/v1"}, true},
 		{"my-server", config.ProviderConfig{Type: config.ProviderTypeOpenAICompat, BaseURL: "http://127.0.0.1:8080/v1"}, true},
 		{"my-vllm", config.ProviderConfig{Type: config.ProviderTypeVLLM, BaseURL: "http://127.0.0.1:8000/v1"}, true},
+		{"opencode-go", config.ProviderConfig{Type: config.ProviderTypeOpenCodeGo}, false},
+		{"opencode-go", config.ProviderConfig{Type: config.ProviderTypeOpenCodeGo, BaseURL: "https://direct.example.test/go"}, false},
+		{"team-go", config.ProviderConfig{Type: config.ProviderTypeOpenCodeGo, BaseURL: "https://proxy.example.test/go", ProxyBinding: "https://proxy.example.test/go"}, true},
 		{"gateway", config.ProviderConfig{Type: config.ProviderTypeAnthropic, BaseURL: "https://gateway.example.com"}, false},
 	} {
 		if got := UsesEndpointModelCatalog(tc.name, tc.cfg); got != tc.want {

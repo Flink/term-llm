@@ -345,10 +345,12 @@ func compileHeaders(r Route, secrets map[string]material) (http.Header, error) {
 	return headers, nil
 }
 
-// routeAuthority identifies the delegated upstream scope, not live key bytes.
-// Routine secret rotation and local endpoint/auth-format changes keep grants;
-// moving the base or changing an outbound rule requires an explicit regrant.
+// routeAuthority binds grants to upstream scope, not live key bytes. For SRV
+// without a trusted account, the configured DNS service is that scope.
 func routeAuthority(r Route, origin string, u *url.URL) string {
+	if srv, err := url.Parse(strings.TrimSpace(r.Upstream)); err == nil && srv.Scheme == "srv" && r.Account == "" {
+		origin, u = "srv://"+strings.ToLower(srv.Host), srv
+	}
 	type rule struct {
 		Header, Secret, Prefix string
 		Value                  *string

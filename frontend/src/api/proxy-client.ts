@@ -455,6 +455,9 @@ export type ProxyDebugFile =
   | 'manifest.json'
   | 'request.body'
   | 'response.body'
+  | 'request.headers'
+  | 'upstream-request.headers'
+  | 'upstream-response.headers'
   | 'websocket-client.frames'
   | 'websocket-server.frames';
 export interface ProxyDebugPreview {
