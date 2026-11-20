@@ -11,6 +11,48 @@ import (
 
 const maxProxyChatGPTCatalogs = 32
 
+// requestModelEffort resolves the configured default and request overrides using
+// the same delegated catalog that ListModels uses. Fetch lazily so ordinary
+// model IDs don't need a catalog round trip before the first request.
+func (p *ChatGPTProvider) requestModelEffort(ctx context.Context, model, explicitEffort string) (string, string) {
+	delegated := p.baseURL != "" && p.creds.Delegated()
+	catalog := sync.OnceValue(func() []ModelInfo {
+		models, _ := p.proxyChatGPTModelFacts(ctx, false)
+		return models // On failure, retain the existing local parser's fallback.
+	})
+	parse := func(model string) (string, string) {
+		if candidate, ok := trimKnownEffortSuffix(model); delegated && ok {
+			models := catalog()
+			for _, info := range models {
+				if info.ID == model {
+					return model, "" // Exact IDs win over suffixes.
+				}
+			}
+			for _, info := range models {
+				if info.ID == candidate && len(info.ReasoningEfforts) > 0 {
+					effort := model[len(candidate)+1:]
+					if slices.Contains(info.ReasoningEfforts, effort) {
+						return candidate, effort
+					}
+					return model, ""
+				}
+			}
+		}
+		return parseModelEffortForProvider("chatgpt", model)
+	}
+	base, effort := parse(model)
+	if explicitEffort != "" {
+		return base, explicitEffort
+	}
+	if effort == "" {
+		effort = p.effort
+		if delegated && model != p.model {
+			_, effort = parse(p.model)
+		}
+	}
+	return base, effort
+}
+
 // Account catalogs can contain private model availability. Delegated credentials
 // have a synthetic ID derived from the proxy root and scoped client token. Keep
 // those catalogs in memory only, isolated from direct OAuth and other routes.

@@ -36,6 +36,9 @@ export function joinLocalPrefix(localPrefix: string, subpath: string): string {
 }
 
 export function allowLabel(entry: string): string {
+  // A leading "=" marks an exact path; a plain entry stays a prefix match.
+  const exact = /^(\S+) =(\/\S*)$/.exec(entry);
+  if (exact) return `${exact[1]} exactly ${exact[2]}`;
   const catchAll = /^(\S+) (\/(?:[^*]*\/)?)\*$/.exec(entry);
   if (!catchAll) return entry;
   const [, method, prefix] = catchAll;

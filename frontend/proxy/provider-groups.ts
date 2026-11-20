@@ -9,6 +9,7 @@ import { el } from './dom';
 
 export const providerFamilies: [ProxyProviderFamily, string][] = [
   ['inference', 'Inference'],
+  ['classification', 'Classification'],
   ['search', 'Search'],
   ['media', 'Media'],
   ['embeddings', 'Embeddings'],

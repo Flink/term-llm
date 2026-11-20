@@ -19,10 +19,7 @@ func New(cfg *config.Config, factory backends.Factory) *greprerank.Reranker {
 	}
 	options := cfg.Tools.GrepRerank
 	provider, err := cfg.Classify.ResolveProvider(options.Provider)
-	if err != nil || !provider.Key().Configured() {
-		return nil
-	}
-	if provider.Type == config.ClassifyProviderCloudflare && !provider.AccountIDRef().Configured() {
+	if err != nil || !provider.CredentialsConfigured() {
 		return nil
 	}
 	budget := time.Duration(options.TimeoutMS) * time.Millisecond

@@ -8,6 +8,33 @@ import (
 	"strings"
 )
 
+// ClassifyConfig selects a provider for the classification capability.
+type ClassifyConfig struct {
+	DefaultProvider string                            `mapstructure:"default_provider" yaml:"default_provider,omitempty"`
+	Providers       map[string]ClassifyProviderConfig `mapstructure:"providers" yaml:"providers,omitempty"`
+	proxyBindings   map[string]classifyProxyBinding
+}
+
+// ClassifyProviderConfig configures a classification provider.
+type ClassifyProviderConfig struct {
+	Type           string `mapstructure:"type" yaml:"type,omitempty"`
+	APIKey         string `mapstructure:"api_key" yaml:"api_key,omitempty"`
+	Model          string `mapstructure:"model" yaml:"model,omitempty"`
+	BaseURL        string `mapstructure:"base_url" yaml:"base_url,omitempty"`
+	TimeoutSeconds int    `mapstructure:"timeout_seconds" yaml:"timeout_seconds,omitempty"`
+	// Images selects a typesafe-type provider's image wire format: "assets"
+	// (the default; TypeSafe's assets map plus its images opt-in header) or
+	// "inline" (an "images" array of data URLs, as Clef and compatible System
+	// One servers accept). Other provider types do not use this field.
+	Images string `mapstructure:"images" yaml:"images,omitempty"`
+	// Headers are sent with every direct request. For type openai,
+	// OpenAI-Organization/OpenAI-Project fall back to OPENAI_ORG_ID/OPENAI_PROJECT_ID.
+	// Values support ${ENV}, $(), op://, file://.
+	Headers map[string]string `mapstructure:"headers" yaml:"headers,omitempty"`
+
+	proxyBinding classifyProxyBinding
+}
+
 // Classification provider types. Built-in provider names match their type.
 const (
 	ClassifyProviderTypeSafe   = "typesafe"
@@ -111,6 +138,10 @@ func (c ClassifyConfig) ResolveProvider(name string) (ClassifyProviderConfig, er
 	}
 	if p.TimeoutSeconds == 0 {
 		p.TimeoutSeconds = defaults.timeoutSeconds
+	}
+	p.proxyBinding = c.proxyBindings[name]
+	if p.proxyBinding.profile != "" && p.Type != name {
+		return p, fmt.Errorf("proxy classification provider %q requires classify.providers.%s.type to be %q", p.proxyBinding.profile, name, name)
 	}
 	return p, nil
 }

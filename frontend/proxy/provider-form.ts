@@ -7,6 +7,7 @@ import type {
 import { accountDialog, accountStateLabel } from './accounts';
 import { actions, button, check, el, field, input, select, submit, type UIContext } from './dom';
 import { requireProviderName, slugPattern } from './provider-name';
+import { presetUpstreamHint } from './route-presets';
 
 export function providerForm(
   preset: ProxyPreset,
@@ -38,7 +39,7 @@ export function providerForm(
   const [allowLabel, allowHTTP] = check('Allow insecure HTTP upstream', preset.billing === 'local');
   if (!preset.rules?.length) {
     upstream.required = true;
-    form.append(field('Upstream base URL', upstream));
+    form.append(field('Upstream base URL', upstream, presetUpstreamHint(preset)));
     form.append(allowLabel);
   } else {
     form.append(

@@ -123,7 +123,7 @@ export interface ProxyPreset {
   auth: ProxyAuth;
   note?: string;
   billing?: ProxyBilling;
-  usage?: 'auto';
+  usage?: 'off' | 'auto';
   websocket?: boolean;
   /** A trusted account of this kind replaces the static key substitution. */
   account_kind?: ProxyAccount['kind'];
@@ -205,7 +205,8 @@ export interface ProxyParsedProviderConfig {
   stripped?: string[];
 }
 
-export type ProxyProviderFamily = 'inference' | 'search' | 'media' | 'embeddings';
+export type ProxyProviderFamily =
+  'inference' | 'classification' | 'search' | 'media' | 'embeddings';
 export type ProxyProviderStatus = 'green' | 'orange' | 'red' | 'grey';
 export type ProxyDefaultSlot = 'search' | 'fetch' | 'image' | 'audio' | 'music' | 'transcription';
 export type ProxyDefaults = Partial<Record<ProxyDefaultSlot, string>>;

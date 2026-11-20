@@ -27,16 +27,13 @@ func validatePolicy(r *Route) error {
 	}
 	seen := map[string]bool{}
 	for _, rule := range r.Allow {
-		method, prefix, ok := strings.Cut(rule, " ")
-		if strings.HasSuffix(prefix, "/*") {
-			if r.Account != "" {
-				return fmt.Errorf("catch-all allow rules are not permitted on account routes")
-			}
-			prefix = strings.TrimSuffix(prefix, "*")
+		method, p, ok := strings.Cut(rule, " ")
+		if r.Account != "" && strings.HasSuffix(p, "/*") && !strings.HasPrefix(p, "=") {
+			return fmt.Errorf("catch-all allow rules are not permitted on account routes")
 		}
 		if !ok || !httpguts.ValidHeaderFieldName(method) || method != strings.ToUpper(method) || method == "CONNECT" ||
-			strings.ContainsRune(method, '*') || strings.ContainsRune(prefix, '*') || !canonicalPolicyPath(prefix) || seen[rule] {
-			return fmt.Errorf("allow rules must be unique canonical METHOD /prefix or METHOD /prefix/* entries")
+			strings.ContainsRune(method, '*') || !validAllowPath(p) || seen[rule] {
+			return fmt.Errorf("allow rules must be unique canonical METHOD /prefix, METHOD =/path or METHOD /prefix/* entries")
 		}
 		seen[rule] = true
 	}
@@ -46,12 +43,21 @@ func validatePolicy(r *Route) error {
 	return nil
 }
 
+func validAllowPath(p string) bool {
+	if exact, ok := strings.CutPrefix(p, "="); ok {
+		p = exact
+	} else if strings.HasSuffix(p, "/*") {
+		p = strings.TrimSuffix(p, "*")
+	}
+	return !strings.ContainsRune(p, '*') && canonicalPolicyPath(p)
+}
+
 func canonicalPolicyPath(p string) bool {
 	return safePath(p) && !strings.ContainsAny(p, "%?# ") && (path.Clean(p) == p || p != "/" && path.Clean(p)+"/" == p)
 }
 
-// Policy paths are relative to the upstream base, not the local mount. Plain
-// entries require canonical paths; a catch-all permits an opaque but safe tail.
+// Policy paths are relative to the upstream base, not the local mount. Exact
+// and plain entries require canonical paths; a catch-all permits a safe opaque tail.
 func policyAllows(r Route, method, p string) bool {
 	if len(r.Allow) == 0 {
 		return true
@@ -74,10 +80,16 @@ func policyAllows(r Route, method, p string) bool {
 // Callers enforce canonical/safe path checks or Bedrock's fixed model shape.
 func allowEntryMatches(entry, method, path string) bool {
 	m, prefix, ok := strings.Cut(entry, " ")
+	if !ok || m != method {
+		return false
+	}
+	if exact, ok := strings.CutPrefix(prefix, "="); ok {
+		return path == exact
+	}
 	if strings.HasSuffix(prefix, "/*") {
 		prefix = strings.TrimSuffix(prefix, "*")
 	}
-	return ok && m == method && strings.HasPrefix(path, prefix)
+	return strings.HasPrefix(path, prefix)
 }
 
 // ResponseBodyTap is an optional response-only observer seam. It must preserve

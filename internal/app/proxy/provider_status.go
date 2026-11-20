@@ -81,6 +81,11 @@ func routeServes(r Route, family string) []string {
 		keys["providers."+name+".api_key"] = true
 	}
 	if r.Provider == proxyprofile.CanonicalParent(p.ID) {
+		if p.ClassifyProvider != "" {
+			root := "classify.providers." + p.ClassifyProvider
+			keys[root+".base_url"] = true
+			keys[root+".api_key"] = true
+		}
 		for _, b := range p.Bindings {
 			if b.Root != "" {
 				keys[b.Root] = true

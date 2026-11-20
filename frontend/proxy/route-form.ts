@@ -1,7 +1,7 @@
 import { nativeProvider } from './native';
 import { accountDialog, accountStateLabel } from './accounts';
 import { secretForm } from './security';
-import { presetLabel } from './route-presets';
+import { presetLabel, presetUpstreamHint } from './route-presets';
 import { companionRouteName } from './route-companions';
 import type { ProviderGroup } from './provider-groups';
 import { requireProviderName, slugPattern } from './provider-name';
@@ -244,7 +244,10 @@ export function routeForm(
   coreGrid.className = 'route-form-grid';
   const technical = preset ? advanced : coreGrid;
   technical.append(field('Local prefix', local));
-  if (!rulesMode) technical.append(field('Upstream base URL', upstream));
+  if (!rulesMode)
+    technical.append(
+      field('Upstream base URL', upstream, preset ? presetUpstreamHint(preset) : ''),
+    );
   technical.append(field('Billing', billing));
   if (needsAccount) {
     const accountField = field(
@@ -920,7 +923,7 @@ function allowField(input: HTMLTextAreaElement): HTMLElement {
   return field(
     'Allowed requests',
     input,
-    'One METHOD /prefix or METHOD /prefix/* per line. GET /* allows GET on any path. Leave empty for no allowlist.',
+    'One rule per line. METHOD /prefix matches a literal path prefix, without a segment boundary. METHOD =/path matches only that exact path. METHOD /prefix/* matches only paths below the prefix; GET /* allows GET on any path. Leave empty for no allowlist.',
   );
 }
 

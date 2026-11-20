@@ -44,6 +44,9 @@ var routePresets = presetsFromProfiles(proxyprofile.All())
 
 // presetNotes holds operator guidance that the routing table does not carry.
 var presetNotes = map[string]string{
+	"typesafe":          "Use this route's local prefix as the classifier base URL, without adding /v1.",
+	"openai-decisions":  "This route serves Decisions only. If needed, set OpenAI organization and project headers on the route.",
+	"cloudflare-clef":   "Enter the full Workers AI run root (ending in /ai/run) or AI Gateway Workers AI root (ending in /workers-ai), with the account and gateway IDs filled in. Do not append the model path.",
 	"openai":            "Set your client's base URL to this route's local prefix, without adding /v1 again.",
 	"anthropic":         "The client sends anthropic-version and beta headers unchanged. Put the client token in the client's API key field.",
 	"gemini":            "Use a header-based API key, not ?key=. The local route replaces the /v1beta API root.",
@@ -94,6 +97,8 @@ func presetsFromProfiles(profiles []proxyprofile.Profile) []routePreset {
 		}
 		if p.Provider != "" {
 			preset.Usage = "auto"
+		} else if p.ClassifyProvider != "" {
+			preset.Usage = "off"
 		}
 		if p.Account != "" && nativeProviderForKind(p.Account) == nil {
 			preset.Note = joinNote("Uses a trusted "+p.Account+" account held by the proxy; choose it below. No API key is stored on the route.", preset.Note)

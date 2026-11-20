@@ -96,6 +96,9 @@ func (c *Config) proxyProviderSelection(catalog *proxyDiscoveryCatalog) (proxySe
 	for _, name := range c.Proxy.Providers {
 		if provider, ok := catalog.Providers[name]; ok {
 			selected.providers[name] = true
+			if provider.Family == "classification" {
+				continue // Classifier IDs do not select same-named inference aliases.
+			}
 			for _, r := range provider.Routes {
 				if r.Profile != "" && canonicalProxyProfile(name, r.Profile) {
 					expandProxyProfile(selected.profiles, name)
@@ -109,8 +112,10 @@ func (c *Config) proxyProviderSelection(catalog *proxyDiscoveryCatalog) (proxySe
 			selected.profiles[profile] = true
 			continue
 		}
-		if _, ok := proxyprofile.ByID(name); ok {
-			expandProxyProfile(selected.profiles, name)
+		if p, ok := proxyprofile.ByID(name); ok {
+			if p.ClassifyProvider == "" {
+				expandProxyProfile(selected.profiles, name)
+			}
 			continue
 		}
 		if builtin, ok := BuiltinProvider(name); ok {

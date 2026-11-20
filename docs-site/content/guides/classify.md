@@ -37,7 +37,27 @@ term-llm classify "Production is down" -p work --type noul --question "Is this u
 
 **Environment keys stay on the default endpoint.** The fallback variables in the table are sent only to the provider type's default endpoint. A provider with its own `base_url`, or a run with `--base-url` pointing elsewhere, sends only its configured `api_key`, so redirecting a provider can never forward your primary credential to another host.
 
-Use `--model`, `--base-url`, and `--timeout 5s` to override configuration for one run. The timeout covers the whole HTTP operation, including retries. Transient HTTP errors (408, 425, 429, and 5xx including 529) are retried up to twice; server retry delays are respected, and if a delay exceeds the two-second backoff cap or the remaining timeout, the last error is returned instead of retrying early. Redirects are not followed.
+Use `--model` and `--timeout 5s` to override configuration for one run, or
+`--base-url` to override a direct provider's endpoint. The timeout covers the
+whole HTTP operation, including retries. Transient HTTP errors (408, 425, 429,
+and 5xx including 529) are retried up to twice; server retry delays are respected,
+and if a delay exceeds the two-second backoff cap or the remaining timeout, the
+last error is returned instead of retrying early. Redirects are not followed.
+
+### Through the credential proxy
+
+The [credential proxy](/guides/credential-proxy/#classification-presets) can hold
+the vendor key for all three built-in providers. Add the appropriate preset,
+approve the client, and include `typesafe`, `openai-decisions`, or
+`cloudflare-clef` in the client's `proxy.providers` list. For `classify -p`,
+still use `typesafe`, `openai`, or `cloudflare`, respectively. This opt-in also
+applies when Guardian, live voice or grep reranking selects the same built-in
+classifier. It does not change their provider selection, affect custom aliases,
+or apply automatically in proxy-all mode.
+
+The managed route replaces the local API endpoint, API key and extra headers.
+`--base-url` is not allowed on a managed classifier. If access is missing or
+revoked, term-llm does not fall back to the vendor.
 
 ### TypeSafe
 

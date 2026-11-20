@@ -50,9 +50,27 @@ func mergeProviderConfigUpdates(providers map[string]Provider, updates map[strin
 	return nil
 }
 
+func (s *Service) serveClientProviders(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Vary", proxyprofile.ClassificationDiscoveryHeader)
+	s.serveClientQuery(w, r, func(w http.ResponseWriter, caller Caller) {
+		s.clientProviders(w, caller, supportsClassificationDiscovery(r.Header))
+	})
+}
+
+func supportsClassificationDiscovery(h http.Header) bool {
+	for _, value := range h.Values(proxyprofile.ClassificationDiscoveryHeader) {
+		for token := range strings.SplitSeq(value, ",") {
+			if strings.TrimSpace(token) == proxyprofile.ClassificationDiscoveryCapability {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // clientProviders serves caller-token-authenticated discovery for granted
 // providers and their optional term-llm client_config metadata.
-func (s *Service) clientProviders(w http.ResponseWriter, caller Caller) {
+func (s *Service) clientProviders(w http.ResponseWriter, caller Caller, classification bool) {
 	c := s.snap.config
 	groups := providerRoutes(c)
 	granted := make(map[string]string)
@@ -65,13 +83,20 @@ func (s *Service) clientProviders(w http.ResponseWriter, caller Caller) {
 		if s.store.db.QueryRow("SELECT authority FROM grants WHERE caller=? AND route=?", caller.ID, ar.Name).Scan(&authority) != nil || authority != ar.authority {
 			continue
 		}
-		granted[ar.Name] = ar.Provider
 		byProvider[ar.Provider] = append(byProvider[ar.Provider], clientProviderRoute{ar.Name, ar.LocalPrefix, ar.Profile, ar.WebSocket})
 	}
 	providers := make([]clientProviderInfo, 0, len(byProvider))
 	for _, id := range slices.Sorted(maps.Keys(byProvider)) {
 		p := c.Providers[id]
-		providers = append(providers, clientProviderInfo{id, providerFamily(p, primaryProfile(id, groups[id])), byProvider[id], p.Client})
+		family := providerFamily(p, primaryProfile(id, groups[id]))
+		if !classification && family == "classification" {
+			continue
+		}
+		routes := byProvider[id]
+		providers = append(providers, clientProviderInfo{id, family, routes, p.Client})
+		for _, r := range routes {
+			granted[r.Name] = id
+		}
 	}
 	defaults := make(map[string]clientProviderDefault)
 	for slot, name := range c.Defaults {

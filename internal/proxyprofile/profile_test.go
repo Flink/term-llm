@@ -29,7 +29,7 @@ func TestProfileIDsUnique(t *testing.T) {
 }
 
 func TestProfileMetadata(t *testing.T) {
-	families := []string{"inference", "search", "media", "embeddings"}
+	families := []string{"inference", "search", "media", "embeddings", "classification"}
 	for _, p := range All() {
 		t.Run(p.ID, func(t *testing.T) {
 			if !slices.Contains(families, p.Family) {
@@ -47,6 +47,25 @@ func TestProfileMetadata(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestClassificationProfileSelectors(t *testing.T) {
+	want := map[string]string{"typesafe": "typesafe", "openai-decisions": "openai", "cloudflare-clef": "cloudflare"}
+	for _, p := range All() {
+		if p.Family != "classification" && p.ClassifyProvider == "" {
+			continue
+		}
+		if want[p.ID] == "" || p.ClassifyProvider != want[p.ID] || p.Family != "classification" || p.Parent != "" || p.WebSocket || len(p.Bindings) != 0 || InferenceCapable(p) {
+			t.Errorf("unexpected classification profile: %+v", p)
+		}
+		if p.ID == "typesafe" && p.Label != "TypeSafe (Jev)" || p.ID == "cloudflare-clef" && p.Upstream != "" {
+			t.Errorf("unexpected preset defaults: %+v", p)
+		}
+		delete(want, p.ID)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing classification profiles %v", want)
 	}
 }
 

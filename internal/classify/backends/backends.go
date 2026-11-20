@@ -50,7 +50,28 @@ type Factory func(Connection) (classify.Backend, error)
 func Resolve(provider config.ClassifyProviderConfig, overrides Overrides) (Connection, error) {
 	conn := Connection{Type: provider.Type, Timeout: overrides.Timeout, Images: provider.Images}
 	var err error
-	conn.BaseURL = strings.TrimSpace(overrides.BaseURL)
+	if conn.Timeout == 0 && provider.TimeoutSeconds != 0 {
+		if conn.Timeout, err = ProviderTimeout(provider); err != nil {
+			return conn, err
+		}
+	}
+	endpoint, token, managed, err := provider.ProxyConnection()
+	if err != nil {
+		return conn, err
+	}
+	if managed {
+		if strings.TrimSpace(overrides.BaseURL) != "" {
+			return conn, errors.New("cannot override the base URL of a proxy-managed classification provider")
+		}
+		conn.BaseURL, conn.APIKey = endpoint, token
+		return conn, nil
+	}
+	return resolveDirect(provider, overrides.BaseURL, conn)
+}
+
+func resolveDirect(provider config.ClassifyProviderConfig, baseOverride string, conn Connection) (Connection, error) {
+	var err error
+	conn.BaseURL = strings.TrimSpace(baseOverride)
 	if conn.BaseURL == "" {
 		if conn.BaseURL, err = provider.BaseURLRef().Resolve(); err != nil {
 			return conn, fmt.Errorf("resolve classify provider base URL: %w", err)
@@ -71,11 +92,6 @@ func Resolve(provider config.ClassifyProviderConfig, overrides Overrides) (Conne
 	}
 	if err != nil {
 		return conn, fmt.Errorf("resolve classify provider %w", err)
-	}
-	if conn.Timeout == 0 && provider.TimeoutSeconds != 0 {
-		if conn.Timeout, err = ProviderTimeout(provider); err != nil {
-			return conn, err
-		}
 	}
 	return conn, nil
 }

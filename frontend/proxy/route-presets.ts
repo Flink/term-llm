@@ -8,6 +8,12 @@ export function presetLabel(preset: ProxyPreset): string {
   return preset.id === 'claude-bin' ? 'Claude Code' : preset.label;
 }
 
+/** A blank profile has no default endpoint, so the operator must supply the root. */
+export function presetUpstreamHint(preset: ProxyPreset): string {
+  if (preset.family !== 'classification' || preset.upstream) return '';
+  return 'Enter the full Workers AI run root (ending in /ai/run) or AI Gateway Workers AI root (ending in /workers-ai), with the account and gateway IDs filled in. Do not append the model path.';
+}
+
 export function matchRoutePreset(route: ProxyRoute, state: ProxyState): ProxyPreset | undefined {
   return state.presets?.find((preset) => preset.id === route.profile);
 }
@@ -37,6 +43,9 @@ const hints: Record<string, string> = {
   mistral: 'Transcription',
   jina: 'Embeddings',
   voyage: 'Embeddings',
+  typesafe: 'Jev classification',
+  'openai-decisions': 'Separate from OpenAI chat',
+  'cloudflare-clef': 'Workers AI or Gateway root',
 };
 
 function presetHint(preset: ProxyPreset): string {
@@ -52,6 +61,9 @@ const marks: Record<string, string> = {
   gemini: 'GE',
   'openai-compatible': '{}',
   elevenlabs: '11',
+  typesafe: 'TS',
+  'openai-decisions': 'OD',
+  'cloudflare-clef': 'CF',
 };
 
 function initials(label: string): string {

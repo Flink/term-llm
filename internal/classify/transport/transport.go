@@ -19,6 +19,7 @@ import (
 
 	"github.com/term-llm/term-llm/internal/classify"
 	"github.com/term-llm/term-llm/internal/providerhttp"
+	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 const (
@@ -186,7 +187,7 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body []byte, s
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.http.Do(req)
+	resp, err := proxyclient.Do(c.http, req)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, nil, err

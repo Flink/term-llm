@@ -998,30 +998,6 @@ func (c *Config) ValidateLive() error {
 	}
 }
 
-// ClassifyConfig selects a provider for the classification capability.
-type ClassifyConfig struct {
-	DefaultProvider string                            `mapstructure:"default_provider" yaml:"default_provider,omitempty"`
-	Providers       map[string]ClassifyProviderConfig `mapstructure:"providers" yaml:"providers,omitempty"`
-}
-
-// ClassifyProviderConfig configures a classification provider.
-type ClassifyProviderConfig struct {
-	Type           string `mapstructure:"type" yaml:"type,omitempty"`
-	APIKey         string `mapstructure:"api_key" yaml:"api_key,omitempty"`
-	Model          string `mapstructure:"model" yaml:"model,omitempty"`
-	BaseURL        string `mapstructure:"base_url" yaml:"base_url,omitempty"`
-	TimeoutSeconds int    `mapstructure:"timeout_seconds" yaml:"timeout_seconds,omitempty"`
-	// Images selects a typesafe-type provider's image wire format: "assets"
-	// (the default; TypeSafe's assets map plus its images opt-in header) or
-	// "inline" (an "images" array of data URLs, as Clef and compatible System
-	// One servers accept). Other provider types do not use this field.
-	Images string `mapstructure:"images" yaml:"images,omitempty"`
-	// Headers are sent with every request. For type openai,
-	// OpenAI-Organization/OpenAI-Project fall back to OPENAI_ORG_ID/OPENAI_PROJECT_ID.
-	// Values support ${ENV}, $(), op://, file://.
-	Headers map[string]string `mapstructure:"headers" yaml:"headers,omitempty"`
-}
-
 // Load reads the config file (if any), applies schema defaults, validates the
 // result, and resolves the default provider's credentials.
 func Load() (*Config, error) {

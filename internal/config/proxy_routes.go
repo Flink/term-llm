@@ -50,8 +50,12 @@ func (c *Config) bindDiscoveredProxy(root, token string, catalog *proxyDiscovery
 	if err != nil {
 		return nil, err
 	}
+	classification, err := c.Classify.bindProxy(root, token, c.Proxy.Providers, catalog)
+	if err != nil {
+		return nil, err
+	}
 	c.resolveProxySlots(file, catalog.Defaults, served)
-	return append(ancillary, bindings...), validateProviderModels(c)
+	return append(append(ancillary, bindings...), classification...), validateProviderModels(c)
 }
 
 func selectedProxyRoutes(catalog *proxyDiscoveryCatalog, selected proxySelection, direct map[string]bool) (inference, features map[string]discoveredProxyRoute, err error) {

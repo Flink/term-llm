@@ -40,10 +40,11 @@ A provider is a stored entry with a unique name, a display label, and one or
 more routes. Use the exact name, not the label or family, in `proxy.providers`.
 Presets group routes that share a key or account: for example, Exa REST and Exa
 MCP are two routes of provider `exa`. Each provider belongs to one family:
-**Inference**, **Search**, **Media** or **Embeddings**. The family groups
-providers; it does not limit which features their routes serve. Search, media
-and embeddings presets use their canonical provider names. Inference can have
-separately named providers such as `chatgpt-work`.
+**Inference**, **Search**, **Media**, **Embeddings** or **Classification**. The
+family groups providers; it does not limit which features their routes serve.
+Search, media, embeddings and classification presets use their canonical
+provider names. Inference can have separately named providers such as
+`chatgpt-work`.
 
 The server computes one status dot across a provider's routes, including subpath
 rules. If several conditions apply, the first matching row wins:
@@ -431,6 +432,54 @@ reapprove before switching those clients. Explicitly manually registered legacy
 sibling roots remain compatible when bound to the same client principal; missing
 protocol roots fail closed rather than contacting a public vendor endpoint.
 
+### Classification presets
+
+Under **Providers → Add provider → Classification**, select **TypeSafe (Jev)**,
+**OpenAI Decisions**, or **Cloudflare Workers AI Clef**. Store the vendor key on
+that provider and approve it for the clients that need it. OpenAI Decisions is
+approved independently of OpenAI chat and ChatGPT plans, even if you choose to
+reuse the OpenAI API key. If your OpenAI key requires organization or project
+headers, configure them on the proxy route, not the client.
+
+| Proxy provider ID | `term-llm classify -p` | Default scoped requests |
+| --- | --- | --- |
+| `typesafe` | `typesafe` | `POST /v1/systemone`, `GET /v1/models` |
+| `openai-decisions` | `openai` | `POST /decisions` (upstream base includes `/v1`) |
+| `cloudflare-clef` | `cloudflare` | `POST /@cf/cloudflare/clef`, `POST /@cf/cloudflare/clef-flash` |
+
+For Clef, enter the full upstream Workers AI run root
+(`https://api.cloudflare.com/client/v4/accounts/<account-id>/ai/run`), or an AI
+Gateway Workers AI root ending in `/workers-ai`. Fill in the IDs on the proxy;
+leave off the model path. The bearer token stored on the proxy must be accepted
+by the chosen endpoint.
+
+On the client, explicitly list the proxy provider IDs you want, along with any
+other integrations to keep proxied. Omitting `providers` (proxy-all mode) does
+**not** change classifier traffic or defaults.
+
+```yaml
+proxy:
+  url: https://proxy.example.test
+  token: file:///run/secrets/proxy-client-token
+  providers: [typesafe, openai-decisions, cloudflare-clef]
+```
+
+These IDs bind the built-in classify selectors in the table, not chat or custom
+classification aliases. `classify.default_provider` and any local model, timeout,
+or image-format settings still apply. Term-llm uses the approved route and scoped
+token instead of local classifier endpoints, keys, or extra headers. A missing
+or revoked grant does not fall back to the vendor; `--base-url` cannot override
+a managed route.
+
+Smoke-test TypeSafe with `term-llm classify models -p typesafe` and a classification
+request using synthetic input. OpenAI Decisions and Clef list models locally,
+so test them with an actual request, not `classify models`.
+
+For a manual binding or a custom classification alias, set its `base_url` to the
+local route URL (do not append `/v1` or the model path), and its `api_key` to a
+reference to the scoped client token. Existing manual routes and grants are not
+rewritten by adding a preset.
+
 ### Search and fetch presets
 
 Add one provider and approve its current routes for the client. Exa and Jina each
@@ -577,6 +626,11 @@ The proxy only advertises routes whose grant still matches their authority.
 Discovery is cached for the life of the client process; restart after changing
 routes, grants, defaults or the token to pick up the new configuration.
 Revocation itself takes effect on the proxy without a client restart.
+
+Discovery clients that send `X-Term-LLM-Proxy-Capabilities: classification`
+can also receive the `classification` family. Without that header, v2 omits
+classification providers so older clients can still discover their other routes.
+This does not change route grants or prevent using a classification route manually.
 
 Discovery v1 (`/_proxy/client/v1/providers`) returns `410 Gone`. If v2 returns a
 status other than `200 OK`, the client checks v1: a v1 `200 OK` identifies an
@@ -726,7 +780,9 @@ There is no interpolation, command execution or body rewriting.
 Without `allow`, routes can grant all methods and relative paths under their
 upstream base, potentially including management APIs. Use narrow credentials.
 Plain entries such as `POST /responses` match by literal path prefix, not by
-segment or exact path. Account routes always enforce integration restrictions.
+segment or exact path. Use `POST =/responses` to match only the exact path
+relative to the upstream base. Account routes always enforce integration
+restrictions.
 `redirects` is `passthrough` or `refuse`; WebSockets/usage default off. Billing defaults
 unspecified; choices are `pay_as_you_go`, `plan`, `local`, `unspecified`.
 

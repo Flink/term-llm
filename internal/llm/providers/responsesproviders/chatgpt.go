@@ -100,10 +100,16 @@ func NewChatGPTProviderWithCredsAndOptions(creds *credentials.ChatGPTCredentials
 	if model == "" {
 		model = chatGPTDefaultModel
 	}
+	baseURL := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
 	model, tier := chatGPTModelServiceTier(model)
-	actualModel, effort := parseModelEffortForProvider("chatgpt", model)
+	actualModel, effort := model, ""
+	// Keep the raw selection for delegation; the route's catalog may list
+	// this exact ID or advertise variants missing from the local parser.
+	if baseURL == "" || !creds.Delegated() {
+		actualModel, effort = parseModelEffortForProvider("chatgpt", model)
+	}
 	return &ChatGPTProvider{
-		baseURL:          strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/"),
+		baseURL:          baseURL,
 		creds:            creds,
 		model:            actualModel,
 		effort:           effort,
@@ -271,14 +277,8 @@ func (p *ChatGPTProvider) Stream(ctx context.Context, req Request) (Stream, erro
 
 	// Effort precedence: req.ReasoningEffort wins over model suffix, which wins over provider-level effort.
 	reqModel, tier := chatGPTModelServiceTier(chooseModel(req.Model, p.model))
-	model, reqEffort := parseModelEffortForProvider("chatgpt", reqModel)
-	effort := p.effort
-	if reqEffort != "" {
-		effort = reqEffort
-	}
-	if v := strings.TrimSpace(req.ReasoningEffort); v != "" {
-		effort = v
-	}
+	explicitEffort := strings.TrimSpace(req.ReasoningEffort)
+	model, effort := p.requestModelEffort(ctx, reqModel, explicitEffort)
 
 	responsesOptions := mergeResponsesOptions(p.responsesOptions, req.Responses, req.Ephemeral)
 	if _, err := validateResponsesOptions("chatgpt", model, &responsesOptions, req.Tools); err != nil {

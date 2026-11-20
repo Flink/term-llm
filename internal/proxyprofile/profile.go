@@ -6,6 +6,12 @@ import (
 	"github.com/term-llm/term-llm/internal/providerspec"
 )
 
+// ClassificationDiscoveryHeader negotiates classification support on v2 discovery.
+const ClassificationDiscoveryHeader = "X-Term-LLM-Proxy-Capabilities"
+
+// ClassificationDiscoveryCapability opts in to the classification provider family.
+const ClassificationDiscoveryCapability = "classification"
+
 // Binding names a configuration API root and its corresponding credential.
 // An empty Key means the integration uses a delegated account or no vendor key.
 type Binding struct{ Root, Key string }
@@ -13,10 +19,11 @@ type Binding struct{ Root, Key string }
 // Profile is public routing metadata, never a credential or a promise of live vendor certification.
 type Profile struct {
 	ID, Label, Upstream, Header, Prefix, Account, Billing string
-	Family                                                string            // inference, search, media, or embeddings
+	Family                                                string            // inference, search, media, embeddings, or classification
 	Parent                                                string            // Primary profile ID for a companion.
 	Slots                                                 map[string]string // Feature slot to client selector.
-	Allow                                                 []string          // Method and path entries for search and fetch routes.
+	Allow                                                 []string          // Method and path entries for scoped routes.
+	ClassifyProvider                                      string            // Built-in classifier selector; bound by the typed client binder.
 	Provider                                              providerspec.Type
 	WebSocket                                             bool
 	Bindings                                              []Binding
@@ -130,6 +137,21 @@ func All() []Profile {
 			ID: "voyage", Family: "embeddings", Label: "Voyage embeddings", Upstream: "https://api.voyageai.com/v1", Header: "Authorization", Prefix: "Bearer ", Billing: "pay_as_you_go",
 			Slots:    map[string]string{"embed": "voyage"},
 			Bindings: []Binding{{"embed.voyage.base_url", "embed.voyage.api_key"}},
+		},
+		{
+			ID: "typesafe", Family: "classification", Label: "TypeSafe (Jev)", ClassifyProvider: "typesafe",
+			Upstream: "https://api.typesafe.ai", Header: "Authorization", Prefix: "Bearer ", Billing: "unspecified",
+			Allow: []string{"POST =/v1/systemone", "GET =/v1/models"},
+		},
+		{
+			ID: "openai-decisions", Family: "classification", Label: "OpenAI Decisions", ClassifyProvider: "openai",
+			Upstream: "https://api.openai.com/v1", Header: "Authorization", Prefix: "Bearer ", Billing: "unspecified",
+			Allow: []string{"POST =/decisions"},
+		},
+		{
+			ID: "cloudflare-clef", Family: "classification", Label: "Cloudflare Workers AI Clef", ClassifyProvider: "cloudflare",
+			Header: "Authorization", Prefix: "Bearer ", Billing: "unspecified",
+			Allow: []string{"POST =/@cf/cloudflare/clef", "POST =/@cf/cloudflare/clef-flash"},
 		},
 		{
 			ID: "mistral", Family: "inference", Label: "Mistral", Upstream: "https://api.mistral.ai/v1", Header: "Authorization", Prefix: "Bearer ", Billing: "pay_as_you_go",

@@ -73,6 +73,9 @@ func compileRoute(r *Route, secrets map[string]material, discovery *upstreamDisc
 }
 
 func compileDestination(r *Route, secrets map[string]material, discovery *upstreamDiscovery) (activeRoute, error) {
+	if r.Profile == "cloudflare-clef" && r.Upstream == "" {
+		return activeRoute{}, cloudflareRootError()
+	}
 	upstream, err := discovery.resolve(r.Upstream)
 	if err != nil {
 		return activeRoute{}, fmt.Errorf("resolve upstream: %w", err)
@@ -82,6 +85,9 @@ func compileDestination(r *Route, secrets map[string]material, discovery *upstre
 		return activeRoute{}, err
 	}
 	u, _ := url.Parse(upstream)
+	if r.Profile == "cloudflare-clef" && !isCloudflareClefRoot(u) {
+		return activeRoute{}, cloudflareRootError()
+	}
 	if u.Scheme == "http" && !r.AllowHTTP {
 		return activeRoute{}, fmt.Errorf("HTTP upstream requires allow_insecure_http")
 	}
@@ -106,6 +112,25 @@ func compileDestination(r *Route, secrets map[string]material, discovery *upstre
 		defaultRouteUsage(&active)
 	}
 	return activeRoute{Route: active, target: u, origin: origin, authority: routeAuthority(active, origin, u), headers: headers}, nil
+}
+
+func cloudflareRootError() error {
+	return fmt.Errorf("Cloudflare Clef requires a full Workers AI run or AI Gateway Workers AI upstream root with IDs filled in")
+}
+
+func isCloudflareClefRoot(u *url.URL) bool {
+	if u.ForceQuery || strings.ContainsAny(u.Path, "{}") {
+		return false
+	}
+	parts := strings.Split(strings.TrimSuffix(u.EscapedPath(), "/"), "/")
+	switch strings.ToLower(strings.TrimSuffix(u.Hostname(), ".")) {
+	case "api.cloudflare.com":
+		return len(parts) == 7 && strings.Join(parts[1:4], "/") == "client/v4/accounts" && parts[4] != "" && parts[5] == "ai" && parts[6] == "run"
+	case "gateway.ai.cloudflare.com":
+		return len(parts) == 5 && parts[1] == "v1" && parts[2] != "" && parts[3] != "" && parts[4] == "workers-ai"
+	default:
+		return true // A compatible operator-supplied gateway can mount at any path.
+	}
 }
 
 // Rule order and local credential formatting do not change the delegated scope.

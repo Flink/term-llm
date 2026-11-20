@@ -103,6 +103,9 @@ func validateProvider(id string, p Provider, routes []Route) error {
 	if primary.ID != "" && p.Family != "" {
 		return fmt.Errorf("family must be omitted when a route has a profile")
 	}
+	if family == "classification" {
+		return validateClassificationProvider(id, p, primary, routes)
+	}
 	inference := 0
 	for _, r := range routes {
 		profile, profiled := proxyprofile.ByID(r.Profile)
@@ -137,6 +140,18 @@ func validateProvider(id string, p Provider, routes []Route) error {
 		}
 	default:
 		return fmt.Errorf("unknown family")
+	}
+	return nil
+}
+
+// Classification discovery binds one canonical route per built-in selector.
+// A profile-less provider is not a classifier, even if its ID now names a preset.
+func validateClassificationProvider(id string, p Provider, primary proxyprofile.Profile, routes []Route) error {
+	if len(routes) != 1 || primary.ID != id || primary.ClassifyProvider == "" || p.Client != nil {
+		return fmt.Errorf("classification providers must use the canonical name, own one matching profiled route, and have no client hints")
+	}
+	if routes[0].WebSocket || len(routes[0].Rules) != 0 {
+		return fmt.Errorf("classification routes cannot use WebSocket or subpath rules")
 	}
 	return nil
 }

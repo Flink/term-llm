@@ -232,7 +232,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "v1/providers":
 			http.Error(w, "proxy discovery v1 was removed; upgrade term-llm", http.StatusGone)
 		case "v2/providers":
-			s.serveClientQuery(w, r, s.clientProviders)
+			s.serveClientProviders(w, r)
 		default:
 			// An unavailable binding is a base URL, so callers can append paths.
 			tail, unavailable := strings.CutPrefix(path, "unavailable/")

@@ -133,6 +133,9 @@ func fetchProxyProvidersHTTP(root, token string) (*proxyDiscoveryCatalog, error)
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Accept", "application/json")
+		if version == "v2" {
+			req.Header.Set(proxyprofile.ClassificationDiscoveryHeader, proxyprofile.ClassificationDiscoveryCapability)
+		}
 		return client.Do(req)
 	}
 	resp, err := get("v2")
@@ -194,7 +197,11 @@ func validateDiscoveryPayload(payload proxyDiscoveryPayload) (*proxyDiscoveryCat
 				return nil, fmt.Errorf("proxy route %q returned unsafe or duplicate local_prefix %q", r.Name, r.LocalPrefix)
 			}
 			routeOwners[r.Name], prefixes[r.LocalPrefix], profiles[r.Name] = p.ID, true, r.Profile
-			if _, ok := proxyprofile.ByID(r.Profile); ok || r.Profile == "" {
+			profile, found := proxyprofile.ByID(r.Profile)
+			if found || r.Profile == "" {
+				if err := validateDiscoveredClassificationRoute(p, r, profile); err != nil {
+					return nil, err
+				}
 				known.Routes = append(known.Routes, r)
 			}
 		}
@@ -224,9 +231,17 @@ func validateDiscoveryPayload(payload proxyDiscoveryPayload) (*proxyDiscoveryCat
 	return catalog, nil
 }
 
+func validateDiscoveredClassificationRoute(p proxyDiscoveredProvider, r proxyDiscoveredRoute, profile proxyprofile.Profile) error {
+	if (p.Family == "classification") != (profile.ClassifyProvider != "") ||
+		profile.ClassifyProvider != "" && (p.ID != profile.ID || r.WebSocket) {
+		return fmt.Errorf("proxy provider %q returned an invalid classification route %q", p.ID, r.Name)
+	}
+	return nil
+}
+
 func validateDiscoveredProvider(p proxyDiscoveredProvider) error {
 	switch p.Family {
-	case "inference", "search", "media", "embeddings":
+	case "inference", "search", "media", "embeddings", "classification":
 	default:
 		return fmt.Errorf("proxy provider %q returned unknown family %q", p.ID, p.Family)
 	}
@@ -271,7 +286,7 @@ func validProxyLocalPrefix(prefix string) bool {
 
 func isReservedProxyRouteID(id string) bool {
 	p, ok := proxyprofile.ByID(id)
-	return ok && !proxyprofile.InferenceCapable(p)
+	return ok && p.ClassifyProvider == "" && !proxyprofile.InferenceCapable(p)
 }
 
 func mergeDiscoveredProviderConfig(name string, pc ProviderConfig, discovered proxyprofile.ClientProviderConfig, file *fileSettings) (ProviderConfig, error) {

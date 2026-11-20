@@ -48,7 +48,7 @@ func TestRoutePresetsProjectProfiles(t *testing.T) {
 		default:
 			t.Errorf("%s has invalid billing %q", p.ID, preset.Billing)
 		}
-		if preset.Usage != "" && preset.Usage != "auto" {
+		if preset.Usage != "" && preset.Usage != "auto" && preset.Usage != "off" {
 			t.Errorf("%s has invalid usage %q", p.ID, preset.Usage)
 		}
 		if p.Provider != "" && preset.Usage != "auto" {
@@ -220,7 +220,7 @@ func TestRoutePresetGroupsAndCompanions(t *testing.T) {
 	for _, p := range routePresets {
 		byID[p.ID] = p
 		switch p.Family {
-		case "inference", "search", "media", "embeddings":
+		case "inference", "search", "media", "embeddings", "classification":
 		default:
 			t.Errorf("%s has invalid group %q", p.ID, p.Family)
 		}
@@ -229,6 +229,7 @@ func TestRoutePresetGroupsAndCompanions(t *testing.T) {
 		"claude-bin": "inference", "chatgpt": "inference", "opencode-go": "inference", "anthropic": "inference", "bedrock": "inference",
 		"ollama": "inference", "vllm": "inference", "openai-compatible": "inference", "elevenlabs": "media",
 		"jina": "embeddings", "jina-reader": "embeddings", "voyage": "embeddings", "mistral": "inference",
+		"typesafe": "classification", "openai-decisions": "classification", "cloudflare-clef": "classification",
 		"chatgpt-openai": "inference", "gemini-live": "inference", "grok-bin": "inference", "exa": "search", "exa-mcp": "search", "brave": "search",
 	}
 	for id, group := range want {

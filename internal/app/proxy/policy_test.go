@@ -79,6 +79,29 @@ func TestPolicyValidationAndMatching(t *testing.T) {
 	}
 }
 
+func TestPolicyExactValidationAndMatching(t *testing.T) {
+	for _, rule := range []string{"GET =", "GET =models", "GET = /models", "GET =/models/*", "GET =/models%2f", "GET =/models/../alternate", "GET =/models?x"} {
+		if err := validatePolicy(&Route{Allow: []string{rule}}); err == nil {
+			t.Errorf("accepted invalid exact rule %q", rule)
+		}
+	}
+	r := Route{Allow: []string{"GET =/models", "POST /legacy"}}
+	if err := validatePolicy(&r); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		method, path string
+		want         bool
+	}{
+		{"GET", "/models", true}, {"GET", "/models/", false}, {"GET", "/models-old", false}, {"GET", "/%6dodels", false},
+		{"HEAD", "/models", false}, {"POST", "/models", false}, {"POST", "/legacy-child", true},
+	} {
+		if got := policyAllows(r, tc.method, tc.path); got != tc.want {
+			t.Errorf("%s %s = %v, want %v", tc.method, tc.path, got, tc.want)
+		}
+	}
+}
+
 func TestPolicyCatchAllValidation(t *testing.T) {
 	for _, entry := range []string{
 		"* /*", "G*T /*", "get /*", "GET /v1*", "GET /v1/*/x", "GET /v1/*x", "GET /v1/*/*",
