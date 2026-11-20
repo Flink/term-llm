@@ -842,15 +842,16 @@ secrets:
 
 Discovery runs on startup, when saving routes, and on operator file **Reload**,
 not on each request or when rotating a secret. If discovery fails, the new
-configuration is rejected and any active routes stay unchanged. For key-backed
-and keyless routes, approval is tied to the configured SRV name and base path,
-not to the selected host or port. Use SRV only where you trust every target
-published for that record with the route's credential. Trusted-account routes
-still require approval for a changed resolved origin and still enforce the
-account's permitted upstreams. DNS changes alone do not move active traffic.
+configuration is rejected and any active routes stay unchanged. The upstream
+portion of a client approval uses the exact configured `srv://` string, not
+the selected host or port. This also applies to trusted-account routes, which
+still enforce the account's permitted upstreams. Use SRV only where you trust
+every target published for that record with the route's credential. DNS changes
+alone do not move active traffic.
 
-When upgrading from a version that keyed approvals to resolved hosts, reapprove
-existing key-backed or keyless SRV routes once; client tokens do not need to change.
+Existing approvals tied to the SRV record carry forward automatically. Only
+older approvals tied to a resolved host and port need to be reapproved in
+**Clients**. Client tokens do not need to change; static HTTP(S) grants are unaffected.
 
 ## Explicit setup and production administration
 

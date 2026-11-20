@@ -1,8 +1,7 @@
 package proxy
 
 import (
-	"strings"
-
+	"github.com/term-llm/term-llm/internal/app/proxy/grantscope"
 	"github.com/term-llm/term-llm/internal/config"
 )
 
@@ -18,7 +17,7 @@ type upstreamDiscovery struct {
 }
 
 func (d *upstreamDiscovery) resolve(raw string) (string, error) {
-	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(raw)), "srv:") {
+	if !grantscope.IsSRV(raw) {
 		return raw, nil
 	}
 	if target, ok := d.resolved[raw]; ok {

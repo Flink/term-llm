@@ -110,6 +110,14 @@ func (s *store) materials() (map[string]material, error) {
 	return out, rows.Err()
 }
 func reconcileGrants(tx *sql.Tx, snap *snapshot) (int64, error) {
+	// Rewrite only known DNS-independent approvals before removing stale grants.
+	for _, r := range snap.routes {
+		if r.legacySRVAuthority != "" {
+			if _, err := tx.Exec("UPDATE grants SET authority=? WHERE route=? AND authority=?", r.authority, r.Name, r.legacySRVAuthority); err != nil {
+				return 0, fmt.Errorf("upgrade SRV grant: %w", err)
+			}
+		}
+	}
 	rows, err := tx.Query("SELECT DISTINCT route,authority FROM grants")
 	if err != nil {
 		return 0, err

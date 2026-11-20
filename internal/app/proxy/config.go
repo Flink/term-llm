@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -16,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/term-llm/term-llm/internal/app/proxy/grantscope"
 	"github.com/term-llm/term-llm/internal/fileprivacy"
 	"github.com/term-llm/term-llm/internal/proxyprofile"
 	"golang.org/x/net/http/httpguts"
@@ -85,13 +85,14 @@ type Config struct {
 type material struct{ Value string }
 type activeRoute struct {
 	Route
-	target            *url.URL
-	origin            string
-	authority         string
-	headers           http.Header
-	rules             []activeRoute // Private destinations; every copy shares the parent authority.
-	pathPrefix        string
-	credentialHeaders []string
+	target             *url.URL
+	origin             string
+	authority          string
+	legacySRVAuthority string
+	headers            http.Header
+	rules              []activeRoute // Private destinations; every copy shares the parent authority.
+	pathPrefix         string
+	credentialHeaders  []string
 }
 type snapshot struct {
 	config    Config
@@ -345,43 +346,14 @@ func compileHeaders(r Route, secrets map[string]material) (http.Header, error) {
 	return headers, nil
 }
 
-// routeAuthority binds grants to upstream scope, not live key bytes. For SRV
-// without a trusted account, the configured DNS service is that scope.
 func routeAuthority(r Route, origin string, u *url.URL) string {
-	if srv, err := url.Parse(strings.TrimSpace(r.Upstream)); err == nil && srv.Scheme == "srv" && r.Account == "" {
-		origin, u = "srv://"+strings.ToLower(srv.Host), srv
-	}
-	type rule struct {
-		Header, Secret, Prefix string
-		Value                  *string
-	}
-	rules := make([]rule, 0, len(r.SetHeaders))
-	for key, v := range r.SetHeaders {
-		rules = append(rules, rule{strings.ToLower(key), v.Secret, v.Prefix, v.Value})
-	}
-	sort.Slice(rules, func(i, j int) bool { return rules[i].Header < rules[j].Header })
-	base := strings.TrimSuffix(u.EscapedPath(), "/") + "/"
-	// Escape hex digits are case-insensitive, but encoded separators remain encoded.
-	encoded := []byte(base)
-	for i := 0; i+2 < len(encoded); i++ {
-		if encoded[i] == '%' {
-			encoded[i+1] = upperHex(encoded[i+1])
-			encoded[i+2] = upperHex(encoded[i+2])
-			i += 2
-		}
-	}
-	b, _ := json.Marshal(struct {
-		Origin, Base string
-		Rules        []rule
-		Account      string   `json:",omitempty"`
-		WebSocket    bool     `json:",omitempty"`
-		Allow        []string `json:",omitempty"`
-	}{origin, string(encoded), rules, r.Account, r.WebSocket, r.Allow})
-	return hashToken(string(b))
+	return routeScope(r).Destination(r.Upstream, origin, u)
 }
-func upperHex(b byte) byte {
-	if b >= 'a' && b <= 'f' {
-		return b - 'a' + 'A'
+
+func routeScope(r Route) grantscope.Scope {
+	scope := grantscope.Scope{Account: r.Account, WebSocket: r.WebSocket, Allow: r.Allow, Rules: make([]grantscope.HeaderRule, 0, len(r.SetHeaders))}
+	for key, v := range r.SetHeaders {
+		scope.Rules = append(scope.Rules, grantscope.HeaderRule{Header: strings.ToLower(key), Secret: v.Secret, Prefix: v.Prefix, Value: v.Value})
 	}
-	return b
+	return scope
 }

@@ -105,14 +105,22 @@ func TestSRVUpstreamRecompileKeepsPinnedOriginAndRediscoveryKeepsAuthority(t *te
 
 func TestSRVUpstreamReloadReconcilesGrantsAndKeepsLastGoodSnapshot(t *testing.T) {
 	s := testService(t)
-	s.opts.ConfigFile = filepath.Join(t.TempDir(), "proxy.yaml")
-	if err := os.WriteFile(s.opts.ConfigFile, []byte(`providers: {svc: {label: Test}}
+	configDir := t.TempDir()
+	s.opts.ConfigFile = filepath.Join(configDir, "proxy.yaml")
+	if err := os.WriteFile(filepath.Join(configDir, "cdck-key"), []byte("fixture-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.opts.ConfigFile, []byte(fmt.Sprintf(`providers: {svc: {label: Test}}
+secrets:
+  cdck: {file: %q}
 routes:
   - name: svc
     provider: svc
     local_prefix: /svc/
     upstream: srv://_inference._tcp.example.test/v1
-`), 0o600); err != nil {
+    set_headers:
+      Authorization: {secret: cdck, prefix: "Bearer "}
+`, filepath.Join(configDir, "cdck-key"))), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	resolved := "https://first.example.test:8443/v1"
@@ -170,10 +178,11 @@ func TestSRVServiceAuthorityStillBindsScope(t *testing.T) {
 			{name: "pool members", origin: "https://other.test:9443", wantSame: true},
 			{name: "new service", upstream: "srv://_other._tcp.example.test/v1"},
 			{name: "new base", upstream: "srv://_frontier._tcp.example.test/v2"},
+			{name: "literal upstream change", upstream: "srv://_frontier._tcp.example.test/v1/"},
 			{name: "static destination", upstream: "https://first.test:8443/v1"},
 			{name: "access policy", allow: "POST =/chat/completions"},
 			{name: "credential rule", headerPrefix: "Different "},
-			{name: "trusted account", account: "plan", origin: "https://other.test:9443"},
+			{name: "trusted account pool members", account: "plan", origin: "https://other.test:9443", wantSame: true},
 		} {
 			t.Run(fmt.Sprintf("%t/%s", composite, tc.name), func(t *testing.T) {
 				resolvedOrigin := "https://first.test:8443"

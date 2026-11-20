@@ -1,13 +1,14 @@
 package proxy
 
 import (
-	"encoding/json"
+	"cmp"
 	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
 
+	"github.com/term-llm/term-llm/internal/app/proxy/grantscope"
 	"golang.org/x/net/http/httpguts"
 )
 
@@ -60,7 +61,7 @@ func compileRoute(r *Route, secrets map[string]material, discovery *upstreamDisc
 		}
 	}
 	parent.Route = *r
-	parent.authority = rulesAuthority(parent.rules, r.Redirects)
+	parent.authority, parent.legacySRVAuthority = rulesAuthorities(parent.rules, r.Redirects)
 	for key := range credentials {
 		parent.credentialHeaders = append(parent.credentialHeaders, key)
 	}
@@ -111,7 +112,9 @@ func compileDestination(r *Route, secrets map[string]material, discovery *upstre
 		active.Upstream = upstream
 		defaultRouteUsage(&active)
 	}
-	return activeRoute{Route: active, target: u, origin: origin, authority: routeAuthority(*r, origin, u), headers: headers}, nil
+	scope := routeScope(*r)
+	return activeRoute{Route: active, target: u, origin: origin, authority: scope.Destination(r.Upstream, origin, u),
+		legacySRVAuthority: scope.LegacySRV(r.Upstream), headers: headers}, nil
 }
 
 func cloudflareRootError() error {
@@ -133,25 +136,18 @@ func isCloudflareClefRoot(u *url.URL) bool {
 	}
 }
 
-// Rule order and local credential formatting do not change the delegated scope.
-// Each destination hash includes outbound headers, account, WebSocket and allow;
-// the mapping and shared redirect policy are included here. Legacy hashes stay
-// unchanged because single-destination routes do not use this envelope.
-func rulesAuthority(routes []activeRoute, redirects string) string {
-	type scope struct{ PathPrefix, Authority string }
-	scopes := make([]scope, 0, len(routes))
+func rulesAuthorities(routes []activeRoute, redirects string) (current, legacy string) {
+	scopes, old := make([]grantscope.Rule, 0, len(routes)), make([]grantscope.Rule, 0, len(routes))
+	hasLegacy := false
 	for _, r := range routes {
-		scopes = append(scopes, scope{r.pathPrefix, r.authority})
+		scopes = append(scopes, grantscope.Rule{PathPrefix: r.pathPrefix, Authority: r.authority})
+		old = append(old, grantscope.Rule{PathPrefix: r.pathPrefix, Authority: cmp.Or(r.legacySRVAuthority, r.authority)})
+		hasLegacy = hasLegacy || r.legacySRVAuthority != ""
 	}
-	sort.Slice(scopes, func(i, j int) bool { return scopes[i].PathPrefix < scopes[j].PathPrefix })
-	if redirects == "" {
-		redirects = "passthrough"
+	if hasLegacy {
+		legacy = grantscope.Composite(old, redirects)
 	}
-	b, _ := json.Marshal(struct {
-		Rules     []scope
-		Redirects string
-	}{scopes, redirects})
-	return hashToken(string(b))
+	return grantscope.Composite(scopes, redirects), legacy
 }
 
 // selectRoute matches before authentication or policy checks; a denial must
