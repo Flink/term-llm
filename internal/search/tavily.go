@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/term-llm/term-llm/internal/providerhttp"
+	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 // TavilySearcher implements Searcher using the Tavily Search API.
@@ -81,7 +82,7 @@ func (t *TavilySearcher) Search(ctx context.Context, query string, maxResults in
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
-	resp, err := t.client.Do(req)
+	resp, err := proxyclient.Do(t.client, req)
 	if err != nil {
 		return nil, err
 	}

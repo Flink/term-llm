@@ -28,7 +28,7 @@ func TestClaudeSharedAccessAliasCannotCrossRoutesToSameAccount(t *testing.T) {
 	f := newClaudeForwardFixture(t)
 	primary := f.service.snap.routes[0].Route
 	sibling := primary
-	sibling.Name, sibling.LocalPrefix = "sibling", "/sibling/"
+	sibling.Name, sibling.Provider, sibling.LocalPrefix = "sibling", "sibling", "/sibling/"
 	configure(t, f.service, Config{Routes: []Route{primary, sibling}}, nil)
 	token := caller(t, f.service, primary.Name, sibling.Name)
 	a, err := f.service.store.account(primary.Account)

@@ -30,6 +30,7 @@ One line per root-module package, generated from package doc comments by `make d
 - `internal/app/process` — owns the execution and progress rendering of the `term-llm process` commands; cmd keeps only the Cobra definitions.
 - `internal/app/providers` — implements the providers command.
 - `internal/app/proxy` — runs a standalone configuration-driven credential proxy and private administration UI.
+- `internal/app/proxy/legacyconfig` — converts v8 credential-proxy configuration into stored providers.
 - `internal/app/proxy/usagetap` — observes bounded provider response events without I/O or retaining response bodies.
 - `internal/app/proxyconnect` — provides local-only undo of legacy Claude Code settings enrollment, preserving unrelated edits and native credentials.
 - `internal/app/proxyrun` — launches a native client with a process-local credential-proxy binding.

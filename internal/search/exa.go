@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/term-llm/term-llm/internal/providerhttp"
+	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 // ExaSearcher implements Searcher using the Exa API.
@@ -77,7 +78,7 @@ func (e *ExaSearcher) Search(ctx context.Context, query string, maxResults int) 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", e.apiKey)
 
-	resp, err := e.client.Do(req)
+	resp, err := proxyclient.Do(e.client, req)
 	if err != nil {
 		return nil, err
 	}

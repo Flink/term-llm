@@ -1,6 +1,7 @@
 package proxyprofile
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,6 +25,95 @@ func TestProfileIDsUnique(t *testing.T) {
 			t.Fatalf("duplicate/empty profile %q", p.ID)
 		}
 		seen[p.ID] = true
+	}
+}
+
+func TestProfileMetadata(t *testing.T) {
+	families := []string{"inference", "search", "media", "embeddings"}
+	for _, p := range All() {
+		t.Run(p.ID, func(t *testing.T) {
+			if !slices.Contains(families, p.Family) {
+				t.Errorf("invalid family %q", p.Family)
+			}
+			if p.Parent != "" {
+				parent, ok := ByID(p.Parent)
+				if !ok || parent.Parent != "" || parent.Family != p.Family {
+					t.Errorf("parent %q must be a primary profile in family %q", p.Parent, p.Family)
+				}
+			}
+			for slot, selector := range p.Slots {
+				if !hasSlotBinding(p, slot, selector) {
+					t.Errorf("slot %q selector %q has no matching binding", slot, selector)
+				}
+			}
+		})
+	}
+}
+
+func hasSlotBinding(p Profile, slot, selector string) bool {
+	if selector == "" {
+		return false
+	}
+	namespace := slot
+	switch slot {
+	case "fetch":
+		namespace = "search" // Both fetch and search live under SearchConfig.
+	case "search", "embed", "image", "audio", "music", "transcription":
+	default:
+		return false // In particular, live integrations are not slots.
+	}
+	if slot == "transcription" && string(p.Provider) == selector {
+		return true // OpenAI transcription uses the named inference provider.
+	}
+	for _, b := range p.Bindings {
+		if strings.HasPrefix(b.Root, namespace+"."+selector+".") ||
+			slot == "transcription" && strings.HasPrefix(b.Root, "providers."+selector+".") {
+			return true // Mistral transcription uses an explicit providers binding.
+		}
+	}
+	return false
+}
+
+func TestProfileLookupAndCompanions(t *testing.T) {
+	p, ok := ForProvider(providerspec.TypeClaudeBin)
+	if !ok || p.ID != "claude-bin" || p.Account != "claude-bin" {
+		t.Fatalf("unexpected Claude profile: %+v", p)
+	}
+	if _, ok := ByID("not-a-profile"); ok {
+		t.Fatal("lookup found an unknown profile")
+	}
+	for parent, want := range map[string][]string{
+		"exa": {"exa-mcp"}, "jina": {"jina-reader"}, "chatgpt": {"chatgpt-backend", "chatgpt-openai"},
+		"gemini": {"gemini-live"}, "grok": {"grok-bin"}, "opencode-go": nil,
+	} {
+		var got []string
+		for _, companion := range Companions(parent) {
+			got = append(got, companion.ID)
+			if id := CanonicalParent(companion.ID); id != parent {
+				t.Errorf("CanonicalParent(%q) = %q, want %q", companion.ID, id, parent)
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("Companions(%q) = %v, want %v", parent, got, want)
+		}
+		if id := CanonicalParent(parent); id != parent {
+			t.Errorf("CanonicalParent(%q) = %q, want unchanged ID", parent, id)
+		}
+	}
+	if id := CanonicalParent("not-a-profile"); id != "not-a-profile" {
+		t.Errorf("CanonicalParent changed an unknown ID to %q", id)
+	}
+}
+
+func TestInferenceCapable(t *testing.T) {
+	for id, want := range map[string]bool{
+		"openai": true, "mistral": true, "grok-bin": true,
+		"chatgpt-backend": false, "gemini-live": false, "exa": false, "jina-reader": false,
+	} {
+		p, ok := ByID(id)
+		if !ok || InferenceCapable(p) != want {
+			t.Errorf("InferenceCapable(%q) = %t, want %t (profile found: %t)", id, InferenceCapable(p), want, ok)
+		}
 	}
 }
 

@@ -38,6 +38,10 @@ func HasBaseURLOverride(cfg *config.Config) bool {
 	if provider == "" {
 		provider = config.DefaultSearchProvider
 	}
+	if provider == "exa_mcp" {
+		url := strings.TrimSpace(cfg.Search.ExaMCP.URL)
+		return url != "" && url != config.DefaultSearchExaMCPURL
+	}
 	return strings.TrimSpace(searchBaseURL(cfg, provider)) != ""
 }
 

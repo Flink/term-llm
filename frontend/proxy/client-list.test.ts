@@ -4,14 +4,17 @@ import {
   ProxyClient,
   type ProxyAdminKey,
   type ProxyCaller,
-  type ProxyRoute,
+  type ProxyAdminRoute,
   type ProxyState,
 } from '../src/api/proxy-client';
 import { duplicateSuffixes, shortDate, sortCallers } from './client-list';
 import type { UIContext } from './dom';
 import { callersView } from './security';
 
-const route = (name: string): ProxyRoute => ({
+const route = (name: string): ProxyAdminRoute => ({
+  serves: [],
+  profile: '',
+  provider: name,
   name,
   local_prefix: `/${name}/`,
   upstream: 'https://example.com/',
@@ -38,6 +41,8 @@ afterEach(() => {
 
 function render(callers: ProxyCaller[], adminKeys: ProxyAdminKey[] = []) {
   const state: ProxyState = {
+    defaults: null,
+    providers: [],
     auth: 'token',
     mode: 'ui',
     revision: 3,

@@ -105,7 +105,7 @@ func TestVeniceRoutePersistsUsageAndReportedCharge(t *testing.T) {
 			// A matching card would estimate 564 micros, not the actual 250.
 			card := MoneyRate{Provider: r.Name, Model: model, Tier: "default", Currency: "USD", Source: "fixture card", AsOf: "2026-11-16", Input: moneyPtr(1000000), Output: moneyPtr(1000000), CacheRead: moneyPtr(1000000)}
 			secrets := map[string]material{"key": boundMaterial(t, r.Upstream, "synthetic-venice-key")}
-			snap, err := compile(Config{Routes: []Route{r}, Money: MoneySettings{Rates: []MoneyRate{card}}}, s.snap.revision+1, secrets)
+			snap, err := compile(fixtureProviders(Config{Routes: []Route{r}, Money: MoneySettings{Rates: []MoneyRate{card}}}), s.snap.revision+1, secrets)
 			if err != nil {
 				t.Fatal(err)
 			}

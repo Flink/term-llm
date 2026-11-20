@@ -4,6 +4,7 @@ package proxyclient
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,6 +16,8 @@ type Binding struct {
 	Root  string
 	Kind  string
 	Token string `json:"-"`
+	// RelatedRoots maps a companion profile to its explicitly delegated endpoint.
+	RelatedRoots map[string]string `json:"-"`
 }
 
 var registry struct {
@@ -35,6 +38,10 @@ func Register(bindings []Binding) error {
 			return fmt.Errorf("invalid delegated proxy binding")
 		}
 		b.Root = root
+		b.RelatedRoots, err = canonicalRelatedRoots(root, b.RelatedRoots)
+		if err != nil {
+			return err
+		}
 		if old, ok := pending[root]; ok && (old.Kind != b.Kind || old.Token != b.Token) {
 			return fmt.Errorf("proxy API root cannot represent conflicting credential kinds or principals")
 		}
@@ -82,6 +89,7 @@ func Lookup(endpoint string) (Binding, bool) {
 			best = b
 		}
 	}
+	best.RelatedRoots = maps.Clone(best.RelatedRoots)
 	return best, best.Root != ""
 }
 
@@ -102,7 +110,7 @@ func Do(client *http.Client, req *http.Request) (*http.Response, error) {
 	// Native Ollama and public catalog operations have no vendor auth field.
 	// They still need the scoped caller token at the proxy. Do not add a second
 	// auth form when the integration already supplied one.
-	if req.Header.Get("Authorization") == "" && req.Header.Get("x-api-key") == "" && req.Header.Get("x-goog-api-key") == "" && req.Header.Get("xi-api-key") == "" && req.Header.Get("x-key") == "" {
+	if req.Header.Get("Authorization") == "" && req.Header.Get("x-api-key") == "" && req.Header.Get("x-goog-api-key") == "" && req.Header.Get("xi-api-key") == "" && req.Header.Get("x-key") == "" && req.Header.Get("X-Subscription-Token") == "" {
 		req.Header.Set("Authorization", "Bearer "+binding.Token)
 	}
 	copy := *client

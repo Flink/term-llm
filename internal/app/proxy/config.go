@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -54,7 +55,8 @@ type Route struct {
 	Redirects       string                `json:"redirects,omitempty" yaml:"redirects,omitempty"`
 	Usage           string                `json:"usage,omitempty" yaml:"usage,omitempty"`
 	Name            string                `json:"name" yaml:"name"`
-	Provider        string                `json:"provider,omitempty" yaml:"provider,omitempty"` // Admin grouping only.
+	Provider        string                `json:"provider" yaml:"provider"`
+	Profile         string                `json:"profile,omitempty" yaml:"profile,omitempty"`
 	LocalPrefix     string                `json:"local_prefix" yaml:"local_prefix"`
 	Upstream        string                `json:"upstream" yaml:"upstream"`
 	Enabled         bool                  `json:"enabled" yaml:"enabled"`
@@ -63,19 +65,24 @@ type Route struct {
 	SetHeaders      map[string]HeaderRule `json:"set_headers" yaml:"set_headers"`
 	RequestIDHeader string                `json:"request_id_header,omitempty" yaml:"request_id_header,omitempty"`
 }
+type Provider struct {
+	Label  string                             `json:"label" yaml:"label"`
+	Family string                             `json:"family,omitempty" yaml:"family,omitempty"`
+	Client *proxyprofile.ClientProviderConfig `json:"client,omitempty" yaml:"client,omitempty"`
+}
 type SecretRef struct {
-	Origin string `json:"origin,omitempty" yaml:"origin,omitempty"`
 	File   string `json:"file,omitempty" yaml:"file,omitempty"`
 	Stored string `json:"stored,omitempty" yaml:"stored,omitempty"`
 }
 type Config struct {
-	Accounts  map[string]AccountRef                        `json:"accounts,omitempty" yaml:"accounts,omitempty"`
-	Money     MoneySettings                                `json:"money,omitempty" yaml:"money,omitempty"`
-	Routes    []Route                                      `json:"routes" yaml:"routes"`
-	Providers map[string]proxyprofile.ClientProviderConfig `json:"providers,omitempty" yaml:"providers,omitempty"`
-	Secrets   map[string]SecretRef                         `json:"secrets" yaml:"secrets,omitempty"`
+	Accounts  map[string]AccountRef `json:"accounts,omitempty" yaml:"accounts,omitempty"`
+	Money     MoneySettings         `json:"money,omitempty" yaml:"money,omitempty"`
+	Routes    []Route               `json:"routes" yaml:"routes"`
+	Providers map[string]Provider   `json:"providers" yaml:"providers"`
+	Defaults  map[string]string     `json:"defaults,omitempty" yaml:"defaults,omitempty"`
+	Secrets   map[string]SecretRef  `json:"secrets" yaml:"secrets,omitempty"`
 }
-type material struct{ Origin, Value string }
+type material struct{ Value string }
 type activeRoute struct {
 	Route
 	target            *url.URL
@@ -94,7 +101,7 @@ type snapshot struct {
 	upstreams map[string]string // SRV references and their pinned HTTPS destinations.
 }
 
-// Origin normalizes the credential binding, including the effective port.
+// Origin normalizes an HTTP(S) upstream origin, including the effective port.
 func Origin(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "https" && u.Scheme != "http") {
@@ -122,46 +129,6 @@ func Origin(raw string) (string, error) {
 	return (&url.URL{Scheme: u.Scheme, Host: net.JoinHostPort(host, strconv.Itoa(n))}).String(), nil
 }
 
-func secretOrigin(raw string) (string, error) {
-	origin, err := Origin(raw)
-	if err != nil {
-		return "", err
-	}
-	u, _ := url.Parse(raw)
-	if u.Path != "" && u.Path != "/" {
-		return "", fmt.Errorf("secret binding must be an origin without a base path")
-	}
-	return origin, nil
-}
-func safePath(escaped string) bool {
-	if len(escaped) > 8192 || !strings.HasPrefix(escaped, "/") {
-		return false
-	}
-	// Reject multiply encoded traversal too; retain ordinary escaped identifiers.
-	p := escaped
-	for i := 0; i < 4; i++ {
-		for _, c := range p {
-			if c == '\\' || c < 32 || c == 127 {
-				return false
-			}
-		}
-		for _, s := range strings.Split(p, "/") {
-			if s == "." || s == ".." {
-				return false
-			}
-		}
-		q, err := url.PathUnescape(p)
-		if err != nil {
-			// A decoded literal percent is an identifier, not malformed wire escaping.
-			return i > 0
-		}
-		if q == p {
-			return true
-		}
-		p = q
-	}
-	return false
-}
 func forbiddenHeader(name string) bool {
 	switch strings.ToLower(name) {
 	case "host", "connection", "proxy-connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade", "content-length", "forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "x-original-url", "x-rewrite-url", "cookie":
@@ -230,7 +197,7 @@ func fileConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("cannot read operator configuration")
 	}
-	return decodeConfig(b)
+	return decodeCurrentConfig(b)
 }
 func resolveSecrets(c Config, stored map[string]material, adminFile string, fileMode bool, protected ...string) (map[string]material, error) {
 	out := make(map[string]material)
@@ -246,10 +213,6 @@ func resolveSecrets(c Config, stored map[string]material, adminFile string, file
 			return nil, fmt.Errorf("stored secret reference must match its declared name")
 		}
 		if ref.File != "" {
-			origin, err := secretOrigin(ref.Origin)
-			if err != nil {
-				return nil, fmt.Errorf("file secret requires a valid declared origin")
-			}
 			if !fileMode {
 				return nil, fmt.Errorf("file secret references are operator-only")
 			}
@@ -265,17 +228,11 @@ func resolveSecrets(c Config, stored map[string]material, adminFile string, file
 			if value == "" {
 				return nil, fmt.Errorf("credential file must contain a nonempty secret")
 			}
-			out[name] = material{Origin: origin, Value: value}
+			out[name] = material{Value: value}
 		} else {
 			v, ok := stored[ref.Stored]
 			if !ok {
 				continue
-			}
-			if ref.Origin != "" {
-				origin, err := secretOrigin(ref.Origin)
-				if err != nil || origin != v.Origin {
-					return nil, fmt.Errorf("stored secret declaration does not match its bound origin")
-				}
 			}
 			out[name] = v
 		}
@@ -293,6 +250,9 @@ func compile(c Config, revision int64, secrets map[string]material) (*snapshot, 
 }
 
 func compileWithDiscovery(c Config, revision int64, secrets map[string]material, previous map[string]string) (*snapshot, error) {
+	if err := validateConfigStructure(c); err != nil {
+		return nil, err
+	}
 	if err := ValidateMoneySettings(c.Money); err != nil {
 		return nil, err
 	}
@@ -303,24 +263,15 @@ func compileWithDiscovery(c Config, revision int64, secrets map[string]material,
 			return nil, fmt.Errorf("invalid route billing")
 		}
 	}
-	if len(c.Routes) > 128 || len(c.Secrets) > 256 {
-		return nil, fmt.Errorf("at most 128 routes and 256 secret references")
-	}
 	if c.Routes == nil {
 		c.Routes = []Route{}
+	} else {
+		c.Routes = slices.Clone(c.Routes)
 	}
 	discovery := upstreamDiscovery{previous: previous}
 	s := &snapshot{config: c, revision: revision, secrets: secrets}
-	names := map[string]bool{}
 	for i := range s.config.Routes {
 		r := &s.config.Routes[i]
-		if !slug.MatchString(r.Name) || names[r.Name] {
-			return nil, fmt.Errorf("route names must be unique immutable slugs")
-		}
-		names[r.Name] = true
-		if r.Provider != "" && !slug.MatchString(r.Provider) {
-			return nil, fmt.Errorf("route provider must be a slug of at most 64 characters")
-		}
 		if err := validatePrefix(*r, s.routes); err != nil {
 			return nil, err
 		}
@@ -330,11 +281,6 @@ func compileWithDiscovery(c Config, revision int64, secrets map[string]material,
 		}
 		s.routes = append(s.routes, ar)
 	}
-	providers, err := validateProviderConfigs(s.config.Providers, s.config.Routes)
-	if err != nil {
-		return nil, err
-	}
-	s.config.Providers = providers
 	s.upstreams = discovery.resolved
 	return s, nil
 }
@@ -356,7 +302,7 @@ func validatePrefix(r Route, routes []activeRoute) error {
 	return nil
 }
 
-func compileHeaders(r Route, origin string, secrets map[string]material) (http.Header, error) {
+func compileHeaders(r Route, secrets map[string]material) (http.Header, error) {
 	if len(r.SetHeaders) > 32 {
 		return nil, fmt.Errorf("at most 32 header substitutions")
 	}
@@ -387,9 +333,6 @@ func compileHeaders(r Route, origin string, secrets map[string]material) (http.H
 					return nil, fmt.Errorf("header substitution references an unavailable secret; store it first or disable the route")
 				}
 			} else {
-				if v.Origin == "" || v.Origin != origin {
-					return nil, fmt.Errorf("substitution secret is not bound to this upstream origin")
-				}
 				value = v.Value
 			}
 			value = rule.Prefix + value

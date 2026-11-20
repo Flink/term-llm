@@ -230,7 +230,7 @@ func TestManageAPIProjectsOnlyAllowlistedRouteFields(t *testing.T) {
 	key := issueAdminKey(t, s, cookie, csrf, "Automation")
 	got := proxyResponse[map[string]any](t, manageRequest(s, "GET", "routes", key.Token, nil), 200)
 	var want map[string]any
-	_ = json.Unmarshal([]byte(`{"routes":[{"name":"plain","local_prefix":"/plain/","enabled":true,"websocket":true,"account_state":"ready","caller_auth":{"header":"Authorization","prefix":"Bearer "},"rules":[]},{"name":"rules","local_prefix":"/rules/","enabled":false,"websocket":false,"caller_auth":{"header":"","prefix":""},"rules":[{"path_prefix":"/messages/","caller_auth":{"header":"X-Api-Key","prefix":""}}]}]}`), &want)
+	_ = json.Unmarshal([]byte(`{"routes":[{"name":"plain","provider":"plain","profile":"","local_prefix":"/plain/","enabled":true,"websocket":true,"account_state":"ready","caller_auth":{"header":"Authorization","prefix":"Bearer "},"rules":[]},{"name":"rules","provider":"rules","profile":"","local_prefix":"/rules/","enabled":false,"websocket":false,"caller_auth":{"header":"","prefix":""},"rules":[{"path_prefix":"/messages/","caller_auth":{"header":"X-Api-Key","prefix":""}}]}]}`), &want)
 	want["revision"] = float64(s.snap.revision)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected projection: %+v", got)

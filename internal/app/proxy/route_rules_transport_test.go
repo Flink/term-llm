@@ -111,7 +111,7 @@ func TestRouteRulesValidateAllAccountDestinations(t *testing.T) {
 	}
 	compileAccount := func() *snapshot {
 		t.Helper()
-		snap, err := compile(Config{Routes: []Route{r}}, 1, nil)
+		snap, err := compile(fixtureProviders(Config{Routes: []Route{r}}), 1, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

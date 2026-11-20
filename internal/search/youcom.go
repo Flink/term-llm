@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/term-llm/term-llm/internal/providerhttp"
+	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 const (
@@ -80,7 +81,7 @@ func (y *YouComSearcher) Search(ctx context.Context, query string, maxResults in
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	resp, err := y.client.Do(req)
+	resp, err := proxyclient.Do(y.client, req)
 	if err != nil {
 		return nil, fmt.Errorf("execute request: %w", err)
 	}

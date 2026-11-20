@@ -38,31 +38,6 @@ func legacyOpenCodeProxyRoute(id string) bool {
 	return id == "opencode-go-messages" || id == "opencode-go-gemini"
 }
 
-// Only built-in providers own the global ancillary settings. In particular,
-// selecting a named ChatGPT provider must not also redirect built-in ChatGPT
-// (including its transcription and live settings).
-func (c *Config) proxyFeatureSelected(profile proxyprofile.Profile, selected map[string]bool) bool {
-	builtinSelected := func(name string) bool {
-		builtin, ok := BuiltinProvider(name)
-		return ok && selected[name] && InferProviderType(name, c.Providers[name].Type) == builtin.Type
-	}
-	if profile.Provider != "" {
-		return builtinSelected(string(profile.Provider))
-	}
-	// A custom provider may use the same name as a standalone endpoint; its
-	// selection is not permission to redirect the built-in feature too.
-	_, configured := c.Providers[profile.ID]
-	standalone := selected[profile.ID] && !configured
-	switch profile.ID {
-	case "chatgpt-backend", "chatgpt-openai":
-		return standalone || builtinSelected("chatgpt")
-	case "gemini-live":
-		return standalone || builtinSelected("gemini")
-	default:
-		return standalone
-	}
-}
-
 func (c *Config) validateProxyProviderSelectionSyntax() error {
 	if c.Proxy.Providers == nil {
 		directSet := make(map[string]bool, len(c.Proxy.Direct))
@@ -84,11 +59,6 @@ func (c *Config) validateProxyProviderSelectionSyntax() error {
 		if legacyOpenCodeProxyRoute(name) {
 			return fmt.Errorf("proxy.providers must select opencode-go as a whole, not %s", name)
 		}
-		if name == "claude-code" {
-			if _, configured := c.Providers[name]; !configured {
-				return fmt.Errorf(`proxy.providers entry "claude-code" is a route name; use "claude-bin"`)
-			}
-		}
 		if seen[name] {
 			return fmt.Errorf("proxy.providers entry %q is duplicated", name)
 		}
@@ -97,80 +67,94 @@ func (c *Config) validateProxyProviderSelectionSyntax() error {
 	return nil
 }
 
-func (c *Config) proxyProviderSelection(catalog *proxyDiscoveryCatalog) (map[string]bool, error) {
-	if c.Proxy.Providers == nil {
-		return nil, nil
+// A stored provider selection and a profile selection are different: a named
+// inference duplicate can bind its own provider entry but not global keys.
+type proxySelection struct {
+	all       bool
+	providers map[string]bool
+	aliases   map[string]bool
+	profiles  map[string]bool
+}
+
+func expandProxyProfile(names map[string]bool, id string) {
+	names[id] = true
+	for _, p := range proxyprofile.Companions(id) {
+		names[p.ID] = true
 	}
-	if err := c.validateProxyProviderSelectionSyntax(); err != nil {
-		return nil, err
-	}
-	standalone := make(map[string]bool)
-	for _, profile := range proxyprofile.All() {
-		if profile.Provider == "" && !legacyOpenCodeProxyRoute(profile.ID) {
-			standalone[profile.ID] = true
-		}
-	}
-	selected := make(map[string]bool, len(c.Proxy.Providers))
+}
+
+func canonicalProxyProfile(provider, profile string) bool {
+	return provider == proxyprofile.CanonicalParent(profile) || provider == profile
+}
+
+func (s proxySelection) includes(p proxyDiscoveredProvider, r proxyDiscoveredRoute) bool {
+	return s.all || s.providers[p.ID] || s.aliases[r.Name]
+}
+
+func (c *Config) proxyProviderSelection(catalog *proxyDiscoveryCatalog) (proxySelection, error) {
+	selected := proxySelection{all: c.Proxy.Providers == nil, providers: map[string]bool{}, aliases: map[string]bool{}, profiles: map[string]bool{}}
 	for _, name := range c.Proxy.Providers {
-		pc, configured := c.Providers[name]
-		discovered, hasDiscovered := lookupDiscoveredProvider(catalog, name, "")
-		if _, builtin := BuiltinProvider(name); configured || builtin {
-			kind := InferProviderType(name, pc.Type)
-			if hasDiscovered && discovered.Config != nil && discovered.Config.Type != "" && pc.Type == "" {
-				kind = discovered.Config.Type
+		if provider, ok := catalog.Providers[name]; ok {
+			selected.providers[name] = true
+			for _, r := range provider.Routes {
+				if r.Profile != "" && canonicalProxyProfile(name, r.Profile) {
+					expandProxyProfile(selected.profiles, name)
+					break
+				}
 			}
-			if _, ok := proxyprofile.ForProvider(kind); !ok {
-				return nil, fmt.Errorf("proxy.providers entry %q is not a supported proxy provider", name)
-			}
-		} else if hasDiscovered {
-			kind := ProviderTypeOpenAICompat
-			if discovered.Config != nil && discovered.Config.Type != "" {
-				kind = discovered.Config.Type
-			}
-			if _, ok := proxyprofile.ForProvider(kind); !ok {
-				return nil, fmt.Errorf("proxy.providers entry %q is not a supported proxy provider", name)
-			}
-		} else if !standalone[name] {
-			if name == "claude-code" {
-				return nil, fmt.Errorf(`proxy.providers entry "claude-code" is a route name; use "claude-bin"`)
-			}
-			return nil, fmt.Errorf("proxy.providers entry %q is not a known provider or integration", name)
+			continue
 		}
-		selected[name] = true
+		if profile, ok := catalog.inferenceRouteAlias(name); ok {
+			selected.aliases[name] = true
+			selected.profiles[profile] = true
+			continue
+		}
+		if _, ok := proxyprofile.ByID(name); ok {
+			expandProxyProfile(selected.profiles, name)
+			continue
+		}
+		if builtin, ok := BuiltinProvider(name); ok {
+			if p, ok := proxyprofile.ForProvider(builtin.Type); ok {
+				expandProxyProfile(selected.profiles, p.ID)
+				continue
+			}
+		}
+		return selected, fmt.Errorf("proxy.providers entry %q is not a known provider or integration", name)
 	}
 	return selected, nil
 }
 
+func (c *proxyDiscoveryCatalog) inferenceRouteAlias(name string) (string, bool) {
+	builtin, ok := BuiltinProvider(name)
+	if !ok {
+		return "", false
+	}
+	for _, p := range c.Providers {
+		for _, r := range p.Routes {
+			profile, _ := proxyprofile.ByID(r.Profile)
+			if r.Name == name && profile.Provider == builtin.Type && canonicalProxyProfile(p.ID, profile.ID) {
+				return profile.ID, true
+			}
+		}
+	}
+	return "", false
+}
+
 func (c *Config) directProxyExceptions(catalog *proxyDiscoveryCatalog) (map[string]bool, error) {
 	direct := make(map[string]bool, len(c.Proxy.Direct))
-	if len(c.Proxy.Direct) == 0 {
-		return direct, nil
-	}
-	known := map[string]bool{}
-	for _, p := range proxyprofile.All() {
-		known[p.ID] = true
-		if p.Provider != "" {
-			known[string(p.Provider)] = true
-		}
-	}
-	for name := range c.Providers {
-		known[name] = true
-	}
-	if catalog != nil {
-		for id := range catalog.Providers {
-			known[id] = true
-		}
-	}
+	seen := make(map[string]bool, len(c.Proxy.Direct))
 	for _, name := range c.Proxy.Direct {
-		if !known[name] || direct[name] {
+		_, profile := proxyprofile.ByID(name)
+		builtin, builtinName := BuiltinProvider(name)
+		_, configured := c.Providers[name]
+		_, discovered := catalog.Providers[name]
+		if seen[name] || !(profile || builtinName || configured || discovered) {
 			return nil, fmt.Errorf("proxy.direct must contain unique known integration names")
 		}
-		direct[name] = true
-	}
-	// Dynamic OpenCode Go uses one credential across its protocol subpaths.
-	for _, id := range []string{"opencode-go-messages", "opencode-go-gemini"} {
-		if direct[id] && !direct["opencode-go"] {
-			return nil, fmt.Errorf("proxy.direct must select opencode-go as a whole, not only %s", id)
+		seen[name] = true
+		expandProxyProfile(direct, name)
+		if p, ok := proxyprofile.ForProvider(builtin.Type); ok {
+			expandProxyProfile(direct, p.ID)
 		}
 	}
 	return direct, nil

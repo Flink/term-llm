@@ -79,9 +79,11 @@ func TestNativeVaultSchema8DiscardsCallerLoginsAndPreservesGrants(t *testing.T) 
 	// Start from the current canonical store but reconstruct the table and
 	// account rows that a real v7 proxy would have on disk.
 	execProxySQL(t, s.store, claudeVaultSchema+`PRAGMA user_version=7;`)
-	legacyKinds := []string{claudeProxyProvider.kind, agyProxyProvider.kind}
+	// Build and grant the routes with current runtime kinds, then put the
+	// historical Claude kind on disk before running the frozen v8 migration.
+	kinds := []string{claudeProxyProvider.kind, agyProxyProvider.kind}
 	var routes []Route
-	for _, kind := range legacyKinds {
+	for _, kind := range kinds {
 		p := nativeProviderForKind(kind)
 		name := "legacy-" + kind
 		a := newNativeAccount(name, kind)
@@ -103,13 +105,22 @@ func TestNativeVaultSchema8DiscardsCallerLoginsAndPreservesGrants(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ar := range s.snap.routes[:len(legacyKinds)] {
+	for _, ar := range s.snap.routes[:len(kinds)] {
 		execProxySQL(t, s.store, `INSERT INTO claude_vault VALUES(?,?,?,?,?,5,1,?,?,'ready',2000000000,0,x'010203')`, ar.Name, client.ID, ar.Name, ar.authority, ar.Account, "access-"+ar.Name, "refresh-"+ar.Name)
 	}
 	execProxySQL(t, s.store, `INSERT INTO claude_shared_enrollment(account,caller,route,authority,expires) VALUES(?,?,?,?,2000000000)`, shared.Name, client.ID, routes[2].Name, s.snap.routes[2].authority)
+	execProxySQL(t, s.store, `UPDATE accounts SET kind='claude-code' WHERE name IN (?,?)`, routes[0].Account, shared.Name)
 	before := claudeSetupDBState(t, s, "configuration", "callers", "grants", "claude_shared_enrollment")
 
-	if err := s.store.initialize(); err != nil {
+	// Test the frozen v8 boundary; v9 intentionally renames the kind and
+	// transforms configuration in a separate migration.
+	if err := sqliteutil.WithImmediateMigrationTx(ctx, s.store.db, func(tx sqliteutil.Executor) error {
+		if err := migrateSharedNativeAccounts(tx); err != nil {
+			return err
+		}
+		_, err := tx.Exec("PRAGMA user_version=8")
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if proxyCount(t, s.store, "PRAGMA user_version") != 8 || proxyCount(t, s.store, "SELECT count(*) FROM sqlite_master WHERE name IN ('claude_vault','claude_vault_binding')") != 0 {
@@ -123,8 +134,11 @@ func TestNativeVaultSchema8DiscardsCallerLoginsAndPreservesGrants(t *testing.T) 
 			t.Fatalf("preserved token lost route %s: %v", ar.Name, err)
 		}
 		a, err := s.store.account(ar.Account)
-		if err != nil || !a.claudeShared() || a.AuthMode != claudeSharedMode {
+		if err != nil || a.credentials.Mode != claudeSharedMode || a.claudeSharedID == "" {
 			t.Fatalf("account %s was not kept as a shared slot: %v", ar.Account, err)
+		}
+		if ar.Account != routes[1].Account && a.Kind != "claude-code" {
+			t.Fatalf("v8 unexpectedly renamed the historical Claude kind to %q", a.Kind)
 		}
 		if a.Name == shared.Name {
 			secret, err := claudeSharedSecret(key, a)

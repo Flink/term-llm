@@ -17,7 +17,7 @@ import (
 func TestPersistenceSessionsAndIndependentAuthority(t *testing.T) {
 	s := testService(t)
 	cookie, csrf := loginAdmin(t, s)
-	rr := adminRequest(s, "PUT", "secrets", map[string]string{"name": "key", "origin": "https://example.test", "value": "upstream-private"}, cookie, csrf)
+	rr := adminRequest(s, "PUT", "secrets", map[string]string{"name": "key", "value": "upstream-private"}, cookie, csrf)
 	if rr.Code != 200 {
 		t.Fatal(rr.Body.String())
 	}
@@ -112,7 +112,7 @@ func TestTerminalFailureRemainsUnknownWithoutLatching(t *testing.T) {
 func TestMetadataRedactionAndBoundedExport(t *testing.T) {
 	s := testService(t)
 	value := "a-known-private-value"
-	snap := &snapshot{secrets: map[string]material{"key": {Origin: "https://example.test:443", Value: value}}}
+	snap := &snapshot{secrets: map[string]material{"key": {Value: value}}}
 	path := strings.Repeat("x", 2040) + value
 	if redacted := s.redactPath(path, "local-caller", snap); strings.Contains(redacted, "a-known") || len(redacted) > 2048 {
 		t.Fatal("truncation leaked known secret", redacted)
@@ -136,7 +136,7 @@ func TestMetadataRedactionAndBoundedExport(t *testing.T) {
 	}
 }
 func TestConfigDefaultsAndFutureSchema(t *testing.T) {
-	c, err := decodeConfig([]byte("routes:\n  - name: plain\n    local_prefix: /plain/\n    upstream: https://example.test/\n"))
+	c, err := decodeConfig([]byte("providers: {plain: {label: Plain}}\nroutes:\n  - provider: plain\n    name: plain\n    local_prefix: /plain/\n    upstream: https://example.test/\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestActiveAndUnknownFilters(t *testing.T) {
 
 func TestStoredReferencesHaveStableNames(t *testing.T) {
 	c := Config{Secrets: map[string]SecretRef{"alias": {Stored: "other"}}}
-	if _, err := resolveSecrets(c, map[string]material{"other": {Origin: "https://example.test:443", Value: "private"}}, "", false); err == nil {
+	if _, err := resolveSecrets(c, map[string]material{"other": {Value: "private"}}, "", false); err == nil {
 		t.Fatal("mutable alias accepted")
 	}
 }

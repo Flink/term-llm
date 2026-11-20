@@ -68,8 +68,8 @@ func ResolveConfiguredConnection(cfg *config.Config) (Connection, bool, error) {
 		return Connection{}, false, nil
 	}
 	binding, ok := proxyclient.Lookup(provider.ProxyBinding)
-	if !ok || binding.Kind != "claude-code" || !proxyclient.SameRoot(provider.ProxyBinding, binding.Root) {
-		return Connection{}, true, errors.New("claude-bin proxy binding is not a registered scoped claude-code route (no direct fallback)")
+	if !ok || binding.Kind != "claude-bin" || !proxyclient.SameRoot(provider.ProxyBinding, binding.Root) {
+		return Connection{}, true, errors.New("claude-bin proxy binding is not a registered scoped claude-bin route (no direct fallback)")
 	}
 	if err := proxyclient.ValidateClaudeNativeToken(binding.Token); err != nil {
 		return Connection{}, true, errors.New("claude-bin proxy binding does not hold a scoped proxy client token (no direct fallback)")

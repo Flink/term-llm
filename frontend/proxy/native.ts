@@ -8,7 +8,7 @@ import {
 import { button, el, field, shellQuote, type UIContext } from './dom';
 
 export interface NativeProvider {
-  kind: 'claude-code' | 'agy-bin';
+  kind: 'claude-bin' | 'agy-bin';
   configKey: 'claude-bin' | 'agy-bin';
   launcher: ProxyNativeLauncher;
   label: string;
@@ -20,7 +20,7 @@ export interface NativeProvider {
 }
 
 export const claudeProvider: NativeProvider = {
-  kind: 'claude-code',
+  kind: 'claude-bin',
   configKey: 'claude-bin',
   launcher: 'claude',
   label: 'Claude Code',

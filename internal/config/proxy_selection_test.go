@@ -10,13 +10,17 @@ import (
 )
 
 func TestProxyProvidersOnlyRoutesListedProviders(t *testing.T) {
-	stubEmptyProxyDiscovery(t)
+	stubProxyDiscovery(t, func(_, _ string) (*proxyDiscoveryCatalog, error) {
+		return validateDiscoveryPayload(proxyDiscoveryPayload{Providers: []proxyDiscoveredProvider{
+			{ID: "work", Family: "inference", Routes: []proxyDiscoveredRoute{{Name: "work", LocalPrefix: "/work/", Profile: "chatgpt"}}},
+		}})
+	})
 	tests := []struct {
 		name, list     string
 		want, notBound []string
 	}{
-		{"chatgpt-only", "chatgpt", []string{"chatgpt", "chatgpt-backend", "chatgpt-openai"}, []string{"venice", "work", "claude-code", "gemini-live"}},
-		{"chatgpt-and-claude", "chatgpt, claude-bin", []string{"chatgpt", "chatgpt-backend", "claude-code"}, []string{"venice", "work", "anthropic"}},
+		{"chatgpt-only", "chatgpt", []string{"chatgpt", "chatgpt-backend", "chatgpt-openai"}, []string{"venice", "work", "claude-bin", "gemini-live"}},
+		{"chatgpt-and-claude", "chatgpt, claude-bin", []string{"chatgpt", "chatgpt-backend", "claude-bin"}, []string{"venice", "work", "anthropic"}},
 		{"named-only", "work", []string{"work"}, []string{"chatgpt", "chatgpt-backend", "chatgpt-openai", "venice"}},
 		{"standalone-only", "elevenlabs", []string{"elevenlabs"}, []string{"chatgpt", "chatgpt-backend", "venice", "work"}},
 		{"none", "", nil, []string{"chatgpt", "chatgpt-backend", "elevenlabs", "venice", "work"}},
@@ -47,12 +51,20 @@ image:
 				t.Fatal(err)
 			}
 			for _, id := range tt.want {
-				if b, ok := proxyclient.Lookup(root + "/" + id); !ok || b.Root != root+"/"+id {
+				endpoint := unavailableProxyEndpoint(root, id)
+				if id == "work" {
+					endpoint = root + "/work"
+				}
+				if b, ok := proxyclient.Lookup(endpoint); !ok || b.Root != endpoint {
 					t.Errorf("expected binding for %s, got %+v", id, b)
 				}
 			}
 			for _, id := range tt.notBound {
-				if b, ok := proxyclient.Lookup(root + "/" + id); ok {
+				endpoint := unavailableProxyEndpoint(root, id)
+				if id == "work" {
+					endpoint = root + "/work"
+				}
+				if b, ok := proxyclient.Lookup(endpoint); ok {
 					t.Errorf("unselected integration %s registered binding %s", id, b.Root)
 				}
 			}
@@ -66,7 +78,7 @@ image:
 				t.Error("unrelated image endpoint was rewritten")
 			}
 			if strings.HasPrefix(tt.list, "chatgpt") {
-				if cfg.Transcription.ChatGPT.BaseURL != root+"/chatgpt-backend" || cfg.Embed.ChatGPT.BaseURL != root+"/chatgpt-openai" {
+				if cfg.Transcription.ChatGPT.BaseURL != unavailableProxyEndpoint(root, "chatgpt-backend") || cfg.Embed.ChatGPT.BaseURL != unavailableProxyEndpoint(root, "chatgpt-openai") {
 					t.Error("ChatGPT feature endpoints did not follow the provider")
 				}
 			} else if strings.HasPrefix(cfg.Transcription.ChatGPT.BaseURL, root) || strings.HasPrefix(cfg.Embed.ChatGPT.BaseURL, root) {
@@ -74,7 +86,7 @@ image:
 			}
 			if tt.list == "chatgpt, claude-bin" {
 				pc := cfg.Providers["claude-bin"]
-				if pc.ProxyBinding != root+"/claude-code" || pc.Env["TERM_LLM_CLAUDE_PROXY_ROOT"] != pc.ProxyBinding {
+				if pc.ProxyBinding != unavailableProxyEndpoint(root, "claude-bin") || pc.Env["TERM_LLM_CLAUDE_PROXY_ROOT"] != pc.ProxyBinding {
 					t.Fatalf("Claude Code launcher wasn't configured: %+v", pc)
 				}
 			}
@@ -82,29 +94,11 @@ image:
 	}
 }
 
-func TestProxyProvidersNamedProviderDoesNotSelectStandaloneFeature(t *testing.T) {
-	stubEmptyProxyDiscovery(t)
-	cfg := Config{
-		Proxy:     ProxyConfig{URL: "https://proxy-named-feature.example.test", Token: strings.Repeat("s", 40), Providers: []string{"gemini-live"}},
-		Providers: map[string]ProviderConfig{"gemini-live": {Type: ProviderTypeOpenAICompat}},
-	}
-	cfg.Live.Gemini.BaseURL = "wss://direct.example.test/v1"
-	if err := cfg.materializeProxy(nil); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Providers["gemini-live"].ProxyBinding != cfg.Proxy.URL+"/gemini-live" {
-		t.Fatal("selected custom provider was not bound")
-	}
-	if cfg.Live.Gemini.BaseURL != "wss://direct.example.test/v1" {
-		t.Fatal("unselected Gemini Live endpoint was rewritten")
-	}
-}
-
 func TestProxyProvidersRejectsInvalidSelection(t *testing.T) {
 	stubEmptyProxyDiscovery(t)
 	for _, tc := range []struct{ yaml, want string }{
 		{"providers: [a-typo]", "not a known provider"},
-		{"providers: [claude-code]", `use "claude-bin"`},
+		{"providers: [claude-code]", "not a known provider"},
 		{"providers: [chatgpt, chatgpt]", "duplicated"},
 		{"providers: [chatgpt]\n  direct: [venice]", "cannot be combined with proxy.direct"},
 		{"providers: [opencode-go-messages]", "select opencode-go as a whole"},

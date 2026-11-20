@@ -7,9 +7,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 type failAfterNReadCloser struct {
@@ -394,3 +397,42 @@ func TestResolveReadURLTargetPinsValidatedIPsDuringRedirectCheck(t *testing.T) {
 }
 
 var _ io.ReadCloser = (*failAfterNReadCloser)(nil)
+
+func TestReadURLDelegatesOnlyReaderRequestAndRefusesRedirect(t *testing.T) {
+	origLookup := readURLLookupIP
+	readURLLookupIP = func(context.Context, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("93.184.216.34")}, nil
+	}
+	t.Cleanup(func() { readURLLookupIP = origLookup })
+	const token = "test-reader-scoped-token"
+	reader := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RequestURI() != "/reader/https://example.com/a%2Fb?x=1" || r.Header.Get("Authorization") != "Bearer "+token {
+			t.Errorf("unexpected reader request: %s; auth=%v", r.URL.RequestURI(), r.Header.Get("Authorization") != "")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Location", "/would-be-public")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer reader.Close()
+	root := reader.URL + "/reader"
+	if err := proxyclient.Register([]proxyclient.Binding{{Root: root, Token: token}}); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewReadURLToolWithJinaBaseURL(func() (string, error) { return root, nil })
+	// Intercept only the target resolution, so no DNS or real target egress is
+	// possible, while the Reader HTTP request still exercises real client I/O.
+	tool.client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host != "example.com" {
+			return reader.Client().Transport.RoundTrip(req)
+		}
+		if req.Header.Get("Authorization") != "" {
+			t.Error("Reader caller token leaked to target resolution")
+		}
+		return &http.Response{StatusCode: 200, Body: http.NoBody, Header: make(http.Header), Request: req}, nil
+	})
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com/a%2Fb?x=1"}`))
+	if err != nil || !strings.Contains(out.Content, "HTTP 307") {
+		t.Fatalf("reader redirect: output=%+v err=%v", out, err)
+	}
+}

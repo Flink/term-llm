@@ -5,6 +5,8 @@ import { mountProxy } from './app';
 import { requestDetail, requestPageNumbers } from './requests';
 
 const snapshot: ProxyState = {
+  defaults: null,
+  providers: [],
   auth: 'token',
   mode: 'ui',
   revision: 1,

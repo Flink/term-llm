@@ -9,21 +9,6 @@ export function routeRules(route: ProxyRoute): ProxyRouteRule[] {
 export function hasRules(route: ProxyRoute): boolean {
   return routeRules(route).length > 0;
 }
-/** The upstreams that actually carry authority: every rule, or the parent base. */
-export function routeUpstreams(route: ProxyRoute): string[] {
-  const rules = routeRules(route);
-  return rules.length ? rules.map((rule) => rule.upstream) : [route.upstream];
-}
-export function routeOrigins(route: ProxyRoute): string[] {
-  const origins = routeUpstreams(route).flatMap((upstream) => {
-    try {
-      return [new URL(upstream).origin];
-    } catch {
-      return [];
-    }
-  });
-  return [...new Set(origins)];
-}
 /** The header that carries this subpath's upstream credential, if any. */
 export function ruleCredentialHeader(rule: ProxyRouteRule): string {
   const secret = Object.keys(rule.set_headers).find(
@@ -40,13 +25,6 @@ export function routeNeedsSecret(route: ProxyRoute): boolean {
   return rules.length
     ? rules.some(ruleNeedsSecret)
     : Object.values(route.set_headers).some((header) => header.secret !== undefined);
-}
-/** Distinct stored secret names referenced by the route's effective headers. */
-export function routeSecretNames(route: ProxyRoute): string[] {
-  const headers = routeRules(route).length
-    ? routeRules(route).flatMap((rule) => Object.values(rule.set_headers))
-    : Object.values(route.set_headers);
-  return [...new Set(headers.flatMap((header) => (header.secret ? [header.secret] : [])))];
 }
 export function authLabel(auth: ProxyAuth): string {
   if (!auth.header) return 'No credential header';
@@ -102,4 +80,11 @@ export function routeAuthority(route: ProxyRoute): string {
     [url.origin, url.pathname.replace(/\/$/, ''), headerAuthority(route.set_headers)],
     ...shared,
   ]);
+}
+
+export function allowLabel(entry: string): string {
+  const catchAll = /^(\S+) (\/(?:[^*]*\/)?)\*$/.exec(entry);
+  if (!catchAll) return entry;
+  const [, method, prefix] = catchAll;
+  return prefix === '/' ? `${method} any path` : `${method} any path below ${prefix}`;
 }

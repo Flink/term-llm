@@ -2,8 +2,9 @@ import { nativeProvider } from './native';
 import { accountDialog, accountStateLabel } from './accounts';
 import { secretForm } from './security';
 import { presetLabel } from './route-presets';
-import { availableCompanions, companionRoutes, companionToggle } from './route-companions';
-import { freeProviderID } from './provider-groups';
+import { companionRouteName } from './route-companions';
+import type { ProviderGroup } from './provider-groups';
+import { requireProviderName, slugPattern } from './provider-name';
 import {
   ProxyAPIError,
   type ProxyClient,
@@ -29,7 +30,6 @@ import {
   el,
   field,
   input,
-  sameOrigin,
   select,
   submit,
   type UIContext,
@@ -42,22 +42,15 @@ export function routeForm(
   close: () => void,
   route?: ProxyRoute,
   preset?: ProxyPreset,
-  provider?: { id: string; routes: ProxyRoute[] },
+  provider?: ProviderGroup,
 ): HTMLElement {
   const defaults = route ? undefined : preset;
-  let suggestedName = defaults?.id ?? '';
-  for (
-    let n = 2;
-    defaults &&
-    state.routes.some(
-      (r) =>
-        r.name === suggestedName ||
-        r.local_prefix.startsWith(`/${suggestedName}/`) ||
-        `/${suggestedName}/`.startsWith(r.local_prefix),
-    );
-    n++
-  )
-    suggestedName = `${defaults.id}-${n}`;
+  const suggestedName = defaults && provider ? companionRouteName(provider, defaults, state) : '';
+  const inheritedSecret = provider?.routes
+    .flatMap((r) => Object.values(r.set_headers))
+    .find((header) => header.secret)?.secret;
+  const inheritedAccount = provider?.routes.find((r) => r.account)?.account;
+
   const presetRules = defaults?.rules ?? [];
   const rulesMode = !!route?.rules?.length || presetRules.length > 0;
   // Existing rule routes load their saved rules verbatim. Presets only supply
@@ -71,6 +64,7 @@ export function routeForm(
     : presetRules.map((rule) => ({
         path_prefix: rule.path_prefix,
         upstream: rule.upstream,
+        allow: rule.allow,
         caller_auth: { ...rule.auth },
         set_headers: rule.auth.header
           ? { [rule.auth.header]: { secret: '', prefix: rule.auth.prefix } }
@@ -92,7 +86,7 @@ export function routeForm(
     // their rules, and one shared key replaces them all.
     set_headers:
       !rulesMode && preset?.auth.header && !preset.account_kind
-        ? { [preset.auth.header]: { secret: '', prefix: preset.auth.prefix } }
+        ? { [preset.auth.header]: { secret: inheritedSecret ?? '', prefix: preset.auth.prefix } }
         : {},
   };
   const form = el('form');
@@ -104,7 +98,8 @@ export function routeForm(
   const name = input(initial.name);
   name.required = true;
   name.readOnly = !!route;
-  name.pattern = '[A-Za-z0-9][A-Za-z0-9_-]{0,63}';
+  name.pattern = slugPattern;
+  name.maxLength = 64;
   const local = input(initial.local_prefix);
   local.required = true;
   let prefixEdited = !!route;
@@ -119,6 +114,7 @@ export function routeForm(
   const header = input(initial.caller_auth.header);
   header.required = true;
   const prefix = input(initial.caller_auth.prefix);
+  const allow = allowInput(route?.allow ?? defaults?.allow);
   const requestID = input(route?.request_id_header);
   const billing = select(
     [
@@ -141,8 +137,12 @@ export function routeForm(
   ]);
   if (route?.account && !currentAccount)
     accountOptions.unshift([route.account, `${route.account} · unavailable`]);
-  const account = select([['', 'Choose account'], ...accountOptions], route?.account ?? '');
+  const account = select(
+    [['', 'Choose account'], ...accountOptions],
+    route?.account ?? inheritedAccount ?? '',
+  );
   account.required = needsAccount;
+  account.disabled = !!provider && !!inheritedAccount;
   const websocket = check(
     'Forward WebSocket upgrades',
     route ? !!route.websocket : !!preset?.websocket,
@@ -164,6 +164,7 @@ export function routeForm(
     source: ProxyRouteRule;
     path: HTMLInputElement;
     upstream: HTMLInputElement;
+    allow: HTMLTextAreaElement;
   };
   const ruleRows: SubpathRow[] = [];
   const rulesSummary = el('ul');
@@ -182,15 +183,17 @@ export function routeForm(
       path.required = true;
       const ruleUpstream = input(rule.upstream);
       ruleUpstream.required = true;
+      const ruleAllow = allowInput(rule.allow);
       const node = el(
         'fieldset',
         el('legend', `Subpath rule ${index + 1}`),
         field('Subpath', path, 'For example /messages/. Must start and end with /.'),
         field('Upstream base URL', ruleUpstream),
+        allowField(ruleAllow),
       );
       node.className = 'subpath-rule';
       ruleEditors.append(node);
-      ruleRows.push({ source: rule, path, upstream: ruleUpstream });
+      ruleRows.push({ source: rule, path, upstream: ruleUpstream, allow: ruleAllow });
     });
     const covers =
       ruleRows.length === 3
@@ -234,6 +237,7 @@ export function routeForm(
   if (embedded) advanced.className = 'route-form-advanced';
   if (!rulesMode)
     advanced.append(
+      allowField(allow),
       field('Local client authentication header', header),
       field(
         'Local client authentication prefix',
@@ -253,7 +257,7 @@ export function routeForm(
       account,
       candidates.length || !accountKind ? '' : `Connect a ${accountKind} account to continue.`,
     );
-    if (accountKind && !nativeProvider(accountKind))
+    if (accountKind && !nativeProvider(accountKind) && !account.disabled)
       accountField.append(
         button('Connect new account', () =>
           accountDialog({ state, api, context }, formRoot, accountKind, (stored) => {
@@ -314,139 +318,65 @@ export function routeForm(
     kind: HTMLSelectElement;
     value: HTMLInputElement;
     secret: HTMLSelectElement;
+    savedSecret?: string;
     prefix: HTMLInputElement;
     update: () => void;
   };
   const rows: HeaderRow[] = [];
   const keyRules = ruleRows.filter((row) => ruleNeedsSecret(row.source));
   const sharedSecretSelect = select([['', 'Choose secret']]);
-  const sharedSecretOrigins = el('small');
-  const sharedSecretWarning = el('p');
-  sharedSecretWarning.className = 'warning';
-  const sharedSecretMissing = el('div');
-  // Prefer the key already shared by the loaded rules; a fresh preset has a
-  // placeholder empty name and therefore requires an explicit choice.
   let sharedSecret =
     keyRules.flatMap((row) => Object.values(row.source.set_headers)).find((header) => header.secret)
       ?.secret ?? '';
-  function isSRVUpstream(value: string): boolean {
-    return /^srv:\/\/_([a-z0-9-]+)\._tcp\.([a-z0-9-]+(?:\.[a-z0-9-]+)*\.?)(?:\/[^?#]*)?$/i.test(
-      value,
-    );
-  }
-  function sharedCredentialOrigins(): string[] {
-    const origins = keyRules.flatMap((row) => {
-      try {
-        return isSRVUpstream(row.upstream.value) ? [] : [new URL(row.upstream.value).origin];
-      } catch {
-        return [];
-      }
-    });
-    return [...new Set(origins)];
-  }
+  let changedSharedSecret = false;
+  const sharedSecretWarning = el('small');
   function refreshSharedSecret() {
-    const origins = sharedCredentialOrigins();
-    const hasSRVRule = keyRules.some((row) => isSRVUpstream(row.upstream.value));
-    const allKeyRulesAreSRV =
-      hasSRVRule && keyRules.every((row) => isSRVUpstream(row.upstream.value));
-    const matching = state.secrets.filter(
-      (secret) => allKeyRulesAreSRV || origins.some((origin) => sameOrigin(secret.origin, origin)),
-    );
     sharedSecretSelect.replaceChildren(
-      ...[['', 'Choose secret'], ...matching.map((secret) => [secret.name, secret.name])].map(
-        ([value, text]) => {
-          const option = el('option', text);
-          option.value = value;
-          return option;
-        },
+      ...select(
+        [
+          ['', 'Choose secret'],
+          ...state.secrets.map((secret): [string, string] => [secret.name, secret.name]),
+        ],
+        sharedSecret,
+      ).options,
+    );
+    sharedSecretSelect.value = sharedSecret;
+    const names = new Set(
+      keyRules.flatMap(({ source }) =>
+        Object.values(source.set_headers).flatMap((header) =>
+          header.secret ? [header.secret] : [],
+        ),
       ),
     );
-    if (origins.length && !matching.some((secret) => secret.name === sharedSecret))
-      sharedSecret = '';
-    sharedSecretSelect.value = sharedSecret;
-    sharedSecretSelect.required = keyRules.length > 0;
-    sharedSecretOrigins.textContent = origins.length
-      ? `Shared upstream origin: ${origins.join(', ')}${hasSRVRule ? '. The server validates SRV targets.' : ''}`
-      : hasSRVRule
-        ? 'SRV upstream: bind secrets to the discovered HTTPS host and port; the server validates.'
-        : 'Enter a valid upstream URL for every subpath rule.';
-    const divergent = [
-      ...new Set(
-        keyRules
-          .map(
-            (row) =>
-              Object.values(row.source.set_headers).find((header) => header.secret)?.secret ?? '',
-          )
-          .filter(Boolean),
-      ),
-    ];
     sharedSecretWarning.textContent =
-      origins.length > 1
-        ? 'Subpath rules that use a key must share one upstream origin to use one stored key.'
-        : divergent.length > 1
-          ? 'These subpath rules currently use different stored secrets. Saving applies the selected key to all of them.'
-          : '';
+      names.size > 1
+        ? 'These subpath rules currently use different stored secrets. Selecting a key applies it to all of them.'
+        : '';
     sharedSecretWarning.hidden = !sharedSecretWarning.textContent;
-    sharedSecretMissing.replaceChildren();
-    if (origins.length && !matching.length)
-      sharedSecretMissing.append(el('p', `No secret is bound to ${origins.join(' or ')} yet.`));
-    if (allKeyRulesAreSRV && !matching.length)
-      sharedSecretMissing.append(
-        el('p', 'No stored secrets yet. Add a key for the resolved origin.'),
-      );
   }
   if (rulesMode && keyRules.length) {
     const addKey = button('Add API key', () => {
-      const origin = sharedCredentialOrigins()[0];
-      if (!origin && keyRules.some((row) => isSRVUpstream(row.upstream.value))) {
-        openSecretDialog('', `${(name.value || 'upstream').slice(0, 56)}-key`, (stored) => {
-          sharedSecret = stored;
-          refreshSharedSecret();
-          rows.forEach((row) => row.update());
-          previewRoute();
-        });
-        return;
-      }
-      if (!origin) {
-        context.announce('Enter a valid upstream URL for the subpath rules first.');
-        return;
-      }
-      openSecretDialog(origin, `${(name.value || 'upstream').slice(0, 56)}-key`, (stored) => {
+      openSecretDialog(`${(name.value || 'upstream').slice(0, 56)}-key`, (stored) => {
         sharedSecret = stored;
+        changedSharedSecret = true;
         refreshSharedSecret();
-        rows.forEach((row) => row.update());
         previewRoute();
       });
     });
     const keyBlock = el(
       'fieldset',
       el('legend', 'Upstream key'),
-      el('p', 'One stored secret authenticates every subpath rule.'),
-      field(
-        'Secret name',
-        sharedSecretSelect,
-        'Select an existing key or add one; it applies to every subpath rule.',
-      ),
-      sharedSecretOrigins,
+      field('Secret name', sharedSecretSelect, 'Select an existing key or add one.'),
       sharedSecretWarning,
-      sharedSecretMissing,
       addKey,
     );
     keyBlock.className = 'route-key';
     credentials.append(keyBlock);
     sharedSecretSelect.addEventListener('change', () => {
       sharedSecret = sharedSecretSelect.value;
+      changedSharedSecret = true;
       previewRoute();
     });
-  }
-  function upstreamOrigin() {
-    const value = rulesMode ? (ruleRows[0]?.upstream.value ?? '') : upstream.value;
-    if (isSRVUpstream(value)) return '';
-    try {
-      return new URL(value).origin;
-    } catch {
-      return '';
-    }
   }
   function previewRoute() {
     const upstreams = rulesMode ? ruleRows.map((row) => row.upstream.value) : [upstream.value];
@@ -486,7 +416,7 @@ export function routeForm(
   }
   // One dialog serves both the legacy single substitution and the shared
   // subpath key; it stores a secret without discarding the route draft.
-  function openSecretDialog(origin: string, base: string, onStored: (name: string) => void) {
+  function openSecretDialog(base: string, onStored: (name: string) => void) {
     const dialog = el('dialog', el('h2', 'Add API key'));
     dialog.setAttribute('aria-label', 'Add API key');
     const notice = el('p');
@@ -513,7 +443,6 @@ export function routeForm(
       suggestion = `${base}-${n}`;
     const form = secretForm(state, api, localContext, {
       name: suggestion,
-      origin,
       cancel: () => dialog.close(),
       stored: async (storedName) => {
         let latest: ProxyState;
@@ -532,7 +461,13 @@ export function routeForm(
           );
           return;
         }
-        const unchanged = JSON.stringify(latest.routes) === JSON.stringify(state.routes);
+        const config = (snapshot: ProxyState) =>
+          JSON.stringify({
+            routes: snapshot.routes.map(({ serves: _serves, ...r }) => r),
+            providers: snapshot.providers.map(({ status: _status, reason: _reason, ...p }) => p),
+            defaults: snapshot.defaults,
+          });
+        const unchanged = config(latest) === config(state);
         state = {
           ...state,
           secrets: latest.secrets,
@@ -547,13 +482,7 @@ export function routeForm(
         );
       },
     });
-    const srvBindingHelp = !origin
-      ? el(
-          'p',
-          'For SRV upstreams, bind this secret to the discovered concrete HTTPS target and port, never to the srv:// reference. The server checks the resolved origin.',
-        )
-      : undefined;
-    dialog.append(form, ...(srvBindingHelp ? [srvBindingHelp] : []), notice);
+    dialog.append(form, notice);
     dialog.addEventListener('cancel', (event) => {
       if (form.getAttribute('aria-busy') === 'true') event.preventDefault();
     });
@@ -619,21 +548,22 @@ export function routeForm(
       node.append(el('small', 'Select the provider API key above.'));
     }
     const update = () => {
-      const origin = upstreamOrigin();
-      const matching = state.secrets.filter((s) =>
-        origin ? sameOrigin(s.origin, origin) : isSRVUpstream(upstream.value),
-      );
+      const matching = state.secrets;
       selected = secret.value || selected;
       secret.replaceChildren(
-        ...[['', 'Choose secret'], ...matching.map((s) => [s.name, s.name])].map(
-          ([value, text]) => {
-            const option = el('option', text);
-            option.value = value;
-            return option;
-          },
-        ),
+        ...[
+          ['', 'Choose secret'],
+          ...matching.map((s) => [s.name, s.name]),
+          ...(config.secret && !matching.some((s) => s.name === config.secret)
+            ? [[config.secret, `${config.secret} (missing)`]]
+            : []),
+        ].map(([value, text]) => {
+          const option = el('option', text);
+          option.value = value;
+          return option;
+        }),
       );
-      secret.value = matching.some((s) => s.name === selected) ? selected : '';
+      secret.value = selected;
       const useSecret = kind.value === 'secret';
       credentialBlock.hidden = !useSecret;
       literalField.hidden = useSecret;
@@ -646,31 +576,14 @@ export function routeForm(
           : '';
       warning.hidden = !warning.textContent;
       missing.replaceChildren();
-      if (useSecret && origin && !matching.length)
-        missing.append(
-          el(
-            'p',
-            primary
-              ? 'Choose or add an API key for this provider.'
-              : `No secret is bound to ${origin} yet.`,
-          ),
-        );
-      if (
-        useSecret &&
-        (origin || isSRVUpstream(upstream.value)) &&
-        (!matching.length || isSRVUpstream(upstream.value))
-      )
+      if (useSecret)
         missing.append(
           button('Add API key', () =>
-            openSecretDialog(
-              isSRVUpstream(upstream.value) ? '' : origin,
-              `${(name.value || 'upstream').slice(0, 56)}-key`,
-              (stored) => {
-                selected = stored;
-                secret.value = '';
-                rows.forEach((row) => row.update());
-              },
-            ),
+            openSecretDialog(`${(name.value || 'upstream').slice(0, 56)}-key`, (stored) => {
+              selected = stored;
+              secret.value = '';
+              rows.forEach((row) => row.update());
+            }),
           ),
         );
       previewRoute();
@@ -686,6 +599,7 @@ export function routeForm(
       kind,
       value: literal,
       secret,
+      savedSecret: config.secret,
       prefix: secretPrefix,
       update,
     };
@@ -718,7 +632,6 @@ export function routeForm(
     if (!needsAccount || rows.length) {
       headerControls.append(
         el('h3', 'Upstream headers'),
-        el('small', 'Secrets must match the upstream origin.'),
         substitutions,
         button('Add substitution', () => addHeader()),
       );
@@ -793,8 +706,6 @@ export function routeForm(
       ),
     );
   }
-  const companions = availableCompanions(defaults, state);
-  const [companionLabel, createCompanions] = companionToggle(companions);
   const save = submit(
     form,
     context,
@@ -876,18 +787,11 @@ export function routeForm(
           seen.add(subpath);
           ruleHeaders.set(row, { ...row.source.set_headers });
         }
-        if (keyRules.length) {
+        if (keyRules.length && changedSharedSecret) {
           const secret = state.secrets.find((s) => s.name === sharedSecret);
           if (!secret)
             throw new Error('Select a stored secret for the subpath rules, or add one first.');
           for (const row of keyRules) {
-            if (
-              !isSRVUpstream(row.upstream.value) &&
-              !sameOrigin(secret.origin, new URL(row.upstream.value).origin)
-            )
-              throw new Error(
-                `Subpath rules that use a key must share the stored secret's exact origin (${secret.origin}).`,
-              );
             const headers = ruleHeaders.get(row)!;
             const header = ruleCredentialHeader(row.source) || row.source.caller_auth.header;
             if (!header)
@@ -909,18 +813,10 @@ export function routeForm(
             throw new Error('Header substitutions must have unique names.');
           if (row.kind.value === 'secret') {
             const secret = state.secrets.find((s) => s.name === row.secret.value);
-            if (
-              !secret ||
-              (!isSRVUpstream(upstream.value) &&
-                !sameOrigin(secret.origin, new URL(upstream.value).origin))
-            )
-              throw new Error(
-                isSRVUpstream(upstream.value)
-                  ? 'Select a stored secret for this SRV upstream.'
-                  : 'Select a secret bound to this exact upstream origin.',
-              );
+            if (!secret && (row.secret.value !== row.savedSecret || enabled.checked))
+              throw new Error('Choose an existing secret.');
             setHeaders[row.header.value.trim()] = {
-              secret: secret.name,
+              secret: row.secret.value,
               prefix: row.prefix.value,
             };
           } else setHeaders[row.header.value.trim()] = { value: row.value.value };
@@ -935,8 +831,7 @@ export function routeForm(
           );
       }
       const next: ProxyRoute = {
-        // Preserve server-owned admission policy (allow rules, redirects) and
-        // future opaque metadata that this editor does not expose.
+        // Preserve redirect policy and other configuration not exposed here.
         ...route,
         billing: billing.value as ProxyBilling,
         ...(needsAccount ? { account: account.value } : {}),
@@ -944,6 +839,9 @@ export function routeForm(
         websocket: websocket[1].checked || (route?.websocket === false ? false : undefined),
         usage: usage.value === 'auto' ? 'auto' : route?.usage === 'off' ? 'off' : undefined,
         name: name.value.trim(),
+        provider: route?.provider ?? provider?.id ?? name.value.trim(),
+        profile: route?.profile ?? defaults?.id,
+        allow: rulesMode ? undefined : readAllow(allow),
         local_prefix: local.value,
         // Rules carry every destination; the backend rejects parent
         // upstream/caller_auth/set_headers/allow when rules exist.
@@ -961,13 +859,15 @@ export function routeForm(
                 ...row.source,
                 path_prefix: row.path.value,
                 upstream: row.upstream.value,
+                allow: readAllow(row.allow),
                 set_headers: ruleHeaders.get(row)!,
               })),
             }
           : {}),
       };
-      // A parent allow policy is invalid beside rules; each rule keeps its own.
-      if (rulesMode) delete next.allow;
+      if (!route && !provider) requireProviderName(next.provider, state);
+      if (state.providers.some((item) => item.id === next.name && item.id !== next.provider))
+        throw new Error('Route name belongs to another provider.');
       if (
         route &&
         authority(route) !== authority(next) &&
@@ -976,34 +876,23 @@ export function routeForm(
         )
       )
         return;
-      const extra =
-        defaults && createCompanions.checked ? companionRoutes(next, defaults, companions) : [];
-      const providerID =
-        provider?.id ?? (extra.length ? freeProviderID(next.name, state) : undefined);
-      const added = [next, ...extra].map((item) =>
-        providerID ? { ...item, provider: providerID } : item,
-      );
-      const configured = state.routes.map((item) => {
-        if (item === route) return next;
-        return provider?.routes.includes(item) ? { ...item, provider: provider.id } : item;
-      });
-      const rawClientYAML = clientConfigYAML?.value.trim() ?? '';
-      const targetProviderID = providerID ?? next.name;
-      const nextRoutes = route ? configured : [...configured, ...added];
-      if (rawClientYAML) {
-        await api.config(state.revision, nextRoutes, { [targetProviderID]: rawClientYAML });
-      } else {
-        await api.config(state.revision, nextRoutes);
-      }
+      const rawClientYAML = clientConfigYAML?.value.trim();
+      const nextRoutes = route
+        ? state.routes.map((item) => (item === route ? next : item))
+        : [...state.routes, next];
+      if (!route && !provider)
+        await api.config(
+          state,
+          nextRoutes,
+          { [next.provider]: { label: next.provider } },
+          rawClientYAML ? { [next.provider]: rawClientYAML } : undefined,
+        );
+      else await api.config(state, nextRoutes);
       await context.refresh(`route:${next.name}`);
-      const saved = [next, ...extra].map((r) => r.name).join(', ');
-      context.announce(
-        `Saved route${extra.length ? 's' : ''} ${saved}. No upstream request was made.`,
-      );
+      context.announce(`Saved route ${next.name}. No upstream request was made.`);
     },
     'Save route',
   );
-  if (companions.length) form.append(companionLabel);
   const footer = actions(save, button('Cancel', close));
   footer.classList.add('route-form-footer');
   form.append(footer);
@@ -1017,7 +906,7 @@ export function routeForm(
       `Delete route ${route.name}`,
       async () => {
         await api.config(
-          state.revision,
+          state,
           state.routes.filter((r) => r !== route),
         );
         await context.refresh();
@@ -1038,4 +927,34 @@ export function routeForm(
   }
   previewRoute();
   return formRoot;
+}
+
+function allowInput(entries?: string[]): HTMLTextAreaElement {
+  const input = el('textarea');
+  input.value = entries?.join('\n') ?? '';
+  input.rows = 3;
+  input.spellcheck = false;
+  return input;
+}
+
+function allowField(input: HTMLTextAreaElement): HTMLElement {
+  return field(
+    'Allowed requests',
+    input,
+    'One METHOD /prefix or METHOD /prefix/* per line. GET /* allows GET on any path. Leave empty for no allowlist.',
+  );
+}
+
+function readAllow(input: HTMLTextAreaElement): string[] | undefined {
+  const entries = input.value
+    .split('\n')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return entries.length ? entries : undefined;
+}
+
+function isSRVUpstream(value: string): boolean {
+  return /^srv:\/\/_([a-z0-9-]+)\._tcp\.([a-z0-9-]+(?:\.[a-z0-9-]+)*\.?)(?:\/[^?#]*)?$/i.test(
+    value,
+  );
 }

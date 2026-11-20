@@ -218,6 +218,10 @@ type SearchConfig struct {
 	Keenable      SearchKeenableConfig   `mapstructure:"keenable"`
 	DuckDuckGo    SearchDuckDuckGoConfig `mapstructure:"duckduckgo"`
 	Jina          SearchJinaConfig       `mapstructure:"jina"`
+
+	suppressExaMCPKey   bool
+	suppressYouComKey   bool
+	suppressKeenableKey bool
 }
 
 // SearchExaConfig configures Exa search

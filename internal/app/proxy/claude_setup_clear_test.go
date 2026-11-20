@@ -12,21 +12,21 @@ import (
 func TestClaudeSetupClearAllPreservesOtherAccessAndHistory(t *testing.T) {
 	s := testService(t)
 	cookie, csrf := loginAdmin(t, s)
-	claudeSetupAccount(t, s, "claude-code", "chatgpt") // Reserved-looking name is not ownership.
-	other := Route{Name: "claude", Account: "claude-code", LocalPrefix: "/claude/", Upstream: "https://chatgpt.com/backend-api/codex", Enabled: true}
+	claudeSetupAccount(t, s, "claude-bin", "chatgpt") // Reserved-looking name is not ownership.
+	other := Route{Name: "claude", Account: "claude-bin", LocalPrefix: "/claude/", Upstream: "https://chatgpt.com/backend-api/codex", Enabled: true}
 	configure(t, s, Config{Routes: []Route{other}}, nil)
 	first := claudeSetupPost(t, s, cookie, csrf)
 	native := s.snap.routes[1]
-	claudeSetupAccount(t, s, "manual-slot", "claude-code")
-	claudeSetupAccount(t, s, "unused-slot", "claude-code")
+	claudeSetupAccount(t, s, "manual-slot", "claude-bin")
+	claudeSetupAccount(t, s, "unused-slot", "claude-bin")
 	manual := claudeSetupRoute("manual-route", "manual-slot")
 	manual.Enabled = false
 	c := s.snap.config
 	c.Routes = append(append([]Route{}, c.Routes...), manual)
 	c.Accounts = map[string]AccountRef{
-		"manual-slot":  {Kind: "claude-code", File: "synthetic-not-read"},
-		"missing-slot": {Kind: "claude-code", File: "synthetic-not-read"},
-		"claude-code":  {Kind: "chatgpt", File: "synthetic-retained"},
+		"manual-slot":  {Kind: "claude-bin", File: "synthetic-not-read"},
+		"missing-slot": {Kind: "claude-bin", File: "synthetic-not-read"},
+		"claude-bin":   {Kind: "chatgpt", File: "synthetic-retained"},
 	}
 	configure(t, s, c, nil)
 	mixed, mixedToken, err := s.store.createCaller("Mixed client", []string{native.Name, other.Name}, s.snap)
@@ -85,7 +85,7 @@ func TestClaudeSetupClearAllPreservesOtherAccessAndHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	preserved := claudeSetupDBState(t, s, "requests", "money_history", "money_settings", "secrets")
-	otherAccount, err := s.store.account("claude-code")
+	otherAccount, err := s.store.account("claude-bin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestClaudeSetupClearAllPreservesOtherAccessAndHistory(t *testing.T) {
 		if out.Code != 200 || out.Header().Get("Cache-Control") != "no-store" || s.snap.revision != revision+1 {
 			t.Fatalf("clear %d: %d %s", i, out.Code, out.Body.String())
 		}
-		if len(s.snap.routes) != 1 || s.snap.routes[0].Name != other.Name || !reflect.DeepEqual(s.snap.config.Accounts, map[string]AccountRef{"claude-code": c.Accounts["claude-code"]}) {
+		if len(s.snap.routes) != 1 || s.snap.routes[0].Name != other.Name || !reflect.DeepEqual(s.snap.config.Accounts, map[string]AccountRef{"claude-bin": c.Accounts["claude-bin"]}) {
 			t.Fatalf("clear scope incorrect: %+v", s.snap.config)
 		}
 		infos, err := s.store.accountInfos()
@@ -145,7 +145,7 @@ func TestClaudeSetupClearAllPreservesOtherAccessAndHistory(t *testing.T) {
 		if after, err := os.ReadFile(capturePath); err != nil || !reflect.DeepEqual(after, captureBefore) {
 			t.Fatal("debug capture modified", err)
 		}
-		if after, err := s.store.account("claude-code"); err != nil || !reflect.DeepEqual(after, otherAccount) {
+		if after, err := s.store.account("claude-bin"); err != nil || !reflect.DeepEqual(after, otherAccount) {
 			t.Fatal("non-Claude reserved name removed", err)
 		}
 	}

@@ -107,7 +107,17 @@ func Open(opts Options) (*Service, error) {
 	if opts.RetentionDays <= 0 {
 		opts.RetentionDays = 30
 	}
-	st, err := openStore(opts.StateDir)
+	// The operator's file is the source of route identity for a file-mode
+	// upgrade. Parse it before opening SQLite and activate the same snapshot.
+	var file *Config
+	if opts.ConfigFile != "" {
+		c, err := fileConfig(opts.ConfigFile)
+		if err != nil {
+			return nil, err
+		}
+		file = &c
+	}
+	st, err := openStore(opts.StateDir, file)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +157,7 @@ func Open(opts Options) (*Service, error) {
 		}
 		s.rememberAccount(a.Name, a.credentials)
 	}
-	if err = s.activateInitial(); err != nil {
+	if err = s.activateInitial(file); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -166,16 +176,13 @@ func Open(opts Options) (*Service, error) {
 	s.ResponseTap = ObserveResponseUsage
 	return s, nil
 }
-func (s *Service) activateInitial() error {
+func (s *Service) activateInitial(file *Config) error {
 	c, rev, stored, err := s.store.load()
 	if err != nil {
 		return fmt.Errorf("load proxy state: %w", err)
 	}
-	if s.opts.ConfigFile != "" {
-		c, err = fileConfig(s.opts.ConfigFile)
-		if err != nil {
-			return err
-		}
+	if file != nil {
+		c = *file
 	}
 	if err := s.bootstrapAccounts(context.Background(), c); err != nil {
 		return err
@@ -218,17 +225,29 @@ func (s *Service) Close() error {
 	return s.closeErr
 }
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if path, ok := strings.CutPrefix(r.URL.Path, "/_proxy/client/"); ok {
+		switch path {
+		case "v1/whoami":
+			s.whoami(w, r)
+		case "v1/providers":
+			http.Error(w, "proxy discovery v1 was removed; upgrade term-llm", http.StatusGone)
+		case "v2/providers":
+			s.clientProviders(w, r)
+		default:
+			// An unavailable binding is a base URL, so callers can append paths.
+			tail, unavailable := strings.CutPrefix(path, "unavailable/")
+			id, _, _ := strings.Cut(tail, "/")
+			if unavailable && slug.MatchString(id) {
+				http.Error(w, id+" is not granted to this client", http.StatusForbidden)
+			} else {
+				http.NotFound(w, r)
+			}
+		}
+		return
+	}
 	// The management namespace must not fall through to Claude discovery or CONNECT.
 	managed := strings.HasPrefix(r.URL.Path, managePrefix)
 	if !managed && s.claudeForward(w, r) {
-		return
-	}
-	if r.URL.Path == "/_proxy/client/v1/whoami" {
-		s.whoami(w, r)
-		return
-	}
-	if r.URL.Path == "/_proxy/client/v1/providers" {
-		s.clientProviders(w, r)
 		return
 	}
 	if r.URL.Path == "/healthz" {

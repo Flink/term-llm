@@ -151,3 +151,17 @@ func TestHasBaseURLOverrideIgnoresWhitespace(t *testing.T) {
 		}
 	}
 }
+
+func TestHasBaseURLOverrideExaMCPNeedsNonDefaultEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		url  string
+		want bool
+	}{
+		{"", false}, {" ", false}, {config.DefaultSearchExaMCPURL, false}, {" https://gateway.example/exa/mcp ", true},
+	} {
+		cfg := &config.Config{Search: config.SearchConfig{ExaMCP: config.SearchExaMCPConfig{URL: tc.url}}}
+		if got := HasBaseURLOverride(cfg); got != tc.want {
+			t.Errorf("Exa MCP endpoint %q: override=%v", tc.url, got)
+		}
+	}
+}

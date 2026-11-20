@@ -1,68 +1,33 @@
 import type {
+  ProxyAdminRoute,
   ProxyCaller,
-  ProxyPreset,
-  ProxyProviderClientConfig,
-  ProxyRoute,
+  ProxyProvider,
+  ProxyProviderFamily,
   ProxyState,
 } from '../src/api/proxy-client';
 import { el } from './dom';
-import { matchRoutePreset, presetLabel } from './route-presets';
 
-export interface ProviderGroup {
-  id: string;
-  label: string;
-  routes: ProxyRoute[];
-  config?: ProxyProviderClientConfig;
-  config_yaml?: string;
+export const providerFamilies: [ProxyProviderFamily, string][] = [
+  ['inference', 'Inference'],
+  ['search', 'Search'],
+  ['media', 'Media'],
+  ['embeddings', 'Embeddings'],
+];
+
+export interface ProviderGroup extends Omit<ProxyProvider, 'routes'> {
+  routes: ProxyAdminRoute[];
 }
 
 export function providerGroups(state: ProxyState): ProviderGroup[] {
-  const byName = new Map(state.routes.map((route) => [route.name, route]));
-  const groups: ProviderGroup[] = [];
-  for (const provider of state.providers ?? []) {
-    const routes: ProxyRoute[] = [];
-    for (const name of provider.routes) {
-      const route = byName.get(name);
-      if (route) {
-        routes.push(route);
-        byName.delete(name);
-      }
-    }
-    if (routes.length) groups.push({ ...provider, routes });
-  }
-  // A mixed-version response, or a route without a known integration, must
-  // still have its own management surface. Never guess shared ownership here.
-  for (const route of byName.values()) {
-    const preset = matchRoutePreset(route, state);
-    const label = preset && preset.id === route.name ? presetLabel(preset) : route.name;
-    groups.push({ id: route.name, label, routes: [route] });
-  }
-  return groups;
+  const routes = new Map(state.routes.map((route) => [route.name, route]));
+  return state.providers.map((provider) => ({
+    ...provider,
+    routes: provider.routes.flatMap((name) => {
+      const route = routes.get(name);
+      return route ? [route] : [];
+    }),
+  }));
 }
-
-export function writableProviderID(group: ProviderGroup, state: ProxyState): string {
-  // A legacy singleton can share its name with an explicit group.
-  return group.id.startsWith('route:') ? freeProviderID(group.routes[0].name, state) : group.id;
-}
-
-export function freeProviderID(name: string, state: ProxyState): string {
-  const taken = new Set(state.routes.flatMap((route) => [route.name, route.provider]));
-  for (let serial = 1; ; serial++) {
-    const suffix = serial === 1 ? '' : `-${serial}`;
-    const id = `${name.slice(0, 64 - suffix.length)}${suffix}`;
-    if (!taken.has(id)) return id;
-  }
-}
-
-const capabilities: Record<string, string> = {
-  chatgpt: 'Chat, models, images & realtime call setup',
-  'chatgpt-backend': 'Usage & dictation',
-  'chatgpt-openai': 'Embeddings & realtime sideband',
-  'gemini-live': 'Realtime audio',
-  grok: 'Chat, models & plan usage',
-  'grok-bin': 'Grok CLI',
-  openai: 'OpenAI API requests',
-};
 
 export function providerApproval(
   group: ProviderGroup,
@@ -90,22 +55,8 @@ export function approvalSummary(group: ProviderGroup, state: ProxyState): HTMLEl
   return summary;
 }
 
-export function providerRouteLine(
-  route: ProxyRoute,
-  preset: ProxyPreset | undefined,
-  warning: string | undefined,
-  providerLabel: string,
-): HTMLElement {
-  const label = preset ? (capabilities[preset.id] ?? presetLabel(preset)) : route.name;
-  const text = el('span');
-  if (label !== providerLabel) text.append(label);
-  if (warning) {
-    if (text.textContent) text.append(' · ');
-    const issue = el('span', warning);
-    issue.className = 'provider-route-warning';
-    text.append(issue);
-  }
-  const row = el('li', el('code', route.local_prefix), text);
+export function providerRouteLine(route: ProxyAdminRoute): HTMLElement {
+  const row = el('li', el('code', route.local_prefix), el('span', route.serves.join(' · ')));
   row.className = 'provider-route-line';
   row.tabIndex = -1;
   row.dataset.focus = `route:${route.name}`;

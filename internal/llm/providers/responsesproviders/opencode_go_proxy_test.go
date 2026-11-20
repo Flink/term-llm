@@ -46,7 +46,7 @@ func testScopedOpenCodeGoProtocols(t *testing.T, name, separator string) {
 	}))
 	defer gateway.Close()
 	root := gateway.URL + "/" + name
-	if err := proxyclient.Register([]proxyclient.Binding{{Root: root, Token: "scoped-family"}, {Root: root + separator + "messages", Token: "scoped-family"}, {Root: root + separator + "gemini", Token: "scoped-family"}}); err != nil {
+	if err := proxyclient.Register([]proxyclient.Binding{{Root: root, Token: "scoped-family", RelatedRoots: map[string]string{"opencode-go-messages": root + separator + "messages", "opencode-go-gemini": root + separator + "gemini"}}, {Root: root + separator + "messages", Token: "scoped-family"}, {Root: root + separator + "gemini", Token: "scoped-family"}}); err != nil {
 		t.Fatal(err)
 	}
 	provider := newOpenCodeGoProvider("scoped-family", "", root, "", gateway.Client())
@@ -89,7 +89,7 @@ func TestScopedOpenCodeGoMissingProtocolBindingFailsClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			origin := "https://opencode-missing-" + tc.name + ".example.test"
 			root := origin + "/household"
-			bindings := []proxyclient.Binding{{Root: root, Token: "scoped"}}
+			bindings := []proxyclient.Binding{{Root: root, Token: "scoped", RelatedRoots: map[string]string{"opencode-go-messages": root + "/messages", "opencode-go-gemini": root + "/gemini"}}}
 			for _, b := range tc.bindings {
 				b.Root = origin + b.Root
 				bindings = append(bindings, b)
@@ -111,10 +111,10 @@ func TestScopedOpenCodeGoMissingProtocolBindingFailsClosed(t *testing.T) {
 	}
 }
 
-func TestScopedOpenCodeGoNestedRootsTakePrecedenceOverLegacySiblings(t *testing.T) {
+func TestScopedOpenCodeGoUsesExplicitProtocolRoots(t *testing.T) {
 	root := "https://opencode-precedence.example.test/household"
-	var bindings []proxyclient.Binding
-	for _, suffix := range []string{"", "/messages", "/gemini", "-messages", "-gemini"} {
+	bindings := []proxyclient.Binding{{Root: root, Token: "scoped", RelatedRoots: map[string]string{"opencode-go-messages": root + "/messages", "opencode-go-gemini": root + "/gemini"}}}
+	for _, suffix := range []string{"/messages", "/gemini", "-messages", "-gemini"} {
 		bindings = append(bindings, proxyclient.Binding{Root: root + suffix, Token: "scoped"})
 	}
 	if err := proxyclient.Register(bindings); err != nil {
@@ -136,8 +136,8 @@ func TestUnscopedOpenCodeGoKeepsDirectRoot(t *testing.T) {
 
 func TestScopedOpenCodeGoCannotBorrowAncestorProtocolRoots(t *testing.T) {
 	root := "https://opencode-ancestor.example.test/shared"
-	var bindings []proxyclient.Binding
-	for _, suffix := range []string{"", "/messages", "/gemini", "-messages", "-gemini"} {
+	bindings := []proxyclient.Binding{{Root: root, Token: "scoped", RelatedRoots: map[string]string{"opencode-go-messages": root + "/messages", "opencode-go-gemini": root + "/gemini"}}}
+	for _, suffix := range []string{"/messages", "/gemini", "-messages", "-gemini"} {
 		bindings = append(bindings, proxyclient.Binding{Root: root + suffix, Token: "scoped"})
 	}
 	if err := proxyclient.Register(bindings); err != nil {

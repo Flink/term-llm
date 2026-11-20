@@ -11,47 +11,18 @@ import { authLabel, joinLocalPrefix, routeRules } from './route-rules';
 import { providerApproval, type ProviderGroup } from './provider-groups';
 import { callerCurl } from './security';
 
-// Use the built-in CLI name when the route matches its preset, or the provider
-// ID whenever this provider advertises a term-llm client config.
-function termLLMConnection(
-  route: ProxyRoute,
-  origin: string,
-  group?: ProviderGroup,
-): HTMLElement | undefined {
-  if (
-    route.local_prefix === `/${route.name}/` &&
-    route.caller_auth.header.toLowerCase() === 'authorization' &&
-    route.caller_auth.prefix === 'Bearer '
-  ) {
-    const upstream = route.upstream.replace(/\/$/, '');
-    const isChatGPT =
-      route.name === 'chatgpt' && upstream === 'https://chatgpt.com/backend-api/codex';
-    const isVenice = route.name === 'venice' && upstream === 'https://api.venice.ai/api/v1';
-    if (isChatGPT || isVenice) {
-      const yaml = `proxy:\n  url: ${origin}\n  token: file:///run/secrets/proxy-client-token\n  providers: [${route.name}]`;
-      return el(
-        'div',
-        el('h4', 'term-llm client configuration'),
-        el(
-          'p',
-          `Use this top-level block in config.yaml to proxy the built-in ${isChatGPT ? 'ChatGPT' : 'Venice'} provider and its related features. Other providers stay direct. Change the file reference to the private file where you saved this client token.`,
-        ),
-        el('pre', el('code', yaml)),
-      );
-    }
-  }
-  if (!group?.config || group.id.startsWith('route:')) return;
+function termLLMConnection(origin: string, group: ProviderGroup): HTMLElement {
   const yaml = `proxy:\n  url: ${origin}\n  token: file:///run/secrets/proxy-client-token\n  providers: [${group.id}]`;
   const section = el(
     'div',
     el('h4', 'term-llm client configuration'),
     el(
       'p',
-      `Add ${group.id} to proxy.providers in config.yaml to discover this provider’s client config automatically from the proxy. Change the file reference to the private file where you saved this client token.`,
+      `Add ${group.id} to proxy.providers in config.yaml to connect to this provider through the proxy. Other providers stay direct. Change the file reference to the private file where you saved this client token.`,
     ),
     el('pre', el('code', yaml)),
   );
-  const visionRef = group.config.vision_via?.trim();
+  const visionRef = group.config?.vision_via?.trim();
   if (visionRef) {
     const visionProvider = visionRef.split(':')[0];
     section.append(
@@ -66,7 +37,7 @@ function termLLMConnection(
 
 // Keep endpoint instructions separate from approval: the token covers the
 // provider, while individual integrations still need their own base URL.
-function connectionDetails(route: ProxyRoute, group?: ProviderGroup): HTMLElement {
+function connectionDetails(route: ProxyRoute): HTMLElement {
   const rules = routeRules(route);
   if (!rules.length) {
     const details = el(
@@ -77,8 +48,6 @@ function connectionDetails(route: ProxyRoute, group?: ProviderGroup): HTMLElemen
       ),
       el('pre', callerCurl(route, location.origin)),
     );
-    const termLLM = termLLMConnection(route, location.origin, group);
-    if (termLLM) details.append(termLLM);
     return details;
   }
   // A unified route has no parent client auth; each subpath declares which
@@ -333,9 +302,8 @@ export function providerAccess(
       ),
       field('Client token', token),
       copy,
-      ...group.routes.map((route, index) =>
-        connectionDetails(route, index === 0 ? group : undefined),
-      ),
+      termLLMConnection(location.origin, group),
+      ...group.routes.map(connectionDetails),
       el(
         'p',
         'For curl examples, set TOKEN in your shell to this client token, not the administrator token.',

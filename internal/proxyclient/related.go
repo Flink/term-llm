@@ -1,23 +1,44 @@
 package proxyclient
 
-import "strings"
+import (
+	"fmt"
+	"net/url"
+)
 
-// Related returns another explicitly registered route of the same proxy and
-// principal. It never constructs an unregistered target or widens a grant.
-func Related(endpoint, route string) (Binding, bool) {
+func canonicalRelatedRoots(source string, roots map[string]string) (map[string]string, error) {
+	if len(roots) == 0 {
+		return nil, nil
+	}
+	from, _ := url.Parse(source)
+	out := make(map[string]string, len(roots))
+	for profile, endpoint := range roots {
+		root, err := canonicalRoot(endpoint)
+		if err != nil || profile == "" {
+			return nil, fmt.Errorf("invalid delegated companion binding")
+		}
+		to, _ := url.Parse(root)
+		if from.Scheme != to.Scheme || from.Host != to.Host {
+			return nil, fmt.Errorf("delegated companion must share the proxy origin")
+		}
+		out[profile] = root
+	}
+	return out, nil
+}
+
+// Related returns the binding for a companion explicitly associated with the
+// source root, of the same proxy, credential kind and principal. It never
+// infers ownership from a route's mount path.
+func Related(endpoint, profile string) (Binding, bool) {
 	source, ok := Lookup(endpoint)
 	if !ok {
 		return Binding{}, false
 	}
-	i := strings.LastIndex(source.Root, "/")
-	if i < 0 {
+	root := source.RelatedRoots[profile]
+	if root == "" {
 		return Binding{}, false
 	}
-	target := source.Root[:i+1] + route
-	registry.RLock()
-	defer registry.RUnlock()
-	b, ok := registry.bindings[target]
-	return b, ok && b.Token == source.Token && b.Kind == source.Kind
+	b, ok := Lookup(root)
+	return b, ok && b.Root == root && b.Token == source.Token && b.Kind == source.Kind
 }
 
 // KindActive lets unscoped metadata-only paths avoid reading a local vendor

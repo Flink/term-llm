@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -249,10 +251,18 @@ func (s *Service) adminAPI(w http.ResponseWriter, r *http.Request, path string, 
 		s.parseProviderConfig(w, r)
 	case path == "state" && r.Method == "GET":
 		s.state(w, sess)
+	case path == "providers" && r.Method == http.MethodPost:
+		s.createProvider(w, r)
+	case strings.HasPrefix(path, "providers/") && (r.Method == http.MethodPut || r.Method == http.MethodDelete):
+		s.changeProvider(w, r, strings.TrimPrefix(path, "providers/"))
+	case path == "defaults" && r.Method == http.MethodPut:
+		s.updateDefaults(w, r)
 	case path == "config" && r.Method == "PUT":
 		var in struct {
 			Revision           int64                `json:"revision"`
 			Routes             []Route              `json:"routes"`
+			Providers          map[string]Provider  `json:"providers"`
+			Defaults           map[string]string    `json:"defaults"`
 			Secrets            map[string]SecretRef `json:"secrets"`
 			Money              *MoneySettings       `json:"money,omitempty"`
 			ProviderConfigYAML map[string]string    `json:"provider_config_yaml,omitempty"`
@@ -266,7 +276,7 @@ func (s *Service) adminAPI(w http.ResponseWriter, r *http.Request, path string, 
 			if in.Money != nil {
 				money = *in.Money
 			}
-			s.updateConfigWithProviders(w, Config{Routes: in.Routes, Secrets: in.Secrets, Money: money}, in.Revision, in.ProviderConfigYAML)
+			s.commitConfig(w, Config{Routes: in.Routes, Providers: in.Providers, Defaults: in.Defaults, Secrets: in.Secrets, Money: money}, in.Revision, in.ProviderConfigYAML)
 		}
 	case path == "import" && r.Method == "POST":
 		var in struct {
@@ -276,7 +286,7 @@ func (s *Service) adminAPI(w http.ResponseWriter, r *http.Request, path string, 
 		if !readJSON(w, r, &in) {
 			return
 		}
-		c, err := decodeConfig([]byte(in.YAML))
+		c, err := decodeCurrentConfig([]byte(in.YAML))
 		if err != nil {
 			fail(w, 400, err.Error())
 			return
@@ -363,30 +373,24 @@ func (s *Service) state(w http.ResponseWriter, sess session) {
 		return
 	}
 	type secretInfo struct {
-		Name   string `json:"name"`
-		Origin string `json:"origin"`
-		Source string `json:"source"`
+		Name   string   `json:"name"`
+		Source string   `json:"source"`
+		Routes []string `json:"routes"`
 	}
-	secrets := []secretInfo{}
-	seen := map[string]bool{}
-	for name, m := range s.snap.secrets {
-		source := "stored"
-		if s.snap.config.Secrets[name].File != "" {
-			source = "file"
-		}
-		secrets = append(secrets, secretInfo{name, m.Origin, source})
-		seen[name] = true
-	}
-	// Include unreferenced stored entries in operator mode without activating them.
 	stored, err := s.store.materials()
 	if err != nil {
 		fail(w, 503, "Could not read secret metadata")
 		return
 	}
-	for name, m := range stored {
-		if !seen[name] {
-			secrets = append(secrets, secretInfo{name, m.Origin, "stored"})
+	maps.Copy(stored, s.snap.secrets)
+	used := routeSecretReferences(s.snap.config.Routes)
+	secrets := make([]secretInfo, 0, len(stored))
+	for _, name := range slices.Sorted(maps.Keys(stored)) {
+		source := "stored"
+		if s.snap.config.Secrets[name].File != "" {
+			source = "file"
 		}
+		secrets = append(secrets, secretInfo{name, source, used[name]})
 	}
 	mode := "ui"
 	if s.opts.ConfigFile != "" {
@@ -402,36 +406,40 @@ func (s *Service) state(w http.ResponseWriter, sess session) {
 		fail(w, 503, "Money settings unavailable")
 		return
 	}
-	jsonReply(w, 200, map[string]any{"has_requests": hasRequests, "accounts": accounts, "money": money, "mode": mode, "auth": s.opts.Auth, "revision": s.snap.revision, "routes": s.snap.config.Routes, "providers": attachProviderConfigs(providerGroups(s.snap.config.Routes, accounts), s.snap.config.Providers), "secrets": secrets, "callers": callers, "admin_keys": adminKeys, "csrf": sess.csrf, "retention_days": s.opts.RetentionDays, "presets": routePresets})
+	providers, routes := s.snap.adminProviders(accounts)
+	jsonReply(w, 200, map[string]any{"has_requests": hasRequests, "accounts": accounts, "money": money, "mode": mode, "auth": s.opts.Auth, "revision": s.snap.revision, "routes": routes, "providers": providers, "defaults": s.snap.config.Defaults, "secrets": secrets, "callers": callers, "admin_keys": adminKeys, "csrf": sess.csrf, "retention_days": s.opts.RetentionDays, "presets": routePresets})
 }
 func (s *Service) updateConfig(w http.ResponseWriter, c Config, revision int64) {
-	s.commitConfig(w, c, revision, false, nil)
+	s.commitConfig(w, c, revision, nil)
 }
-func (s *Service) updateConfigWithProviders(w http.ResponseWriter, c Config, revision int64, providerUpdates map[string]string) {
-	s.commitConfig(w, c, revision, true, providerUpdates)
+
+// The caller holds s.mu while checking and committing a config mutation.
+func (s *Service) checkConfigEdit(w http.ResponseWriter, revision int64) bool {
+	switch {
+	case s.opts.ConfigFile != "":
+		fail(w, 409, "Routes are operator-managed; edit the mounted file and Reload")
+	case revision != s.snap.revision:
+		fail(w, 409, "Configuration changed in another tab; refresh before saving")
+	default:
+		return true
+	}
+	return false
 }
-func (s *Service) commitConfig(w http.ResponseWriter, c Config, revision int64, mergeProviders bool, providerUpdates map[string]string) {
+
+func (s *Service) commitConfig(w http.ResponseWriter, c Config, revision int64, providerUpdates map[string]string) {
 	if len(c.Accounts) > 0 {
 		fail(w, 400, "Account bootstrap references are operator-file-only")
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.opts.ConfigFile != "" {
-		fail(w, 409, "Routes are operator-managed; edit the mounted file and Reload")
+	if !s.checkConfigEdit(w, revision) {
 		return
 	}
-	if revision != s.snap.revision {
-		fail(w, 409, "Configuration changed in another tab; refresh before saving")
+	pruneDeletedRoutes(&c, s.snap.config.Routes)
+	if err := mergeProviderConfigUpdates(c.Providers, providerUpdates); err != nil {
+		fail(w, 400, err.Error())
 		return
-	}
-	if mergeProviders {
-		providers, err := mergeProviderConfigUpdates(s.snap.config.Providers, providerUpdates, c.Routes)
-		if err != nil {
-			fail(w, 400, err.Error())
-			return
-		}
-		c.Providers = providers
 	}
 	stored, err := s.store.materials()
 	if err != nil {
@@ -550,7 +558,6 @@ func (s *Service) requestOutcomes(records []Record) {
 
 type secretInput struct {
 	Name    string `json:"name"`
-	Origin  string `json:"origin,omitempty"`
 	Value   string `json:"value,omitempty"`
 	Replace bool   `json:"replace,omitempty"`
 }
@@ -600,9 +607,9 @@ func (s *Service) changeSecret(w http.ResponseWriter, r *http.Request) {
 	} else {
 		m := stored[in.Name]
 		if in.Replace {
-			_, err = tx.Exec("UPDATE secrets SET value=? WHERE name=? AND origin=?", m.Value, in.Name, m.Origin)
+			_, err = tx.Exec("UPDATE secrets SET value=? WHERE name=?", m.Value, in.Name)
 		} else {
-			_, err = tx.Exec("INSERT INTO secrets VALUES(?,?,?)", in.Name, m.Origin, m.Value)
+			_, err = tx.Exec("INSERT INTO secrets (name,value) VALUES(?,?)", in.Name, m.Value)
 		}
 	}
 	if err == nil {
@@ -641,23 +648,23 @@ func (s *Service) prepareSecretChange(in secretInput, deleting bool, stored map[
 		if !exists && in.Replace {
 			return 409, inputError("Secret no longer exists; refresh before replacing it")
 		}
-		origin, e := secretOrigin(in.Origin)
-		if e != nil || (in.Value == "" || len(in.Value) > 16<<10 || strings.ContainsAny(in.Value, "\r\n\x00")) {
-			return 400, inputError("Enter a valid upstream origin and a nonempty single-line secret (maximum 16 KiB)")
-		}
-		if old, ok := stored[in.Name]; ok && old.Origin != origin {
-			return 409, inputError("Existing secrets cannot change origin; use a new secret name")
+		if !validSecretValue(in.Value) {
+			return 400, inputError("Enter a nonempty single-line secret (maximum 16 KiB)")
 		}
 		if len(stored) >= 256 && stored[in.Name].Value == "" {
 			return 409, inputError("Secret limit reached")
 		}
-		stored[in.Name] = material{Origin: origin, Value: in.Value}
+		stored[in.Name] = material{Value: in.Value}
 	}
 	return 0, nil
 }
 
+func validSecretValue(value string) bool {
+	return value != "" && len(value) <= 16<<10 && !strings.ContainsAny(value, "\r\n\x00")
+}
+
 // Stored-secret edits do not implicitly reload operator-owned file credentials.
-// Their already validated bindings/bytes remain active until explicit Reload.
+// Their already validated bytes remain active until explicit Reload.
 func (s *Service) updatedSecretMaterials(stored map[string]material) (map[string]material, error) {
 	c := s.snap.config
 	if s.opts.ConfigFile == "" {

@@ -13,7 +13,7 @@ func TestNativeSetupProviderSeparation(t *testing.T) {
 	s := testService(t)
 	// A reserved-looking name is not evidence of the kind of any account.
 	claudeSetupAccount(t, s, "agy-bin", "chatgpt")
-	claudeSetupAccount(t, s, "claude-code", "chatgpt")
+	claudeSetupAccount(t, s, "claude-bin", "chatgpt")
 	cookie, csrf := loginAdmin(t, s)
 	claude := claudeSetupPost(t, s, cookie, csrf)
 	agy := nativeSetupPost(t, s, "agy/setup", cookie, csrf, "create", "")
@@ -21,7 +21,7 @@ func TestNativeSetupProviderSeparation(t *testing.T) {
 		t.Fatalf("setup created %d routes", len(s.snap.routes))
 	}
 	claudeRoute, agyRoute := s.snap.routes[0], s.snap.routes[1]
-	if claudeRoute.Account != "claude-code-2" || agyRoute.Account != "agy-bin-2" || agyRoute.Name != "agy-bin-2" ||
+	if claudeRoute.Account != "claude-bin-2" || agyRoute.Account != "agy-bin-2" || agyRoute.Name != "agy-bin-2" ||
 		agyRoute.Upstream != "https://daily-cloudcode-pa.googleapis.com" || agyRoute.Billing != "plan" ||
 		agyRoute.CallerAuth != (Auth{Header: "Authorization", Prefix: "Bearer "}) || !strings.HasSuffix(agy.URL, "/agy-bin-2/") {
 		t.Fatalf("unexpected route binding: %+v %+v", claudeRoute.Route, agyRoute.Route)

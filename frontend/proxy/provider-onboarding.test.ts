@@ -1,10 +1,13 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { fireEvent, getByLabelText, getByRole, waitFor } from '@testing-library/preact';
-import { ProxyClient, type ProxyRoute, type ProxyState } from '../src/api/proxy-client';
+import { ProxyClient, type ProxyAdminRoute, type ProxyState } from '../src/api/proxy-client';
 import { providerOnboarding, providerRouteAction } from './provider-onboarding';
 import type { UIContext } from './dom';
 
-const route: ProxyRoute = {
+const route: ProxyAdminRoute = {
+  serves: [],
+  profile: '',
+  provider: 'chatgpt-work',
   name: 'chatgpt-work',
   account: 'work',
   local_prefix: '/chatgpt-work/',
@@ -15,6 +18,7 @@ const route: ProxyRoute = {
   set_headers: {},
 };
 const preset = {
+  family: 'inference' as const,
   id: 'chatgpt',
   label: 'ChatGPT plan',
   upstream: route.upstream,
@@ -30,6 +34,8 @@ afterEach(() => {
 
 function fixture(reconnect = false) {
   const state: ProxyState = {
+    defaults: null,
+    providers: [],
     auth: 'token',
     mode: 'ui',
     revision: 1,
@@ -81,7 +87,7 @@ it('starts with an optional name, waits for OpenAI approval, then refreshes to t
     .mockResolvedValueOnce({ status: 'connected', route: route.name });
   const createCaller = vi.spyOn(api, 'createCaller');
   (view.querySelector('details') as HTMLDetailsElement).open = true;
-  fireEvent.input(getByLabelText(view, 'Route name'), { target: { value: route.name } });
+  fireEvent.input(getByLabelText(view, 'Provider name'), { target: { value: route.name } });
   vi.useFakeTimers();
   fireEvent.click(getByRole(view, 'button', { name: 'Sign in to ChatGPT' }));
   await vi.advanceTimersByTimeAsync(0);

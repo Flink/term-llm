@@ -111,7 +111,7 @@ func TestOnboardingCompletionStateMetadataIsPrivate(t *testing.T) {
 	s := testService(t)
 	cookie, csrf := loginAdmin(t, s)
 	const secret = "private-upstream-credential"
-	out := adminRequest(s, "PUT", "secrets", map[string]string{"name": "key", "origin": "https://example.test", "value": secret}, cookie, csrf)
+	out := adminRequest(s, "PUT", "secrets", map[string]string{"name": "key", "value": secret}, cookie, csrf)
 	if out.Code != http.StatusOK {
 		t.Fatal(out.Code, out.Body.String())
 	}

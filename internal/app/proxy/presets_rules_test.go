@@ -47,7 +47,7 @@ func TestOpenCodeGoPresetRules(t *testing.T) {
 		t.Fatalf("preset JSON roundtrip: %s: %v", data, err)
 	}
 	r := presetRoute(p, "")
-	snap, err := compile(Config{Routes: []Route{r}}, 1, map[string]material{"key": boundMaterial(t, want[0].Upstream, "one-vendor-key")})
+	snap, err := compile(fixtureProviders(Config{Routes: []Route{r}}), 1, map[string]material{"key": boundMaterial(t, want[0].Upstream, "one-vendor-key")})
 	if err != nil {
 		t.Fatal(err)
 	}

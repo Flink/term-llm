@@ -61,7 +61,7 @@ func TestProxyRunClaudeAcceptsNativeFlagsOnlyAfterSeparator(t *testing.T) {
 	// A native flag before -- is a term-llm parse error; after -- it is
 	// forwarded. No metadata request is made because the explicit binding is
 	// rejected before any network call.
-	root.SetArgs([]string{"run", "claude", "--url", "https://127.0.0.1:1/claude-code", "--token", "sk-ant-vendor-credential", "--", "--resume"})
+	root.SetArgs([]string{"run", "claude", "--url", "https://127.0.0.1:1/claude-bin", "--token", "sk-ant-vendor-credential", "--", "--resume"})
 	err := root.Execute()
 	if err == nil || !strings.Contains(err.Error(), "scoped proxy client token") {
 		t.Fatalf("vendored token or native argument handling changed: %v", err)

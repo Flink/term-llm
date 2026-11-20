@@ -1,20 +1,13 @@
-package proxy
+package legacyconfig
 
-import (
-	"strconv"
-	"strings"
+import "strings"
 
-	"github.com/term-llm/term-llm/internal/proxyprofile"
-)
-
-// providerGroup groups routes for the admin UI and approval expansion. IDs and
-// membership are never persisted as grants or used for forwarding.
+// The v8 grouping and endpoint matcher are retained for migration only.
+// In particular native routes match by account kind and cannot be grouped,
+// and ambiguous buckets with repeated roles stay entirely unmerged.
 type providerGroup struct {
-	ID         string                             `json:"id"`
-	Label      string                             `json:"label"`
-	Routes     []string                           `json:"routes"`
-	Config     *proxyprofile.ClientProviderConfig `json:"config,omitempty"`
-	ConfigYAML string                             `json:"config_yaml,omitempty"`
+	ID, Label string
+	Routes    []string
 }
 
 type providerGroupKey struct {
@@ -29,19 +22,16 @@ type providerGroupBucket struct {
 	index     int
 }
 
-func providerGroups(routes []Route, accounts []AccountInfo) []providerGroup {
-	kinds := make(map[string]string, len(accounts))
-	for _, account := range accounts {
-		kinds[account.Name] = account.Kind
-	}
-	families := providerPresetFamilies()
+func providerGroups(routes []route, kinds map[string]string, families map[string]*routePreset) ([]providerGroup, []*routePreset) {
 	rows := make([]providerGroup, len(routes))
+	matched := make([]*routePreset, len(routes))
 	membership := make([]providerGroupKey, len(routes))
 	buckets := make(map[providerGroupKey]*providerGroupBucket)
 	chatGPTAccounts := make(map[string]string)
 	for i, route := range routes {
 		rows[i] = providerGroup{ID: route.Name, Label: route.Name, Routes: []string{route.Name}}
 		preset, credential := matchProviderPreset(route, kinds[route.Account], families)
+		matched[i] = preset
 		if preset != nil {
 			rows[i].Label = providerPresetLabel(preset)
 			if preset.AccountKind == "chatgpt" {
@@ -72,7 +62,7 @@ func providerGroups(routes []Route, accounts []AccountInfo) []providerGroup {
 	}
 	groups := mergeProviderGroups(rows, membership, buckets)
 	distinguishChatGPTGroups(groups, chatGPTAccounts)
-	return groups
+	return groups, matched
 }
 
 func mergeProviderGroups(rows []providerGroup, membership []providerGroupKey, buckets map[providerGroupKey]*providerGroupBucket) []providerGroup {
@@ -145,23 +135,6 @@ func distinguishChatGPTGroups(groups []providerGroup, accounts map[string]string
 	}
 }
 
-// Guided setup normally uses the new route's name. An existing explicit group
-// can still own that slug after its anchor was removed; pick a fresh grouping
-// slug rather than attaching to that group or changing route-slot semantics.
-func unusedProviderSlug(routes []Route, name string) string {
-	taken := make(map[string]bool, len(routes)*2)
-	for _, route := range routes {
-		taken[route.Name] = true
-		taken[route.Provider] = true
-	}
-	id := name
-	for n := 2; taken[id]; n++ {
-		suffix := "-" + strconv.Itoa(n)
-		id = name[:min(len(name), 64-len(suffix))] + suffix
-	}
-	return id
-}
-
 func providerPresetFamilies() map[string]*routePreset {
 	families := make(map[string]*routePreset)
 	for i := range routePresets {
@@ -177,7 +150,7 @@ func providerPresetFamilies() map[string]*routePreset {
 	return families
 }
 
-func matchProviderPreset(route Route, kind string, families map[string]*routePreset) (*routePreset, string) {
+func matchProviderPreset(route route, kind string, families map[string]*routePreset) (*routePreset, string) {
 	if route.Account != "" && kind == "" {
 		return nil, "" // An unknown account is not a static API key.
 	}
@@ -188,7 +161,7 @@ func matchProviderPreset(route Route, kind string, families map[string]*routePre
 		if kind != preset.AccountKind {
 			continue
 		}
-		if kind != "" && nativeProviderForKind(kind) != nil {
+		if kind != "" && legacyNative(kind) {
 			return preset, "" // Legacy native routes can be labeled but never grouped.
 		}
 		ref, ok := providerPresetCredential(route, preset)
@@ -212,7 +185,7 @@ func matchProviderPreset(route Route, kind string, families map[string]*routePre
 	return match, credential
 }
 
-func providerPresetCredential(route Route, preset *routePreset) (string, bool) {
+func providerPresetCredential(route route, preset *routePreset) (string, bool) {
 	if len(route.Rules) != len(preset.Rules) {
 		return "", false
 	}
@@ -244,7 +217,7 @@ func samePresetEndpoint(saved, preset string) bool {
 	return preset != "" && strings.TrimSuffix(saved, "/") == strings.TrimSuffix(preset, "/")
 }
 
-func presetCredentialRef(account string, headers map[string]HeaderRule, auth Auth) (string, bool) {
+func presetCredentialRef(account string, headers map[string]headerRule, auth auth) (string, bool) {
 	if account != "" || auth.Header == "" {
 		return account, len(headers) == 0
 	}
@@ -257,4 +230,8 @@ func presetCredentialRef(account string, headers map[string]HeaderRule, auth Aut
 		}
 	}
 	return "", false
+}
+
+func legacyNative(kind string) bool {
+	return kind == "claude-code" || kind == "agy-bin"
 }

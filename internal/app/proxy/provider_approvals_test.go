@@ -17,7 +17,14 @@ type issuedBrowserCaller struct {
 }
 
 func approvalRoute(name, provider string) Route {
-	return Route{Name: name, LocalPrefix: "/" + name + "/", Upstream: "https://upstream.example/" + name, Enabled: true, Provider: provider}
+	var profile string
+	if provider == "service" {
+		profile = "gemini"
+		if name == "live" {
+			profile = "gemini-live"
+		}
+	}
+	return Route{Name: name, Profile: profile, LocalPrefix: "/" + name + "/", Upstream: "https://upstream.example/" + name, Enabled: true, Provider: provider}
 }
 
 func TestProviderApprovalDeltas(t *testing.T) {
@@ -137,7 +144,6 @@ func TestNativeSetupApprovesEntireCompatibleProvider(t *testing.T) {
 			cookie, csrf := loginAdmin(t, s)
 			nativeSetupPost(t, s, path, cookie, csrf, "create", "")
 			anchor := s.snap.routes[0].Route
-			anchor.Provider = "device"
 			sibling := anchor
 			sibling.Name, sibling.LocalPrefix = "sibling", "/sibling/"
 			configure(t, s, Config{Routes: []Route{anchor, sibling}}, nil)
@@ -168,7 +174,6 @@ func TestNativeSetupOperatorGrantsOnlyEnrollmentRoute(t *testing.T) {
 	cookie, csrf := loginAdmin(t, s)
 	proxyResponse[nativeSetupReply](t, adminRequest(s, "POST", "claude/setup", map[string]any{"revision": s.snap.revision, "shared_action": "create"}, cookie, csrf), 201)
 	anchor := s.snap.routes[0].Route
-	anchor.Provider = "device"
 	other := claudeSetupPost(t, s, cookie, csrf)
 	second := s.snap.routes[1].Route
 	second.Provider = anchor.Provider

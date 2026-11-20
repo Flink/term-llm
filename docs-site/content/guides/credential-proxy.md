@@ -36,14 +36,27 @@ Remote administration requires a stable HTTPS hostname and explicit enrollment.
 
 ## Providers and client approvals
 
-**Providers** groups related routes on one card. The card heading names the
-provider and is followed by one compact status. Each route line shows only the
-local prefix and any condition such as **Disabled**. The card also shows one
-approval summary. **Manage** holds the provider account, **Approve access for**
-the provider, and each route's edit, enable or disable controls plus
-provider-specific settings. Once any client is approved, including a legacy
-partial approval, that control is labeled **Manage access for** the provider.
-One connected account is shown once even when several routes use it.
+A provider is a stored entry with a unique name, a display label, and one or
+more routes. Use the exact name, not the label or family, in `proxy.providers`.
+Presets group routes that share a key or account: for example, Exa REST and Exa
+MCP are two routes of provider `exa`. Each provider belongs to one family:
+**Inference**, **Search**, **Media** or **Embeddings**. The family groups
+providers; it does not limit which features their routes serve. Search, media
+and embeddings presets use their canonical provider names. Inference can have
+separately named providers such as `chatgpt-work`.
+
+The server computes one status dot across a provider's routes, including subpath
+rules. If several conditions apply, the first matching row wins:
+
+| Dot | Reason |
+| --- | --- |
+| Red | **API key missing** (even on a disabled route), **Sign-in needed** (account not ready or refreshing, or a token-only account has expired), or **Migration needed** (legacy native account), in that order. |
+| Grey | **Disabled** — all routes are disabled. |
+| Orange | **Refreshing sign-in**, **Unencrypted upstream** (an enabled route uses HTTP outside loopback), or **Partly disabled**, in that order. |
+| Green | None of the above. |
+
+The dot describes the active configuration, not upstream connectivity or client
+approval. Save and reload errors are reported separately.
 
 Client approval applies to the whole configured provider. Approving a client
 authorizes every route the provider has at that moment; it never authorizes a
@@ -59,13 +72,9 @@ for other providers stay unchanged.
 Grouping never widens access and does not change routing. An **OpenAI API**
 provider keeps its own API key and approval even when it targets
 `api.openai.com` like the ChatGPT OAuth embeddings route. Existing `?tab=routes`
-bookmarks still open **Providers**. Route names, URLs, and the public management
-API are unchanged and remain route-based. Existing YAML works as is; to group
-custom routes in a file, give them the same optional `provider` slug. In the UI,
-use **Manage → Add route** to add a route to an existing provider.
+bookmarks still open **Providers**. The public management API is route-based.
 
-## Global proxy settings and explicit native launch
-
+## Share a ChatGPT subscription
 
 1. Choose **Providers → Add provider → ChatGPT**, then **Sign in to ChatGPT**.
 2. Open the OpenAI sign-in page from the proxy, enter the one-time code and
@@ -84,7 +93,7 @@ embeddings, and realtime sideband, and one approval covers all of them. If a
 route is added later, approve the provider again for clients that need it. A
 ChatGPT subscription is separate from the **OpenAI API** key preset. To route
 only ChatGPT through the proxy in term-llm, [configure the client allowlist](#using-term-llm-as-a-client)
-with the canonical `/chatgpt/` route.
+with `providers: [chatgpt]`.
 
 ## Run native Claude Code through the proxy
 
@@ -104,8 +113,8 @@ Clients share its limits, so only approve devices you trust.
    the subscription credentials; workers do not get them. Keep the operator
    launcher private and do not give it to a worker.
 3. Dismiss the one-time launcher after saving it securely. Use **Refresh** on
-   **Providers** after finishing sign-in. When the route says **Shared Claude
-   subscription ready**, open **Manage** and click **Add device**.
+   **Providers** after finishing sign-in. Once the shared subscription is ready, open
+   **Manage** and click **Add device**.
    Run that command on the worker with an updated `term-llm`. The worker uses the
    proxy’s shared sign-in without opening a browser. Issue a separate launcher
    for each worker so you can remove its access without signing out Claude or
@@ -130,7 +139,7 @@ For example, using a private token file:
 providers:
   claude-bin:
     proxy:
-      url: https://proxy.example.test/claude-code/
+      url: https://proxy.example.test/claude-bin/
       token: file:///run/secrets/claude-proxy-token
 ```
 
@@ -214,8 +223,8 @@ only on loopback.
    to sign in with your personal Google account. If `agy` prints a sign-in link,
    open it in your own browser. Do not share the operator launcher with workers.
 3. Dismiss the one-time launcher after saving it securely. Refresh **Providers**
-   after signing in. When the route says **Shared Antigravity subscription ready**,
-   open **Manage** and click **Add device** to issue a separate
+   after signing in. Once the shared subscription is ready, open **Manage**
+   and click **Add device** to issue a separate
    launcher for each worker. Run it as shown, without `-- acp --login`. Workers
    use the shared subscription and its limits without signing in to Google.
 4. Open **Manage** and click **Get operator sign-in launcher** or **Reconnect** if
@@ -333,9 +342,9 @@ complete across restarts and history cleanup. Route YAML download and
 replacement live under **Admin**, not Providers.
 
 Presets supply editable creation defaults, not vendor guarantees or discovery.
-Existing routes do not change when presets change. Available families include
-API-key inference/media/search services, account integrations for ChatGPT, Grok and
-Copilot, Bedrock signing, Ollama and configurable compatible servers. OpenCode Go
+Existing routes do not change when presets change. Inference presets include
+API-key services, account integrations for ChatGPT, Grok and Copilot, Bedrock
+signing, Ollama and configurable compatible servers. OpenCode Go
 uses one consolidated route for Chat/Responses, Messages and Gemini; clients
 retain its client/session headers. Bedrock requires the regional runtime matching
 its account.
@@ -412,6 +421,33 @@ reapprove before switching those clients. Explicitly manually registered legacy
 sibling roots remain compatible when bound to the same client principal; missing
 protocol roots fail closed rather than contacting a public vendor endpoint.
 
+### Search and fetch presets
+
+Add one provider and approve its current routes for the client. Exa and Jina each
+have two routes that use the same named secret. Jina is listed under
+**Embeddings** even though its Reader route serves page fetch. If you add
+`jina-reader` to an existing Jina provider, approve it for clients that need it;
+existing embedding grants do not cover Reader.
+
+| Provider | Route profile | Upstream | Credential header | Client slot and selector | Preset `allow` |
+| --- | --- | --- | --- | --- | --- |
+| `exa` | `exa` | `https://api.exa.ai` | `x-api-key` | search: `exa` | `POST /search` |
+| `exa` | `exa-mcp` | `https://mcp.exa.ai` | `x-api-key` | search, fetch: `exa_mcp` | `POST /mcp`, `GET /mcp`, `DELETE /mcp` |
+| `brave` | `brave` | `https://api.search.brave.com/res/v1` | `X-Subscription-Token` | search: `brave` | `GET /web/search` |
+| `tavily` | `tavily` | `https://api.tavily.com` | `Authorization: Bearer` | search: `tavily` | `POST /search` |
+| `perplexity` | `perplexity` | `https://api.perplexity.ai` | `Authorization: Bearer` | search: `perplexity` | `POST /search` |
+| `parallel` | `parallel` | `https://api.parallel.ai/v1` | `x-api-key` | search: `parallel` | `POST /search` |
+| `youcom` | `youcom` | `https://ydc-index.io/v1` | `X-API-Key` | search: `youcom` | `POST /search` |
+| `keenable` | `keenable` | `https://api.keenable.ai/v1` | `X-API-Key` | search: `keenable` | `POST /search` |
+| `jina` | `jina` | `https://api.jina.ai/v1` | `Authorization: Bearer` | embed: `jina` | Unrestricted by `allow` |
+| `jina` | `jina-reader` | `https://r.jina.ai` | `Authorization: Bearer` | fetch: `jina` | `GET /*` |
+
+For manual clients, use the scoped proxy token in the listed credential header;
+the proxy substitutes the vendor key. Term-llm fills in these settings from
+discovery, including the `/mcp` suffix on the Exa MCP endpoint. An Exa MCP grant
+covers the endpoint, not individual MCP tools. DuckDuckGo and Google Custom
+Search do not have proxy presets.
+
 ## Trusted accounts
 
 Under **Providers**, open **Manage** on a provider and choose **Edit → Advanced**;
@@ -449,60 +485,87 @@ A different existing kind rejects startup. The Admin UI cannot introduce files.
 
 ## Using term-llm as a client
 
-To proxy only built-in ChatGPT, add this top-level block to the client's
-`config.yaml`. The proxy shows this example when you create a client for the
-ChatGPT provider. Use the proxy origin, not the `/chatgpt/` route URL, and point
-`token` at a private file containing the scoped client token.
+Use a top-level `proxy:` block in the client's `config.yaml`. Set `url` to the
+proxy root, not a provider route URL, and use the scoped client token for the
+routes you want to use:
 
 ```yaml
 proxy:
   url: https://proxy.example.test
   token: file:///run/secrets/proxy-client-token
-  providers: [chatgpt]
+  providers: [claude-bin, chatgpt, exa]
 ```
 
-`proxy.providers` is an exact allowlist. `chatgpt` selects built-in ChatGPT and
-its related features, including those that use `/chatgpt-backend/` (usage and
-dictation) or `/chatgpt-openai/` (embeddings and realtime sideband). Approve the
-ChatGPT provider once for the client; that covers every route the provider has
-at approval time. If you add a route later, approve the provider again for
-clients that need it. Other providers, including named providers of type
-`chatgpt`, keep using their own endpoints and credentials.
+- `proxy.providers` is an allowlist. A provider name selects its granted routes,
+  including companions: `exa` covers Exa REST and MCP; `chatgpt` covers its chat,
+  usage, dictation, embeddings and realtime routes. To use only ChatGPT, set
+  `providers: [chatgpt]`. For media or embeddings, list the provider name, such
+  as `flux` or `jina`. A named inference provider such as `chatgpt-work` does
+  not bind global feature settings such as `image.chatgpt.*`.
+- Unlisted integrations stay direct. `providers: []` selects nothing in the
+  top-level block. Omit `providers` for **proxy-all** mode; use `proxy.direct`
+  in that mode to keep named integrations direct. A nonempty `proxy.direct`
+  conflicts with any explicit `proxy.providers` list, even an empty one.
+- Parent names in `proxy.providers` and `proxy.direct` also cover their built-in
+  companions when routes are missing. For example, if you list `exa` and only
+  `exa-mcp` is granted, Exa REST stays unavailable instead of going direct.
 
-- To proxy a configured named provider, list its exact configuration name. This
-  selects only that provider, not other providers of the same type or their
-  ancillary integrations. The named provider uses its own `/<name>/` route.
-- To proxy a media-only integration, list its route ID, for example `flux`.
-- `providers: []` selects nothing. Omit `providers` to keep the legacy behavior:
-  proxy all supported integrations except those listed in `proxy.direct`.
-  A nonempty `proxy.direct` conflicts with any explicit `proxy.providers` list,
-  even an empty one.
+Selected integrations use the advertised route and scoped proxy token instead
+of local vendor keys or custom API roots. Missing routes that must stay proxied
+use `/_proxy/client/unavailable/<id>`, which always returns `403` without
+forwarding. In proxy-all mode, keyed search, media and embeddings integrations
+stay bound even when their routes are missing. The exceptions are backends that
+can run without a key: Exa MCP, Jina Reader, You.com and Keenable stay direct
+and keyless if not advertised. For Exa MCP, You.com and Keenable, this suppresses
+both configured keys and the environment fallback. To keep an integration direct
+with your own key, opt it out (for example, `proxy.direct: [exa]`).
 
-Selected integrations use the scoped client token instead of resolving local
-provider secrets, including when they previously used custom API roots. Built-ins
-use their canonical route IDs. A missing route or grant never falls back to the
-vendor. OpenCode Go uses one parent approval with nested `/messages` and
-`/gemini` API roots.
-
-In legacy mode, `direct: [opencode-go]` keeps the whole OpenCode Go protocol
+In proxy-all mode, `direct: [opencode-go]` keeps the whole OpenCode Go protocol
 family direct, including named providers of that type. A named provider's own
-`direct` exception affects only that provider and all its protocols; legacy
-sibling names alone cannot opt individual protocols out. Unknown names fail.
-Complete custom chat `url` mappings fail closed: migrate to a compatible
-`base_url` or leave that provider direct. Provider/doctor output describes the
-configuration, not connectivity. The proxy token resolves at config load;
-replacing it requires a worker restart because each proxy root has one caller
-identity per process.
+exception affects only that provider and all its protocols. OpenCode Go uses
+one parent approval with nested `/messages` and `/gemini` API roots. Complete
+custom chat `url` mappings fail closed: use a compatible `base_url` or leave
+that provider direct.
 
-`claude-bin` is the term-llm provider name; `/claude-code/` is its canonical
-proxy route. With `claude-bin` in the top-level `proxy.providers` list, term-llm
-adds `/claude-code/` to `proxy.url` and uses the top-level `proxy.token`. That
-client must be approved for the Claude Code provider. If your launcher uses a
-different token or route URL (including a noncanonical shared route), use that
-exact URL and token in
-`providers.claude-bin.proxy` instead, and remove `claude-bin` from the top-level
-list. Alternatively, run `term-llm proxy run claude` without flags to use the
-binding already in your config.
+The canonical Claude route is `/claude-bin/`. With a top-level binding, term-llm
+uses the granted route URL from discovery. If your launcher uses a different
+token or route URL, use that exact URL and token in `providers.claude-bin.proxy`
+instead, and omit `claude-bin` from the top-level allowlist. Run
+`term-llm proxy run claude` without flags to use the binding already in your config.
+
+### Client defaults
+
+The proxy can set one default **route** per slot: `search`, `fetch`, `image`,
+`audio`, `music` or `transcription`. Use **Client defaults**, or set `defaults`
+in the proxy YAML, for example `defaults: {search: exa-mcp, fetch: jina-reader}`.
+The route must belong to a canonically named provider and its profile must serve
+that slot. Naming a route distinguishes Exa REST from Exa MCP.
+
+An explicit client selector such as `search.provider` or `search.fetch_provider`
+wins. Otherwise, the operator's default applies only if the client is granted
+and binds that route. Without an applicable proxy default, search and fetch use
+the sole bound selector if there is one; otherwise they keep the built-in
+selectors (`exa_mcp` and `jina`, respectively). For example, with both Exa routes
+bound, search defaults to Exa MCP; with only Brave bound, it selects Brave.
+Media slots keep their built-in selectors unless there is an applicable operator
+default. An unavailable route or a direct fallback does not count as bound for
+this choice. There is no proxy default for `embed.provider`, and inference
+providers are selected by name, not by a slot default.
+
+### Client discovery
+
+Term-llm loads granted, enabled routes and applicable default routes from
+`GET /_proxy/client/v2/providers` using the client token. The response groups
+routes under provider IDs and includes each route's local prefix and profile.
+The proxy only advertises routes whose grant still matches their authority.
+Discovery is cached for the life of the client process; restart after changing
+routes, grants, defaults or the token to pick up the new configuration.
+Revocation itself takes effect on the proxy without a client restart.
+
+Discovery v1 (`/_proxy/client/v1/providers`) returns `410 Gone`. If v2 returns a
+status other than `200 OK`, the client checks v1: a v1 `200 OK` identifies an
+older proxy and prompts you to upgrade it. A discovery failure stops
+configuration loading; it never switches the client to direct access.
 
 ## DNS SRV discovery
 
@@ -514,7 +577,7 @@ integration’s route beneath that prefix.
 
 For `providers.<name>.proxy.url` or `term-llm proxy run claude` / `agy` with
 `--url`, include the full scoped route path, for example
-`srv://_term-llm-proxy._tcp.example.test/team/claude-code`.
+`srv://_term-llm-proxy._tcp.example.test/team/claude-bin`.
 
 Use a DNS zone you trust. Term-llm connects over HTTPS to the first result in
 the resolver’s priority/weight order, and the certificate must be valid for
@@ -588,18 +651,29 @@ Path redaction cannot detect arbitrary secrets: avoid sensitive path identifiers
 
 ## Configuration
 
-UI-managed routes/secrets are editable. Secrets bind to one origin; referenced
-secrets cannot be deleted. YAML import/export contains definitions/references,
-not credentials, client tokens, passkeys or history. Only operator-authored files
-may introduce private regular secret files (maximum 16 KiB, trailing newlines removed).
+A secret is a name and a value, not bound to an upstream origin. Routes can
+reference it by name, including from different hosts. Referenced secrets cannot
+be deleted. Values are write-only in the admin UI, but anyone who can edit routes
+can send any available key to an upstream they choose. Restrict route editing to
+trusted administrators. Client grants still pin the upstream origin and base
+path and the secret name; clients cannot redirect the key.
+
+YAML import/export contains definitions and references, not stored secret values,
+client tokens, passkeys or history. Only operator-authored files may introduce
+private regular secret files (maximum 16 KiB, trailing newlines removed).
 
 With `--config ./proxy.yaml`, routes are read-only; explicit reload validates and
 activates atomically, retaining the old configuration on failure. Files are not
 watched. Example:
 
 ```yaml
+providers:
+  service:
+    label: Example Service
+    client: {type: openai_compatible}
 routes:
   - name: service
+    provider: service
     local_prefix: /service/
     upstream: https://api.example.com/v1
     caller_auth: {header: Authorization, prefix: "Bearer "}
@@ -610,31 +684,53 @@ routes:
     redirects: refuse
 secrets:
   service-key:
-    origin: https://api.example.com
     file: /run/secrets/service-key
 ```
+
+Every route needs a `provider` matching an entry under `providers`. Include
+`profile` for preset routes; a hand-made route can omit it and use `client.type`
+for inference. A profiled provider's family comes from its profile; an
+unprofiled provider defaults to `inference`.
 
 Enabled defaults true. `stored: <name>` references an existing same-name secret.
 HTTP upstreams need explicit `allow_insecure_http: true`. Prefixes must be canonical,
 non-overlapping, non-root and end with `/`; admin/asset/health paths are reserved.
 There is no interpolation, command execution or body rewriting.
 
-Routes otherwise grant all methods/relative paths beneath their base, potentially
-including management APIs. Use narrow credentials and optional `allow` entries
-such as `POST /responses`. Account routes always enforce integration restrictions.
+Without `allow`, routes can grant all methods and relative paths under their
+upstream base, potentially including management APIs. Use narrow credentials.
+Plain entries such as `POST /responses` match by literal path prefix, not by
+segment or exact path. Account routes always enforce integration restrictions.
 `redirects` is `passthrough` or `refuse`; WebSockets/usage default off. Billing defaults
 unspecified; choices are `pay_as_you_go`, `plan`, `local`, `unspecified`.
 
 Changing upstream authority/base, credential rules, account or access policy removes
 existing grants for the affected routes, so clients need provider approval again.
 Delete/recreate never restores grants or approvals. Disabling retains grants;
-rotating a same-origin secret retains them. A replacement credential may have
+rotating a secret in place retains them. A replacement credential may have
 broader vendor privileges: the proxy cannot infer those.
 
 Provider approval is not part of route YAML. It is stored per client and expands
 into route grants for the routes that existed when the approval was made. A
 configuration reload or import that changes route authority can therefore leave
 a client marked as needing approval.
+
+### Catch-all `allow` entries
+
+Use `METHOD /prefix/*` when the path tail is opaque, for example when it contains
+an escaped identifier or a URL. The method must be explicit and uppercase
+(`CONNECT` is not allowed); `*` is allowed only as the entire final path segment.
+`GET /v1/*` matches `/v1/` and paths beneath it, not `/v1`, `/v10/x` or an encoded
+slash in place of the literal boundary. `GET /*` covers any safe path for `GET`
+only.
+
+Matching uses the escaped path relative to the selected destination. The prefix
+must be canonical. The tail can contain doubled slashes, colons and escapes,
+but the path must be at most 8 KiB and cannot contain dot segments, backslashes
+or control characters, including after decoding. Allowed paths and queries are
+forwarded without normalizing the tail. On a subpath route, put `allow` on the
+individual rule. Catch-alls are not allowed on account routes. Adding or widening
+one requires new approval for that route.
 
 ### DNS SRV upstreams
 
@@ -646,25 +742,27 @@ certificate valid for the discovered hostname. For example, if the record
 points to `api.example.com` on port `8443`:
 
 ```yaml
+providers:
+  inference:
+    label: Inference gateway
+    client: {type: openai_compatible}
 routes:
   - name: inference
+    provider: inference
     local_prefix: /inference/
     upstream: srv://_inference._tcp.example.com/v1
     set_headers:
       Authorization: {secret: inference-key, prefix: "Bearer "}
 secrets:
   inference-key:
-    origin: https://api.example.com:8443
     file: /run/secrets/inference-key
 ```
 
-Bind secrets to the concrete HTTPS origin, including any nondefault port, not
-to the SRV record. The proxy checks that origin before activating a route.
 Discovery runs on startup, when saving routes, and on operator file **Reload**,
 not on each request or when rotating a secret. If discovery fails, the new
 configuration is rejected and any active routes stay unchanged. If a new result
-changes the origin, any configured secret or account must match it and clients
-must be approved again. DNS changes alone do not move active traffic or
+changes the origin, client grants must be renewed and any trusted account must
+still permit the upstream. DNS changes alone do not move active traffic or
 implicitly transfer credentials.
 
 ## Explicit setup and production administration
@@ -770,6 +868,38 @@ are refused; payload capture has a separate explicit opt-in below.
 Defaults: 64 concurrent requests, 64 MiB body, 15-minute request deadline, 30-day request
 history. CLI flags override these. Retention is batched; monitor disk. Shutdown
 stops admission, drains for 20 seconds, then cancels remaining work.
+
+### Upgrade to stored providers (schema v9)
+
+Back up the proxy state and any operator YAML. Upgrade and restart the proxy
+and term-llm clients together: discovery v1 has no compatibility alias.
+
+- **Database mode:** v9 migrates existing routes into stored providers and drops
+  secret origin bindings without changing key values. If the migration aborts,
+  the proxy does not start and a v8 database stays at v8. Follow the reported
+  remediation with the previous build, then retry, or restore the backup.
+- **File mode:** convert the operator YAML before restarting. Add `provider` to
+  every route, `profile` to preset routes, and a matching entry under `providers`
+  with a `label` and any old client hints nested under `client`. Remove `origin:`
+  from secret declarations. For Claude, change the old profile, canonical
+  route and provider name, and account `kind: claude-code` to `claude-bin`;
+  replace `/claude-code/` with `/claude-bin/` if using the old canonical prefix.
+  Keep existing account names and noncanonical route names. YAML import also
+  rejects legacy fields.
+- **Legacy `allow` entries:** remove or rewrite any entry containing `*` on a
+  route or subpath rule before upgrading. v9 refuses to reinterpret a legacy
+  literal `*` as a wildcard. Add any intended catch-all after migration, and
+  reapprove the affected routes.
+- **Claude workers:** the canonical route moved from `/claude-code/` to
+  `/claude-bin/`, with no alias. Existing grants for the migrated route move
+  with it. Update any copied provider YAML or explicit route URLs. Workers must
+  re-run the copied Claude launcher command with the new URL because native
+  client state is keyed by the route root.
+- **Proxy-all search:** when the proxy does not advertise Exa MCP, You.com or
+  Keenable, the client no longer sends its own `EXA_API_KEY`, `YDC_API_KEY` or
+  `KEENABLE_API_KEY` to those backends. They use the vendor's keyless limits.
+  To keep direct, keyed access, add the provider to `proxy.direct`, for example
+  `proxy.direct: [exa]`.
 
 ### Debug payload capture
 

@@ -71,7 +71,7 @@ func claudeProxyMetadataServer(t *testing.T, caPEM []byte, route string) (*httpt
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.Method != http.MethodGet || r.URL.Path != "/mounted/claude-code/.well-known/term-llm/claude-proxy" || r.URL.RawQuery != "" {
+		if r.Method != http.MethodGet || r.URL.Path != "/mounted/claude-bin/.well-known/term-llm/claude-proxy" || r.URL.RawQuery != "" {
 			t.Errorf("unexpected Claude bootstrap request: %s %s", r.Method, r.URL)
 		}
 		if r.Header.Get("Authorization") != "Bearer "+claudeProxyTestToken || r.Header.Get("x-api-key") != "" {
@@ -109,9 +109,9 @@ func TestClaudeProxyEnvironmentUsesNativeTunnelForAllLaunches(t *testing.T) {
 	t.Setenv("https_proxy", "http://ambient.example.test")
 	t.Setenv("NO_PROXY", "api.anthropic.com")
 	caPEM := claudeProxyTestCA(t)
-	server, calls := claudeProxyMetadataServer(t, caPEM, "claude-code")
-	root := server.URL + "/mounted/claude-code"
-	if err := proxyclient.Register([]proxyclient.Binding{{Root: root, Kind: "claude-code", Token: claudeProxyTestToken}}); err != nil {
+	server, calls := claudeProxyMetadataServer(t, caPEM, "claude-bin")
+	root := server.URL + "/mounted/claude-bin"
+	if err := proxyclient.Register([]proxyclient.Binding{{Root: root, Kind: "claude-bin", Token: claudeProxyTestToken}}); err != nil {
 		t.Fatal(err)
 	}
 	provider := NewClaudeBinProvider("opus-high", map[string]string{claudeProxyRootEnv: root})
@@ -171,7 +171,7 @@ func TestClaudeProxyEnvironmentUsesNativeTunnelForAllLaunches(t *testing.T) {
 			t.Fatal("native HTTPS proxy variables differ")
 		}
 		proxy, err := url.Parse(values["HTTPS_PROXY"])
-		if err != nil || proxy.User == nil || proxy.User.Username() != "claude-code" || proxy.User.String() == "" {
+		if err != nil || proxy.User == nil || proxy.User.Username() != "claude-bin" || proxy.User.String() == "" {
 			t.Fatalf("native proxy identity missing: %v", err)
 		}
 		password, _ := proxy.User.Password()
@@ -243,8 +243,8 @@ func TestClaudeProxyBootstrapFailureDoesNotFallBackToNativeCLI(t *testing.T) {
 		io.WriteString(w, "secret-body "+claudeProxyTestToken)
 	}))
 	defer server.Close()
-	root := server.URL + "/mounted/claude-code"
-	if err := proxyclient.Register([]proxyclient.Binding{{Root: root, Kind: "claude-code", Token: claudeProxyTestToken}}); err != nil {
+	root := server.URL + "/mounted/claude-bin"
+	if err := proxyclient.Register([]proxyclient.Binding{{Root: root, Kind: "claude-bin", Token: claudeProxyTestToken}}); err != nil {
 		t.Fatal(err)
 	}
 	provider := NewClaudeBinProvider("opus", map[string]string{claudeProxyRootEnv: root})
@@ -252,7 +252,7 @@ func TestClaudeProxyBootstrapFailureDoesNotFallBackToNativeCLI(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "HTTP 500") {
 		t.Fatalf("bootstrap failure was not surfaced: %v", err)
 	}
-	for _, secret := range []string{claudeProxyTestToken, "secret-body", "/mounted/claude-code"} {
+	for _, secret := range []string{claudeProxyTestToken, "secret-body", "/mounted/claude-bin"} {
 		if strings.Contains(err.Error(), secret) {
 			t.Fatalf("bootstrap error leaked %q: %v", secret, err)
 		}

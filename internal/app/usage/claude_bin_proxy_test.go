@@ -126,7 +126,7 @@ func isolateClaudeUsage(t *testing.T) string {
 
 func bindClaudeUsageTestProxy(t *testing.T, root string) {
 	t.Helper()
-	if err := proxyclient.Register([]proxyclient.Binding{{Root: root, Kind: "claude-code", Token: usageProxyTestToken}}); err != nil {
+	if err := proxyclient.Register([]proxyclient.Binding{{Root: root, Kind: "claude-bin", Token: usageProxyTestToken}}); err != nil {
 		t.Fatal(err)
 	}
 	loadProviderUsageConfig = func() (*config.Config, error) {
@@ -195,9 +195,9 @@ func TestClaudeBinProxyUsageUsesScopedNativeGetUsage(t *testing.T) {
 			isolateClaudeUsage(t)
 			produceFakeUsageResponse(t)
 			caPEM := usageProxyTestCA(t)
-			route := "claude-code"
+			route := "claude-bin"
 			server := usageProxyMetadataServer(t, caPEM, route)
-			root := server.URL + "/mounted/claude-code"
+			root := server.URL + "/mounted/claude-bin"
 			bindClaudeUsageTestProxy(t, root)
 			// A configured binding must not read a user's local settings or
 			// vendor credentials.
@@ -280,7 +280,7 @@ func TestClaudeBinProxyUsageUsesScopedNativeGetUsage(t *testing.T) {
 }
 
 func TestClaudeBinProxyUsageRejectsBootstrapErrorsWithoutFallback(t *testing.T) {
-	base := `{"protocol_version":2,"token_mode":"vault","hosts":["api.anthropic.com","platform.claude.com"],"certificate_pem":"secret-body","proxy_url":"$PROXY","route":"claude-code"}`
+	base := `{"protocol_version":2,"token_mode":"vault","hosts":["api.anthropic.com","platform.claude.com"],"certificate_pem":"secret-body","proxy_url":"$PROXY","route":"claude-bin"}`
 	for _, tt := range []struct {
 		name, body, want string
 		status           int
@@ -290,7 +290,7 @@ func TestClaudeBinProxyUsageRejectsBootstrapErrorsWithoutFallback(t *testing.T) 
 		{name: "gateway unavailable", status: 502, body: "secret-body", want: "HTTP 502"},
 		{name: "malformed metadata", status: 200, body: `{"certificate_pem":`, want: "invalid"},
 		{name: "wrong proxy origin", status: 200, body: strings.Replace(base, `"$PROXY"`, `"http://user:secret-body@elsewhere.test"`, 1), want: "proxy_url"},
-		{name: "bad route", status: 200, body: strings.Replace(base, `"claude-code"`, `"../secret"`, 1), want: "route slug"},
+		{name: "bad route", status: 200, body: strings.Replace(base, `"claude-bin"`, `"../secret"`, 1), want: "route slug"},
 		{name: "bad certificate", status: 200, body: base, want: "certificate_pem"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -303,13 +303,13 @@ func TestClaudeBinProxyUsageRejectsBootstrapErrorsWithoutFallback(t *testing.T) 
 				io.WriteString(w, strings.ReplaceAll(tt.body, "$PROXY", "http://"+r.Host))
 			}))
 			defer server.Close()
-			bindClaudeUsageTestProxy(t, server.URL+"/claude-code")
+			bindClaudeUsageTestProxy(t, server.URL+"/claude-bin")
 			var out bytes.Buffer
 			err := runClaudeBinUsage(context.Background(), &out, true)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want %q", err, tt.want)
 			}
-			for _, secret := range []string{usageProxyTestToken, "secret-body", "/claude-code"} {
+			for _, secret := range []string{usageProxyTestToken, "secret-body", "/claude-bin"} {
 				if strings.Contains(err.Error(), secret) {
 					t.Fatalf("error leaked %q: %v", secret, err)
 				}
@@ -337,7 +337,7 @@ func TestClaudeBinProxyUsageRejectsRedirect(t *testing.T) {
 		http.Redirect(w, r, escape.URL+"/secret-body", http.StatusTemporaryRedirect)
 	}))
 	defer origin.Close()
-	bindClaudeUsageTestProxy(t, origin.URL+"/claude-code")
+	bindClaudeUsageTestProxy(t, origin.URL+"/claude-bin")
 	err := runClaudeBinUsage(context.Background(), io.Discard, true)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 307") || strings.Contains(err.Error(), "secret-body") {
 		t.Fatalf("redirect was not refused: %v", err)
@@ -365,8 +365,8 @@ printf '%s\n' '{"type":"control_response","response":{"subtype":"error","request
 			isolateClaudeUsage(t)
 			installFakeClaude(t, tt.script)
 			caPEM := usageProxyTestCA(t)
-			server := usageProxyMetadataServer(t, caPEM, "claude-code")
-			bindClaudeUsageTestProxy(t, server.URL+"/claude-code")
+			server := usageProxyMetadataServer(t, caPEM, "claude-bin")
+			bindClaudeUsageTestProxy(t, server.URL+"/claude-bin")
 			err := runClaudeBinUsage(context.Background(), io.Discard, true)
 			if err == nil || !strings.Contains(err.Error(), "failed through proxy") {
 				t.Fatalf("unexpected error: %v", err)
@@ -384,8 +384,8 @@ func TestClaudeBinProxyUsageDeadlinePreserved(t *testing.T) {
 	isolateClaudeUsage(t)
 	installFakeClaude(t, "#!/bin/sh\nwhile :; do :; done\n")
 	caPEM := usageProxyTestCA(t)
-	server := usageProxyMetadataServer(t, caPEM, "claude-code")
-	bindClaudeUsageTestProxy(t, server.URL+"/claude-code")
+	server := usageProxyMetadataServer(t, caPEM, "claude-bin")
+	bindClaudeUsageTestProxy(t, server.URL+"/claude-bin")
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	err := runClaudeBinUsage(ctx, io.Discard, true)
@@ -406,7 +406,7 @@ func TestClaudeBinProxyUsageInvalidBindingNoFallback(t *testing.T) {
 			installFakeClaude(t, "#!/bin/sh\nprintf ran > \"$FAKE_USAGE_MARKER\"\nexit 99\n")
 			root := "https://invalid-usage-binding.example.test/" + kind
 			if kind == "chatgpt" || kind == "vendor-token" || kind == "child-path" {
-				binding := proxyclient.Binding{Root: root, Kind: "claude-code", Token: usageProxyTestToken}
+				binding := proxyclient.Binding{Root: root, Kind: "claude-bin", Token: usageProxyTestToken}
 				if kind == "chatgpt" {
 					binding.Kind = "chatgpt"
 				}
@@ -488,8 +488,8 @@ func TestClaudeBinProxyUsageNullWindows(t *testing.T) {
 	t.Setenv("FAKE_USAGE_ENV_FILE", filepath.Join(t.TempDir(), "env"))
 	t.Setenv("FAKE_USAGE_RESPONSE", `{"type":"control_response","response":{"subtype":"success","request_id":"term-llm-usage","response":{"rate_limits_available":true,"rate_limits":{"five_hour":null,"seven_day":null}}}}`)
 	installFakeClaude(t, fakeClaudeUsageScript)
-	server := usageProxyMetadataServer(t, usageProxyTestCA(t), "claude-code")
-	bindClaudeUsageTestProxy(t, server.URL+"/claude-code")
+	server := usageProxyMetadataServer(t, usageProxyTestCA(t), "claude-bin")
+	bindClaudeUsageTestProxy(t, server.URL+"/claude-bin")
 	var out bytes.Buffer
 	if err := runClaudeBinUsage(context.Background(), &out, false); err != nil || !strings.Contains(out.String(), "No active usage windows were returned.") || !strings.Contains(out.String(), "Live through credential proxy") || strings.Contains(out.String(), "user:profile") {
 		t.Fatalf("null-window output=%s err=%v", &out, err)
@@ -516,8 +516,8 @@ func TestClaudeBinProxyUsageCustomDefaultTransport(t *testing.T) {
 	old := http.DefaultTransport
 	http.DefaultTransport = claudeUsageCustomTransport{}
 	t.Cleanup(func() { http.DefaultTransport = old })
-	server := usageProxyMetadataServer(t, usageProxyTestCA(t), "claude-code")
-	bindClaudeUsageTestProxy(t, server.URL+"/claude-code")
+	server := usageProxyMetadataServer(t, usageProxyTestCA(t), "claude-bin")
+	bindClaudeUsageTestProxy(t, server.URL+"/claude-bin")
 	if err := runClaudeBinUsage(context.Background(), io.Discard, true); err != nil {
 		t.Fatal(err)
 	}
@@ -536,7 +536,7 @@ func TestClaudeBinProxyUsageDoesNotConsultInstalledVendorCredentials(t *testing.
 	}
 	loadProviderUsageConfig = func() (*config.Config, error) {
 		return &config.Config{Providers: map[string]config.ProviderConfig{"claude-bin": {
-			ProxyBinding: "https://missing-usage-binding.example.test/claude-code",
+			ProxyBinding: "https://missing-usage-binding.example.test/claude-bin",
 			APIKey:       "secret-local-vendor-key",
 		}}}, nil
 	}

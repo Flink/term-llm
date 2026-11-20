@@ -112,7 +112,7 @@ func (s *Service) changeCallerProviders(w http.ResponseWriter, r *http.Request, 
 		callerFailure(w, err)
 		return
 	}
-	routes, err := expandProviderApprovals(providerGroups(s.snap.config.Routes, accounts), approvals)
+	routes, err := expandProviderApprovals(providerRoutes(s.snap.config), approvals)
 	if err != nil {
 		callerFailure(w, err)
 		return
@@ -159,23 +159,20 @@ func checkProviderWorkers(routes []activeRoute, approved map[string]bool, accoun
 	return nil
 }
 
-func expandProviderApprovals(groups []providerGroup, approvals []providerApproval) (map[string]bool, error) {
-	byID := make(map[string][]string, len(groups))
-	for _, group := range groups {
-		byID[group.ID] = group.Routes
-	}
+func expandProviderApprovals(groups map[string][]Route, approvals []providerApproval) (map[string]bool, error) {
+	seen := make(map[string]bool)
 	routes := make(map[string]bool)
 	for _, approval := range approvals {
-		members, found := byID[approval.ID]
-		if !found {
+		members, found := groups[approval.ID]
+		if !found || seen[approval.ID] {
 			return nil, inputError("Unknown or duplicate provider ID; refresh before saving")
 		}
 		if approval.Approved == nil {
 			return nil, inputError("Each provider change requires an explicit approved boolean")
 		}
-		delete(byID, approval.ID)
-		for _, name := range members {
-			routes[name] = *approval.Approved
+		seen[approval.ID] = true
+		for _, route := range members {
+			routes[route.Name] = *approval.Approved
 		}
 	}
 	return routes, nil

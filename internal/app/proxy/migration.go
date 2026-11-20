@@ -2,13 +2,17 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 
+	"github.com/term-llm/term-llm/internal/app/proxy/legacyconfig"
 	"github.com/term-llm/term-llm/internal/sqliteutil"
 )
 
-const schemaVersion = 8
+const schemaVersion = 9
+
+const emptyProviderConfig = `{"routes":[],"providers":{}}`
 
 const adminKeySchemaV6 = `
 CREATE UNIQUE INDEX callers_external_id ON callers(external_id) WHERE external_id != '' AND revoked = 0;
@@ -58,6 +62,9 @@ var migrations = []sqliteutil.Migration{{
 	_, err := tx.Exec(claudeSharedSchema)
 	return err
 }}, {Version: 8, Description: "account-owned native subscription credentials", Up: migrateSharedNativeAccounts},
+	{Version: 9, Description: "stored provider families and unbound secrets", Up: func(tx sqliteutil.Executor) error {
+		return migrateProviderFamilies(tx, nil)
+	}},
 }
 
 func migrateAdminKeys(tx sqliteutil.Executor) error {
@@ -79,7 +86,11 @@ func migrateAdminKeys(tx sqliteutil.Executor) error {
 	return err
 }
 
-func (s *store) initialize() error {
+func (s *store) initialize(fileConfig ...*Config) error {
+	var file *Config
+	if len(fileConfig) > 0 {
+		file = fileConfig[0]
+	}
 	var invalidated int
 	err := sqliteutil.WithImmediateMigrationTx(context.Background(), s.db, func(tx sqliteutil.Executor) error {
 		var v int
@@ -104,7 +115,11 @@ func (s *store) initialize() error {
 			if migration.Version <= v {
 				continue
 			}
-			if err := migration.Up(tx); err != nil {
+			up := migration.Up
+			if file != nil && migration.Version == 9 {
+				up = func(tx sqliteutil.Executor) error { return migrateProviderFamilies(tx, file) }
+			}
+			if err := up(tx); err != nil {
 				return fmt.Errorf("proxy migration %d (%s): %w", migration.Version, migration.Description, err)
 			}
 			if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version=%d", migration.Version)); err != nil {
@@ -145,4 +160,133 @@ func migrateSharedNativeAccounts(tx sqliteutil.Executor) error {
 	}
 	_, err := tx.Exec("DROP TABLE claude_vault")
 	return err
+}
+
+// decodeCurrentConfig rejects legacy YAML before the strict decoder reports
+// unknown fields. The size bound also applies to the lenient pre-parse.
+func decodeCurrentConfig(data []byte) (Config, error) {
+	if len(data) <= maxConfig {
+		if err := legacyconfig.CheckLegacyFile(data); err != nil {
+			return Config{}, err
+		}
+	}
+	return decodeConfig(data)
+}
+
+func migrateProviderFamilies(tx sqliteutil.Executor, file *Config) error {
+	var data string
+	var rename bool
+	var err error
+	if file == nil {
+		data, rename, err = migrateStoredProxyConfig(tx)
+	} else {
+		data = emptyProviderConfig
+		rename, err = checkFileProxyUpgrade(tx, *file)
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE TABLE secrets_v9 (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+		INSERT INTO secrets_v9 (name,value) SELECT name,value FROM secrets;
+		DROP TABLE secrets;
+		ALTER TABLE secrets_v9 RENAME TO secrets;`); err != nil {
+		return fmt.Errorf("rebuild secrets: %w", err)
+	}
+	if _, err := tx.Exec("UPDATE configuration SET data=? WHERE id=1", data); err != nil {
+		return fmt.Errorf("write stored provider configuration: %w", err)
+	}
+	if _, err := tx.Exec("UPDATE accounts SET kind='claude-bin' WHERE kind='claude-code'"); err != nil {
+		return fmt.Errorf("rename Claude account kind: %w", err)
+	}
+	if rename {
+		return renameLiveClaudeRoutes(tx)
+	}
+	return nil
+}
+
+func migrateStoredProxyConfig(tx sqliteutil.Executor) (string, bool, error) {
+	var old string
+	if err := tx.QueryRow("SELECT data FROM configuration WHERE id=1").Scan(&old); err != nil {
+		return "", false, fmt.Errorf("read v8 configuration: %w", err)
+	}
+	kinds, err := migrationAccountKinds(tx)
+	if err != nil {
+		return "", false, err
+	}
+	data, renames, err := legacyconfig.Migrate([]byte(old), kinds)
+	if err != nil {
+		return "", false, err
+	}
+	var c Config
+	if json.Unmarshal(data, &c) != nil {
+		return "", false, fmt.Errorf("could not decode migrated configuration; check the stored route and provider fields")
+	}
+	if err := validateConfigStructure(c); err != nil {
+		return "", false, fmt.Errorf("invalid migrated configuration; fix the configuration with the previous build: %w", err)
+	}
+	return string(data), renames.ClaudeRoute, nil
+}
+
+func migrationAccountKinds(tx sqliteutil.Executor) (map[string]string, error) {
+	rows, err := tx.Query("SELECT name,kind FROM accounts")
+	if err != nil {
+		return nil, fmt.Errorf("read v8 account kinds: %w", err)
+	}
+	defer rows.Close()
+	kinds := map[string]string{}
+	for rows.Next() {
+		var name, kind string
+		if err := rows.Scan(&name, &kind); err != nil {
+			return nil, fmt.Errorf("read v8 account kind: %w", err)
+		}
+		kinds[name] = kind
+	}
+	return kinds, rows.Err()
+}
+
+func checkFileProxyUpgrade(tx sqliteutil.Executor, file Config) (bool, error) {
+	var old, canonical bool
+	for _, r := range file.Routes {
+		old = old || r.Name == "claude-code"
+		canonical = canonical || r.Name == "claude-bin" && r.Profile == "claude-bin"
+		if err := legacyconfig.CheckLegacyAllow(r.Name, r.Allow); err != nil {
+			return false, err
+		}
+		for _, rule := range r.Rules {
+			if err := legacyconfig.CheckLegacyAllow(r.Name, rule.Allow); err != nil {
+				return false, err
+			}
+		}
+	}
+	if old || !canonical {
+		return false, nil
+	}
+	var refs bool
+	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM grants WHERE route='claude-code')
+		OR EXISTS(SELECT 1 FROM claude_shared_enrollment WHERE route='claude-code')`).Scan(&refs)
+	return refs, err
+}
+
+func renameLiveClaudeRoutes(tx sqliteutil.Executor) error {
+	if _, err := tx.Exec("UPDATE grants SET route='claude-bin' WHERE route='claude-code'"); err != nil {
+		return fmt.Errorf("could not move grants from claude-code to claude-bin; remove any conflicting grants before upgrading: %w", err)
+	}
+	if _, err := tx.Exec("UPDATE claude_shared_enrollment SET route='claude-bin' WHERE route='claude-code'"); err != nil {
+		return fmt.Errorf("move Claude enrolments to claude-bin: %w", err)
+	}
+	var old string
+	if err := tx.QueryRow("SELECT data FROM money_settings WHERE id=1").Scan(&old); err != nil {
+		return fmt.Errorf("read money settings: %w", err)
+	}
+	data, err := legacyconfig.RenameClaudeMoneyRates([]byte(old))
+	if err != nil {
+		return err
+	}
+	if string(data) == old {
+		return nil
+	}
+	if _, err := tx.Exec("UPDATE money_settings SET data=? WHERE id=1", string(data)); err != nil {
+		return fmt.Errorf("rename Claude money rates: %w", err)
+	}
+	return nil
 }

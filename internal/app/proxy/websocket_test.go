@@ -69,7 +69,7 @@ func TestWebsocketTLSHTTP1RawBytesAndLifecycle(t *testing.T) {
 			defer up.Close()
 			s := testService(t)
 			setupCookie, setupCSRF := loginAdmin(t, s)
-			if rr := adminRequest(s, "PUT", "secrets", map[string]any{"name": "key", "origin": up.URL, "value": "trusted"}, setupCookie, setupCSRF); rr.Code != 200 {
+			if rr := adminRequest(s, "PUT", "secrets", map[string]any{"name": "key", "value": "trusted"}, setupCookie, setupCSRF); rr.Code != 200 {
 				t.Fatal(rr.Body.String())
 			}
 			s.transport.TLSClientConfig = up.Client().Transport.(*http.Transport).TLSClientConfig.Clone()

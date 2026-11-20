@@ -54,7 +54,7 @@ func TestProviderProxySaveRoundTripPreservesCredentialReference(t *testing.T) {
 	if pc == nil || pc.Proxy == nil || pc.Proxy.Token != reference || pc.ProxyBinding != "https://save-local.example.test/team/native" || pc.Model != "claude-sonnet-5-5" {
 		t.Fatal("provider-local proxy did not survive save/load")
 	}
-	if b, ok := proxyclient.Lookup(pc.ProxyBinding); !ok || b.Token != token || b.Kind != "claude-code" {
+	if b, ok := proxyclient.Lookup(pc.ProxyBinding); !ok || b.Token != token || b.Kind != "claude-bin" {
 		t.Fatal("file credential reference did not register the scoped binding")
 	}
 	if loaded.GetProviderConfig("claude-bin").Proxy != nil || loaded.GetProviderConfig("claude-bin").ProxyBinding != "" {

@@ -17,7 +17,7 @@ import (
 // store or execute an old vendor key command. This is not a wire/vendor test.
 func TestEveryProxyProviderConstructsOrNamesItsExplicitGate(t *testing.T) {
 	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/_proxy/client/v1/providers" {
+		if r.URL.Path == "/_proxy/client/v2/providers" {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"revision":1,"providers":[]}`))
 			return

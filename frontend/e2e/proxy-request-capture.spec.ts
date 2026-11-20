@@ -17,6 +17,8 @@ function asset(name: string) {
 const js = asset('proxy.js');
 const css = asset('proxy.css');
 const snapshot: ProxyState = {
+  defaults: null,
+  providers: [],
   auth: 'token',
   mode: 'ui',
   revision: 1,

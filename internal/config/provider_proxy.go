@@ -104,7 +104,7 @@ func (c *Config) materializeProviderProxies(file *fileSettings) ([]proxyclient.B
 		pc.credentialsResolved = true
 		pc.needsLazyResolution = false
 		updates[name] = pc
-		bindings = append(bindings, proxyclient.Binding{Root: root, Token: token, Kind: "claude-code"})
+		bindings = append(bindings, proxyclient.Binding{Root: root, Token: token, Kind: "claude-bin"})
 	}
 	for name, pc := range updates {
 		c.Providers[name] = pc

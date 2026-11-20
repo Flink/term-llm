@@ -133,76 +133,11 @@ func (c *Config) materializeProxy(file *fileSettings) error {
 	if err != nil {
 		return err
 	}
-	selected, err := c.proxyProviderSelection(catalog)
+	bound, err := c.bindDiscoveredProxy(root, token, catalog, file)
 	if err != nil {
 		return err
 	}
-	if c.Providers == nil {
-		c.Providers = map[string]ProviderConfig{}
-	}
-	direct, err := c.directProxyExceptions(catalog)
-	if err != nil {
-		return err
-	}
-	for _, spec := range BuiltinProviders() {
-		if selected != nil && !selected[spec.Name] {
-			continue
-		}
-		if _, ok := c.Providers[spec.Name]; !ok {
-			c.Providers[spec.Name] = ProviderConfig{Type: spec.Type, FromDefaults: true}
-		}
-	}
-	c.seedDiscoveredProxyProviders(catalog, selected, direct)
-	for name, pc := range c.Providers {
-		if selected != nil && !selected[name] {
-			continue
-		}
-		if direct[name] || pc.Enabled != nil && !*pc.Enabled {
-			continue
-		}
-		var providerBindings []proxyclient.Binding
-		pc, providerBindings, err = bindProxyProvider(name, pc, root, token, catalog, direct, file)
-		if err != nil {
-			return err
-		}
-		c.Providers[name] = pc
-		bindings = append(bindings, providerBindings...)
-	}
-	if err := validateProviderModels(c); err != nil {
-		return err
-	}
-	for _, p := range proxyprofile.All() {
-		// Legacy sibling profiles remain valid for old server configurations and
-		// direct exceptions, but new clients use only the consolidated parent.
-		if legacyOpenCodeProxyRoute(p.ID) || selected != nil && !c.proxyFeatureSelected(p, selected) {
-			continue
-		}
-		if direct[p.ID] || p.Gate != "" || p.Provider != "" && direct[string(p.Provider)] {
-			continue
-		}
-		// Standalone ancillary routes also receive an explicit binding;
-		// no missing root may fall back to the public vendor endpoint.
-		bindings = append(bindings, proxyclient.Binding{Root: root + "/" + p.ID, Token: token, Kind: p.Account})
-		for _, b := range p.Bindings {
-			if strings.HasPrefix(b.Root, "providers.") {
-				continue
-			} // named transcription providers use the provider loop above
-			field, ok := proxyStringField(reflect.ValueOf(c).Elem(), strings.Split(b.Root, "."))
-			if !ok {
-				return fmt.Errorf("internal proxy binding has unknown config path %s", b.Root)
-			}
-			endpoint := root + "/" + p.ID + p.PathSuffix
-			field.SetString(endpoint)
-			if b.Key != "" {
-				key, ok := proxyStringField(reflect.ValueOf(c).Elem(), strings.Split(b.Key, "."))
-				if !ok {
-					return fmt.Errorf("internal proxy credential binding has unknown path %s", b.Key)
-				}
-				key.SetString(token)
-			}
-			bindings = append(bindings, proxyclient.Binding{Root: endpoint, Token: token, Kind: p.Account})
-		}
-	}
+	bindings = append(bindings, bound...)
 	// Publish only after checking both local and shared routes for conflicts.
 	if err := proxyclient.Register(bindings); err != nil {
 		return err
@@ -216,46 +151,20 @@ func (c *Config) materializeProxy(file *fileSettings) error {
 	return nil
 }
 
-func (c *Config) seedDiscoveredProxyProviders(catalog *proxyDiscoveryCatalog, selected, direct map[string]bool) {
-	if catalog == nil {
-		return
-	}
-	for id, discovered := range catalog.Providers {
-		if selected != nil {
-			if !selected[id] {
-				continue
-			}
-		} else if direct[id] {
-			continue
-		}
-		if isReservedProxyRouteID(id) && discovered.Config == nil {
-			continue
-		}
-		if _, ok := c.Providers[id]; !ok {
-			c.Providers[id] = ProviderConfig{FromDefaults: true}
-		}
-	}
-}
-
-func bindProxyProvider(name string, pc ProviderConfig, root, token string, catalog *proxyDiscoveryCatalog, direct map[string]bool, file *fileSettings) (ProviderConfig, []proxyclient.Binding, error) {
-	orig := pc
-	discovered, hasDiscovered := lookupDiscoveredProvider(catalog, name, "")
-	if !hasDiscovered {
-		if preProfile, ok := proxyprofile.ForProvider(InferProviderType(name, pc.Type)); ok && preProfile.ID != name {
-			discovered, hasDiscovered = lookupDiscoveredProvider(catalog, name, preProfile.ID)
-		}
-	}
-	if hasDiscovered && discovered.Config != nil {
+func bindProxyProvider(name string, pc ProviderConfig, p proxyprofile.Profile, endpoint, token string, discovered *proxyprofile.ClientProviderConfig, file *fileSettings) (ProviderConfig, proxyclient.Binding, error) {
+	if discovered != nil {
 		var err error
-		pc, err = mergeDiscoveredProviderConfig(name, pc, *discovered.Config, file)
+		pc, err = mergeDiscoveredProviderConfig(name, pc, *discovered, file)
 		if err != nil {
-			return orig, nil, err
+			return pc, proxyclient.Binding{}, err
 		}
 	}
 	kind := InferProviderType(name, pc.Type)
-	p, ok := proxyprofile.ForProvider(kind)
-	if !ok || direct[p.ID] || direct[string(kind)] {
-		return orig, nil, nil
+	if p.Provider != "" {
+		if pc.Type != "" && pc.Type != p.Provider && !pc.FromDefaults {
+			return pc, proxyclient.Binding{}, fmt.Errorf("providers.%s.type (%s) conflicts with proxy route profile %s", name, pc.Type, p.ID)
+		}
+		kind = p.Provider
 	}
 	gate := p.Gate
 	if (kind == ProviderTypeOpenAICompat || kind == ProviderTypeVLLM) && strings.TrimSpace(pc.URL) != "" {
@@ -269,21 +178,10 @@ func bindProxyProvider(name string, pc ProviderConfig, root, token string, catal
 		pc.ProxyBinding = "gated:" + gate
 		pc.APIKey, pc.ResolvedAPIKey = "", ""
 		pc.Env = nil
-		return pc, nil, nil
-	}
-	id := p.ID
-	if _, builtInName := BuiltinProvider(name); !builtInName || kind == ProviderTypeOpenAICompat || kind == ProviderTypeVLLM {
-		id = name
-	}
-	if !proxyRouteName.MatchString(id) {
-		return orig, nil, fmt.Errorf("proxy provider name must be a route slug")
+		return pc, proxyclient.Binding{}, nil
 	}
 	pc.Type = kind
-	if hasDiscovered && discovered.LocalPrefix != "" {
-		pc.BaseURL = root + strings.TrimRight(discovered.LocalPrefix, "/")
-	} else {
-		pc.BaseURL = root + "/" + id
-	}
+	pc.BaseURL = endpoint
 	pc.URL = ""
 	pc.ResolvedURL = ""
 	pc.ProxyBinding = pc.BaseURL
@@ -308,11 +206,7 @@ func bindProxyProvider(name string, pc ProviderConfig, root, token string, catal
 	if kind == ProviderTypeAnthropic {
 		pc.Credentials = "api_key"
 	}
-	bindings := []proxyclient.Binding{{Root: pc.BaseURL, Token: token, Kind: p.Account}}
-	if kind == ProviderTypeOpenCodeGo {
-		bindings = append(bindings, proxyclient.Binding{Root: pc.BaseURL + "/messages", Token: token}, proxyclient.Binding{Root: pc.BaseURL + "/gemini", Token: token})
-	}
-	return pc, bindings, nil
+	return pc, proxyclient.Binding{Root: endpoint, Token: token, Kind: p.Account}, nil
 }
 
 func proxyStringField(value reflect.Value, path []string) (reflect.Value, bool) {

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -117,6 +118,8 @@ func (p nativeSetupProvider) setupFailure(w http.ResponseWriter, err error) {
 func (s *Service) nativeSetupConfig(r *http.Request) (Config, error) {
 	c := s.snap.config
 	c.Routes = append([]Route{}, c.Routes...)
+	c.Providers = maps.Clone(c.Providers)
+	c.Defaults = maps.Clone(c.Defaults)
 	c.Accounts = make(map[string]AccountRef, len(s.snap.config.Accounts))
 	for name, ref := range s.snap.config.Accounts {
 		c.Accounts[name] = ref
@@ -172,14 +175,19 @@ func (s *Service) chooseNativeSetupRoute(c Config, p nativeSetupProvider, preset
 		return c, Route{}, nil, inputError("Enable a launcher-compatible shared " + p.proxy.label + " route first")
 	}
 	account := newNativeAccount(nativeSetupFreeName(preset.ID, used), preset.AccountKind)
-	route := Route{Account: account.Name, Enabled: true, Upstream: preset.Upstream, CallerAuth: preset.Auth, Billing: preset.Billing, Usage: preset.Usage, WebSocket: preset.WebSocket}
+	var route Route
 	for i := 1; ; i++ {
 		name := nativeSetupName(preset.ID, i)
-		route.Name, route.LocalPrefix = name, "/"+name+"/"
-		if !used[name] && validatePrefix(route, s.snap.routes) == nil {
+		route = preset.newRoute(name, name, "")
+		if !used[name] && providerSlugAvailable(c, name, preset.ID) && validatePrefix(route, s.snap.routes) == nil {
 			break
 		}
 	}
+	route.Account = account.Name
+	if c.Providers == nil {
+		c.Providers = make(map[string]Provider)
+	}
+	c.Providers[route.Provider] = Provider{Label: preset.Label}
 	c.Routes = append(c.Routes, route)
 	return c, route, &account, nil
 }
@@ -307,6 +315,7 @@ func (s *Service) clearNativeSetup(w http.ResponseWriter, r *http.Request, provi
 		}
 	}
 	c.Routes = routes
+	pruneDeletedRoutes(&c, s.snap.config.Routes)
 	next, err := s.snap.recompile(c, s.snap.secrets)
 	if err == nil {
 		err = s.validateAccounts(next)

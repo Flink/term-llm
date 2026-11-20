@@ -55,14 +55,14 @@ func TestClientProvidersDiscoveryAndGrantPreservation(t *testing.T) {
 
 	// Unauthenticated and admin-cookie requests must be rejected.
 	for _, req := range []*http.Request{
-		httptest.NewRequest(http.MethodGet, "/_proxy/client/v1/providers", nil),
+		httptest.NewRequest(http.MethodGet, "/_proxy/client/v2/providers", nil),
 		func() *http.Request {
-			r := httptest.NewRequest(http.MethodGet, "/_proxy/client/v1/providers", nil)
+			r := httptest.NewRequest(http.MethodGet, "/_proxy/client/v2/providers", nil)
 			r.AddCookie(cookie)
 			return r
 		}(),
 		func() *http.Request {
-			r := httptest.NewRequest(http.MethodGet, "/_proxy/client/v1/providers", nil)
+			r := httptest.NewRequest(http.MethodGet, "/_proxy/client/v2/providers", nil)
 			r.Header.Set("Authorization", "Bearer bad-token")
 			return r
 		}(),
@@ -76,12 +76,12 @@ func TestClientProvidersDiscoveryAndGrantPreservation(t *testing.T) {
 
 	// Admin API key must also be rejected on client discovery.
 	adminKey := issueAdminKey(t, s, cookie, csrf, "provisioner")
-	req := httptest.NewRequest(http.MethodGet, "/_proxy/client/v1/providers", nil)
+	req := httptest.NewRequest(http.MethodGet, "/_proxy/client/v2/providers", nil)
 	req.Header.Set("Authorization", "Bearer "+adminKey.Token)
 	rr := httptest.NewRecorder()
 	s.ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("admin key accepted on /_proxy/client/v1/providers: %d", rr.Code)
+		t.Fatalf("admin key accepted on /_proxy/client/v2/providers: %d", rr.Code)
 	}
 
 	// Valid client token returns ONLY granted & enabled cdck_deepseek.
@@ -89,7 +89,7 @@ func TestClientProvidersDiscoveryAndGrantPreservation(t *testing.T) {
 		Revision  int64                `json:"revision"`
 		Providers []clientProviderInfo `json:"providers"`
 	} {
-		r := httptest.NewRequest(http.MethodGet, "/_proxy/client/v1/providers", nil)
+		r := httptest.NewRequest(http.MethodGet, "/_proxy/client/v2/providers", nil)
 		r.Header.Set("Authorization", "Bearer "+issued.Token)
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, r)
@@ -187,7 +187,7 @@ func TestProviderConfigParseExportImportAndFileMode(t *testing.T) {
 	}, cookie, csrf), http.StatusOK)
 
 	state := proxyResponse[struct {
-		Providers []providerGroup `json:"providers"`
+		Providers []adminProviderInfo `json:"providers"`
 	}](t, adminRequest(s, "GET", "state", nil, cookie, csrf), http.StatusOK)
 	if len(state.Providers) != 1 || state.Providers[0].Config == nil || state.Providers[0].Config.VLLMThinkingParam != "thinking" || !strings.Contains(state.Providers[0].ConfigYAML, "vllm_thinking_param: thinking") {
 		t.Fatalf("state missing provider config: %+v", state.Providers)
@@ -218,7 +218,7 @@ func TestProviderConfigParseExportImportAndFileMode(t *testing.T) {
 		t.Fatalf("file mode open failed: %v", err)
 	}
 	defer svc.Close()
-	if got := svc.snap.config.Providers["cdck_deepseek"]; got.Type != providerspec.TypeVLLM || got.VLLMThinkingParam != "thinking" {
+	if got := svc.snap.config.Providers["cdck_deepseek"]; got.Client == nil || got.Client.Type != providerspec.TypeVLLM || got.Client.VLLMThinkingParam != "thinking" {
 		t.Fatalf("file mode did not load provider config: %+v", got)
 	}
 }

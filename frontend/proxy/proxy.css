@@ -492,7 +492,8 @@ article.selected {
   gap: 0 2rem;
 }
 
-.route-preset-group h3 {
+.route-preset-family h3,
+.route-preset-group h4 {
   margin: 0.9rem 0.5rem 0.3rem;
   color: var(--muted);
   font-size: 0.7rem;
@@ -518,7 +519,8 @@ button.route-preset-choice:hover {
 }
 
 .route-preset-choice[hidden],
-.route-preset-group[hidden] {
+.route-preset-group[hidden],
+.route-preset-family[hidden] {
   display: none;
 }
 
@@ -625,6 +627,7 @@ button.route-preset-custom {
   align-items: baseline;
   gap: 0.2rem 0.55rem;
   padding-inline-end: 5.75rem;
+  overflow-wrap: anywhere;
 }
 
 .provider-status,
@@ -652,10 +655,6 @@ button.route-preset-custom {
   gap: 0 0.55rem;
   font-size: 0.8rem;
   overflow-wrap: anywhere;
-}
-
-.provider-route-warning {
-  color: var(--warn);
 }
 
 .provider-manage {
@@ -2128,4 +2127,34 @@ header .actions button {
 .debug-preview {
   max-height: 32rem;
   overflow: auto;
+}
+
+.provider-family {
+  margin-block: 1.25rem;
+}
+
+.provider-title h3 {
+  margin: 0;
+}
+
+.provider-dot {
+  display: inline-block;
+  flex: none;
+  width: 0.65rem;
+  height: 0.65rem;
+  align-self: center;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.provider-dot-green {
+  background: #2d9b59;
+}
+
+.provider-dot-orange {
+  background: #d98230;
+}
+
+.provider-dot-red {
+  background: #d95050;
 }

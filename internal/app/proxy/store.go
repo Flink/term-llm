@@ -24,8 +24,8 @@ import (
 
 const schema = `
 CREATE TABLE configuration (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, data TEXT NOT NULL);
-INSERT INTO configuration VALUES(1,0,'{"routes":[]}');
-CREATE TABLE secrets (name TEXT PRIMARY KEY, origin TEXT NOT NULL, value TEXT NOT NULL);
+INSERT INTO configuration VALUES(1,0,'` + emptyProviderConfig + `');
+CREATE TABLE secrets (name TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE callers (id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT UNIQUE NOT NULL, created INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL DEFAULT '', external_id TEXT NOT NULL DEFAULT '');
 CREATE TABLE grants (caller TEXT NOT NULL, route TEXT NOT NULL, authority TEXT NOT NULL, PRIMARY KEY(caller,route));
 CREATE TABLE requests (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, started INTEGER NOT NULL, caller TEXT NOT NULL, route TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL, outcome TEXT NOT NULL, data TEXT NOT NULL);
@@ -33,9 +33,9 @@ CREATE INDEX requests_time ON requests(started,seq);
 CREATE INDEX requests_caller ON requests(caller,seq);
 CREATE INDEX requests_route ON requests(route,seq);
 ` + accountSchema + moneySchema + adminKeySchemaV6 + claudeSharedSchema + `
-PRAGMA user_version=8;`
+PRAGMA user_version=9;`
 
-func openStore(dir string) (*store, error) {
+func openStore(dir string, fileConfig ...*Config) (*store, error) {
 	if err := fileprivacy.MkdirAll(dir); err != nil {
 		return nil, fmt.Errorf("create private proxy state: %w", err)
 	}
@@ -60,7 +60,7 @@ func openStore(dir string) (*store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	s := &store{db: db}
-	if err = s.initialize(); err != nil {
+	if err = s.initialize(fileConfig...); err != nil {
 		return nil, errors.Join(fmt.Errorf("initialize proxy store: %w", err), s.close())
 	}
 	if err = s.prepareStatements(); err != nil {
@@ -93,7 +93,7 @@ func (s *store) load() (Config, int64, map[string]material, error) {
 	return c, revision, secrets, err
 }
 func (s *store) materials() (map[string]material, error) {
-	rows, err := s.db.Query("SELECT name,origin,value FROM secrets")
+	rows, err := s.db.Query("SELECT name,value FROM secrets")
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +102,7 @@ func (s *store) materials() (map[string]material, error) {
 	for rows.Next() {
 		var name string
 		var m material
-		if err := rows.Scan(&name, &m.Origin, &m.Value); err != nil {
+		if err := rows.Scan(&name, &m.Value); err != nil {
 			return nil, err
 		}
 		out[name] = m

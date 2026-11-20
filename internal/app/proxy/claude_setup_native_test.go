@@ -37,7 +37,7 @@ func TestClaudeSetupIncompatibleRouteNotAdopted(t *testing.T) {
 	for _, variant := range []string{"custom header", "custom prefix", "narrow allow", "disabled incompatible"} {
 		t.Run(variant, func(t *testing.T) {
 			s := testService(t)
-			claudeSetupAccount(t, s, "existing-slot", "claude-code")
+			claudeSetupAccount(t, s, "existing-slot", "claude-bin")
 			custom := claudeSetupRoute("custom", "existing-slot")
 			switch variant {
 			case "custom header":

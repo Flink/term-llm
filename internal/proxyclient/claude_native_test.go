@@ -127,11 +127,11 @@ func TestPrepareClaudeNativeEnvironmentUsesScopedTunnelAndPrivateState(t *testin
 	caPEM := claudeNativeTestCA(t, nil)
 	proxyOrigin := ""
 	metadata := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(claudeNativeTestMetadata(caPEM, proxyOrigin, "claude-code"))
+		json.NewEncoder(w).Encode(claudeNativeTestMetadata(caPEM, proxyOrigin, "claude-bin"))
 	}))
 	defer metadata.Close()
 	proxyOrigin = metadata.URL
-	root := proxyOrigin + "/team/claude-code"
+	root := proxyOrigin + "/team/claude-bin"
 	stateDir := filepath.Join(t.TempDir(), "nested", "claude-state")
 	env := []string{"ANTHROPIC_BASE_URL=https://vendor.example.test",
 		"ANTHROPIC_AUTH_TOKEN=vendor-secret",
@@ -187,7 +187,7 @@ func TestPrepareClaudeNativeEnvironmentUsesScopedTunnelAndPrivateState(t *testin
 		"NODE_EXTRA_CA_CERTS=/ambient/ca.pem",
 		"NODE_TLS_REJECT_UNAUTHORIZED=0",
 		"CLAUDE_CONFIG_DIR=/ambient/claude",
-		"TERM_LLM_CLAUDE_PROXY_ROOT=https://ambient.example.test/claude-code",
+		"TERM_LLM_CLAUDE_PROXY_ROOT=https://ambient.example.test/claude-bin",
 		"CLAUDE_CODE_DISABLE_WORKFLOWS=1",
 		"ENABLE_TOOL_SEARCH=false",
 		"PRESERVED=value",
@@ -242,7 +242,7 @@ func TestPrepareClaudeNativeEnvironmentUsesScopedTunnelAndPrivateState(t *testin
 		t.Fatalf("unexpected authenticated proxy URL: %v", err)
 	}
 	password, _ := proxy.User.Password()
-	if proxy.User.Username() != "claude-code" || password != claudeNativeTestToken {
+	if proxy.User.Username() != "claude-bin" || password != claudeNativeTestToken {
 		t.Fatal("proxy URL does not carry the scoped route identity")
 	}
 	if values["CLAUDE_CONFIG_DIR"] != stateDir {
@@ -291,7 +291,7 @@ func TestClaudeNativeStateDirIsPrivateAndHashed(t *testing.T) {
 	cache := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", cache)
 	t.Setenv("HOME", t.TempDir())
-	root := "https://state.example.test/team/claude-code"
+	root := "https://state.example.test/team/claude-bin"
 	first, err := ClaudeNativeStateDir(root, claudeNativeTestToken)
 	if err != nil {
 		t.Fatal(err)
@@ -321,7 +321,7 @@ func TestPrepareClaudeNativeEnvironmentReplacesRotatedCAAndKeepsSettings(t *test
 		cert.Subject.CommonName = "rotated term-llm test Claude proxy"
 	})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(claudeNativeTestMetadata(secondCA, "http://"+r.Host, "claude-code"))
+		json.NewEncoder(w).Encode(claudeNativeTestMetadata(secondCA, "http://"+r.Host, "claude-bin"))
 	}))
 	defer server.Close()
 	stateDir := t.TempDir()
@@ -334,7 +334,7 @@ func TestPrepareClaudeNativeEnvironmentReplacesRotatedCAAndKeepsSettings(t *test
 	if err := os.WriteFile(filepath.Join(stateDir, claudeNativeSettings), []byte(`{"existing":1,"forceLoginMethod":"claudeai"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := PrepareClaudeNativeEnvironment(context.Background(), server.URL+"/team/claude-code", claudeNativeTestToken, stateDir, nil)
+	got, err := PrepareClaudeNativeEnvironment(context.Background(), server.URL+"/team/claude-bin", claudeNativeTestToken, stateDir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +378,7 @@ func TestPrepareClaudeNativeEnvironmentNoAmbientProxyOrRedirect(t *testing.T) {
 		http.Redirect(w, r, escape.URL+"/secret-body", http.StatusTemporaryRedirect)
 	}))
 	defer redirect.Close()
-	_, err := PrepareClaudeNativeEnvironment(context.Background(), redirect.URL+"/team/claude-code", claudeNativeTestToken, t.TempDir(), nil)
+	_, err := PrepareClaudeNativeEnvironment(context.Background(), redirect.URL+"/team/claude-bin", claudeNativeTestToken, t.TempDir(), nil)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 307") || strings.Contains(err.Error(), "secret-body") {
 		t.Fatalf("redirect was not refused: %v", err)
 	}
@@ -394,7 +394,7 @@ func TestPrepareClaudeNativeEnvironmentTimeout(t *testing.T) {
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err := PrepareClaudeNativeEnvironment(ctx, server.URL+"/team/claude-code", claudeNativeTestToken, t.TempDir(), nil)
+	_, err := PrepareClaudeNativeEnvironment(ctx, server.URL+"/team/claude-bin", claudeNativeTestToken, t.TempDir(), nil)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("deadline was not surfaced: %v", err)
 	}
@@ -406,7 +406,7 @@ func TestPrepareClaudeNativeEnvironmentRejectsLinks(t *testing.T) {
 	}
 	caPEM := claudeNativeTestCA(t, nil)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(claudeNativeTestMetadata(caPEM, "http://"+r.Host, "claude-code"))
+		json.NewEncoder(w).Encode(claudeNativeTestMetadata(caPEM, "http://"+r.Host, "claude-bin"))
 	}))
 	defer server.Close()
 	base := t.TempDir()
@@ -419,7 +419,7 @@ func TestPrepareClaudeNativeEnvironmentRejectsLinks(t *testing.T) {
 		if err := os.Symlink(target, link); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := PrepareClaudeNativeEnvironment(context.Background(), server.URL+"/team/claude-code", claudeNativeTestToken, link, nil); err == nil {
+		if _, err := PrepareClaudeNativeEnvironment(context.Background(), server.URL+"/team/claude-bin", claudeNativeTestToken, link, nil); err == nil {
 			t.Fatal("symlinked state directory was accepted")
 		}
 	})
@@ -432,7 +432,7 @@ func TestPrepareClaudeNativeEnvironmentRejectsLinks(t *testing.T) {
 		if err := os.Symlink(outside, filepath.Join(dir, claudeNativeCAFile)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := PrepareClaudeNativeEnvironment(context.Background(), server.URL+"/team/claude-code", claudeNativeTestToken, dir, nil); err == nil {
+		if _, err := PrepareClaudeNativeEnvironment(context.Background(), server.URL+"/team/claude-bin", claudeNativeTestToken, dir, nil); err == nil {
 			t.Fatal("symlinked CA file was accepted")
 		}
 	})
@@ -445,14 +445,14 @@ func TestPrepareClaudeNativeEnvironmentRejectsLinks(t *testing.T) {
 		if err := os.Symlink(outside, filepath.Join(dir, claudeNativeSettings)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := PrepareClaudeNativeEnvironment(context.Background(), server.URL+"/team/claude-code", claudeNativeTestToken, dir, nil); err == nil {
+		if _, err := PrepareClaudeNativeEnvironment(context.Background(), server.URL+"/team/claude-bin", claudeNativeTestToken, dir, nil); err == nil {
 			t.Fatal("symlinked settings file was accepted")
 		}
 	})
 }
 
 func TestPrepareClaudeNativeEnvironmentMetadataErrorsAreSanitized(t *testing.T) {
-	base := `{"protocol_version":2,"token_mode":"vault","hosts":["api.anthropic.com","platform.claude.com"],"certificate_pem":"secret-body","proxy_url":"$PROXY","route":"claude-code"}`
+	base := `{"protocol_version":2,"token_mode":"vault","hosts":["api.anthropic.com","platform.claude.com"],"certificate_pem":"secret-body","proxy_url":"$PROXY","route":"claude-bin"}`
 	for _, tt := range []struct {
 		name   string
 		status int
@@ -463,14 +463,14 @@ func TestPrepareClaudeNativeEnvironmentMetadataErrorsAreSanitized(t *testing.T) 
 		{name: "forbidden", status: http.StatusForbidden, body: "secret-body", want: "scoped client token"},
 		{name: "server error", status: http.StatusBadGateway, body: "secret-body " + claudeNativeTestToken, want: "HTTP 502"},
 		{name: "invalid json", status: http.StatusOK, body: `{"certificate_pem":`, want: "invalid"},
-		{name: "missing fields", status: http.StatusOK, body: `{"route":"claude-code"}`, want: "missing"},
+		{name: "missing fields", status: http.StatusOK, body: `{"route":"claude-bin"}`, want: "missing"},
 		{name: "old protocol", status: http.StatusOK, body: strings.Replace(base, `"protocol_version":2`, `"protocol_version":1`, 1), want: "protocol_version 2"},
 		{name: "missing protocol", status: http.StatusOK, body: strings.Replace(base, `"protocol_version":2,`, ``, 1), want: "protocol_version 2"},
 		{name: "wrong token mode", status: http.StatusOK, body: strings.Replace(base, `"vault"`, `"direct"`, 1), want: "token_mode"},
 		{name: "missing hosts", status: http.StatusOK, body: strings.Replace(base, `"hosts":["api.anthropic.com","platform.claude.com"],`, ``, 1), want: "hosts must be exactly"},
 		{name: "extra host", status: http.StatusOK, body: strings.Replace(base, `"platform.claude.com"]`, `"platform.claude.com","example.test"]`, 1), want: "hosts must be exactly"},
 		{name: "duplicate host", status: http.StatusOK, body: strings.Replace(base, `"platform.claude.com"]`, `"api.anthropic.com"]`, 1), want: "hosts must be exactly"},
-		{name: "bad route", status: http.StatusOK, body: strings.Replace(base, `"claude-code"`, `"../secret"`, 1), want: "route slug"},
+		{name: "bad route", status: http.StatusOK, body: strings.Replace(base, `"claude-bin"`, `"../secret"`, 1), want: "route slug"},
 		{name: "bad proxy origin", status: http.StatusOK, body: strings.Replace(base, `"$PROXY"`, `"https://user:secret-body@proxy.example.test/path"`, 1), want: "proxy_url"},
 		{name: "bad certificate", status: http.StatusOK, body: base, want: "certificate_pem"},
 	} {
@@ -480,11 +480,11 @@ func TestPrepareClaudeNativeEnvironmentMetadataErrorsAreSanitized(t *testing.T) 
 				io.WriteString(w, strings.ReplaceAll(tt.body, "$PROXY", "http://"+r.Host))
 			}))
 			defer server.Close()
-			_, err := PrepareClaudeNativeEnvironment(context.Background(), server.URL+"/team/claude-code", claudeNativeTestToken, t.TempDir(), nil)
+			_, err := PrepareClaudeNativeEnvironment(context.Background(), server.URL+"/team/claude-bin", claudeNativeTestToken, t.TempDir(), nil)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want %q", err, tt.want)
 			}
-			for _, secret := range []string{claudeNativeTestToken, "secret-body", "/team/claude-code"} {
+			for _, secret := range []string{claudeNativeTestToken, "secret-body", "/team/claude-bin"} {
 				if strings.Contains(err.Error(), secret) {
 					t.Fatalf("error leaked %q: %v", secret, err)
 				}
@@ -498,10 +498,10 @@ func TestPrepareClaudeNativeEnvironmentRejectsOversizeAndBadTokens(t *testing.T)
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		json.NewEncoder(w).Encode(claudeNativeTestMetadata(caPEM, "http://"+r.Host, "claude-code"))
+		json.NewEncoder(w).Encode(claudeNativeTestMetadata(caPEM, "http://"+r.Host, "claude-bin"))
 	}))
 	defer server.Close()
-	root := server.URL + "/team/claude-code"
+	root := server.URL + "/team/claude-bin"
 	for _, token := range []string{"", "sk-ant-vendor-secret", "admin_private", "has space", "has:colon", "has\ttab"} {
 		if _, err := PrepareClaudeNativeEnvironment(context.Background(), root, token, t.TempDir(), nil); err == nil {
 			t.Fatalf("token %q was accepted", token)
@@ -514,13 +514,13 @@ func TestPrepareClaudeNativeEnvironmentRejectsOversizeAndBadTokens(t *testing.T)
 		io.WriteString(w, strings.Repeat("x", nativeMetadataLimit+1))
 	}))
 	defer large.Close()
-	if _, err := PrepareClaudeNativeEnvironment(context.Background(), large.URL+"/team/claude-code", claudeNativeTestToken, t.TempDir(), nil); err == nil || !strings.Contains(err.Error(), "64 KiB") {
+	if _, err := PrepareClaudeNativeEnvironment(context.Background(), large.URL+"/team/claude-bin", claudeNativeTestToken, t.TempDir(), nil); err == nil || !strings.Contains(err.Error(), "64 KiB") {
 		t.Fatalf("oversize metadata was accepted: %v", err)
 	}
 }
 
 func TestClaudeNativeProxyURLChecksExactOrigin(t *testing.T) {
-	root := "https://proxy.example.test:8443/team/claude-code"
+	root := "https://proxy.example.test:8443/team/claude-bin"
 	for _, tt := range []struct {
 		name, raw, want string
 		ok              bool
@@ -698,7 +698,7 @@ func claudeNativeNotSelfSignedCA(t *testing.T, valid []byte) []byte {
 }
 
 func TestClaudeNativeEnvRejectsMissingStateDir(t *testing.T) {
-	if _, err := PrepareClaudeNativeEnvironment(context.Background(), "https://proxy.example.test/claude-code", claudeNativeTestToken, " ", nil); err == nil {
+	if _, err := PrepareClaudeNativeEnvironment(context.Background(), "https://proxy.example.test/claude-bin", claudeNativeTestToken, " ", nil); err == nil {
 		t.Fatal("empty state directory was accepted")
 	}
 }
@@ -706,10 +706,10 @@ func TestClaudeNativeEnvRejectsMissingStateDir(t *testing.T) {
 func TestPrepareClaudeNativeEnvironmentRefusesConflictingOrMalformedLoginSettings(t *testing.T) {
 	caPEM := claudeNativeTestCA(t, nil)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(claudeNativeTestMetadata(caPEM, "http://"+r.Host, "claude-code"))
+		json.NewEncoder(w).Encode(claudeNativeTestMetadata(caPEM, "http://"+r.Host, "claude-bin"))
 	}))
 	defer server.Close()
-	root := server.URL + "/team/claude-code"
+	root := server.URL + "/team/claude-bin"
 	for name, body := range map[string]string{
 		"conflicting method": `{"forceLoginMethod":"console"}`,
 		"non-string method":  `{"forceLoginMethod":true}`,
@@ -737,7 +737,7 @@ func TestPrepareClaudeNativeEnvironmentRefusesConflictingOrMalformedLoginSetting
 func TestPrepareClaudeNativeEnvironmentMergesLoginSettingWithoutLosingOtherSettings(t *testing.T) {
 	caPEM := claudeNativeTestCA(t, nil)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(claudeNativeTestMetadata(caPEM, "http://"+r.Host, "claude-code"))
+		json.NewEncoder(w).Encode(claudeNativeTestMetadata(caPEM, "http://"+r.Host, "claude-bin"))
 	}))
 	defer server.Close()
 	dir := t.TempDir()
@@ -748,7 +748,7 @@ func TestPrepareClaudeNativeEnvironmentMergesLoginSettingWithoutLosingOtherSetti
 	if err := os.WriteFile(path, []byte(`{"model":"sonnet","permissions":{"allow":["Bash"]}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PrepareClaudeNativeEnvironment(context.Background(), server.URL+"/team/claude-code", claudeNativeTestToken, dir, nil); err != nil {
+	if _, err := PrepareClaudeNativeEnvironment(context.Background(), server.URL+"/team/claude-bin", claudeNativeTestToken, dir, nil); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)

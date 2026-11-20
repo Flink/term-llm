@@ -28,8 +28,15 @@ func validatePolicy(r *Route) error {
 	seen := map[string]bool{}
 	for _, rule := range r.Allow {
 		method, prefix, ok := strings.Cut(rule, " ")
-		if !ok || !httpguts.ValidHeaderFieldName(method) || method != strings.ToUpper(method) || method == "CONNECT" || !canonicalPolicyPath(prefix) || seen[rule] {
-			return fmt.Errorf("allow rules must be unique canonical METHOD /prefix entries")
+		if strings.HasSuffix(prefix, "/*") {
+			if r.Account != "" {
+				return fmt.Errorf("catch-all allow rules are not permitted on account routes")
+			}
+			prefix = strings.TrimSuffix(prefix, "*")
+		}
+		if !ok || !httpguts.ValidHeaderFieldName(method) || method != strings.ToUpper(method) || method == "CONNECT" ||
+			strings.ContainsRune(method, '*') || strings.ContainsRune(prefix, '*') || !canonicalPolicyPath(prefix) || seen[rule] {
+			return fmt.Errorf("allow rules must be unique canonical METHOD /prefix or METHOD /prefix/* entries")
 		}
 		seen[rule] = true
 	}
@@ -43,23 +50,34 @@ func canonicalPolicyPath(p string) bool {
 	return safePath(p) && !strings.ContainsAny(p, "%?# ") && (path.Clean(p) == p || p != "/" && path.Clean(p)+"/" == p)
 }
 
-// Policy paths are relative to the upstream base, not the local mount. Reject
-// escaped paths for allowlisted routes rather than guessing how a vendor will
-// decode separators, nested escapes or escaped method endpoint names.
+// Policy paths are relative to the upstream base, not the local mount. Plain
+// entries require canonical paths; a catch-all permits an opaque but safe tail.
 func policyAllows(r Route, method, p string) bool {
 	if len(r.Allow) == 0 {
 		return true
 	}
-	if !canonicalPolicyPath(p) {
-		return false
-	}
-	for _, rule := range r.Allow {
-		m, prefix, _ := strings.Cut(rule, " ")
-		if m == method && strings.HasPrefix(p, prefix) {
-			return true
+	plainMatch := false
+	for _, entry := range r.Allow {
+		if !allowEntryMatches(entry, method, p) {
+			continue
 		}
+		if strings.HasSuffix(entry, "/*") {
+			return safePath(p)
+		}
+		plainMatch = true
 	}
-	return false
+	return plainMatch && canonicalPolicyPath(p)
+}
+
+// Match literally against the escaped path. The slash before a terminal * is
+// part of the prefix, unlike plain entries which have no segment boundary.
+// Callers enforce canonical/safe path checks or Bedrock's fixed model shape.
+func allowEntryMatches(entry, method, path string) bool {
+	m, prefix, ok := strings.Cut(entry, " ")
+	if strings.HasSuffix(prefix, "/*") {
+		prefix = strings.TrimSuffix(prefix, "*")
+	}
+	return ok && m == method && strings.HasPrefix(path, prefix)
 }
 
 // ResponseBodyTap is an optional response-only observer seam. It must preserve

@@ -1,26 +1,35 @@
 package proxy
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/term-llm/term-llm/internal/providerspec"
+)
 
 // chatGPTPresetRoute is the standard route a ChatGPT device sign-in creates
 // for one preset: the account replaces any static key substitution.
 func chatGPTPresetRoute(preset routePreset, name, account string) Route {
-	return Route{Name: name, LocalPrefix: "/" + name + "/", Account: account, Enabled: true, Upstream: preset.Upstream, CallerAuth: preset.Auth, Billing: preset.Billing, Usage: preset.Usage, WebSocket: preset.WebSocket}
+	r := preset.newRoute(account, name, "")
+	r.Account = account
+	return r
 }
 
-// chatGPTCompanionRoutes adds the fixed-name sibling routes (dictation, usage,
-// embeddings, live) beside a new ChatGPT route on the same account. Clients
-// bind those features by route name, so a taken name or prefix is skipped and
-// left to the operator rather than renamed.
-func chatGPTCompanionRoutes(preset routePreset, account string, routes []Route) []Route {
+func chatGPTCompanionRoutes(preset routePreset, account string, c Config) []Route {
 	var out []Route
 	for _, id := range preset.Companions {
 		companion, ok := routePresetByID(id)
-		if !ok || companion.AccountKind != preset.AccountKind || len(routes)+len(out) >= 128 {
+		if !ok || companion.AccountKind != preset.AccountKind || len(c.Routes)+len(out) >= 128 {
 			continue
 		}
-		r := chatGPTPresetRoute(companion, id, account)
-		if routeSlotTaken(r, routes) || routeSlotTaken(r, out) {
+		name := id
+		if account != preset.ID {
+			name = account + strings.TrimPrefix(id, preset.ID)
+			if !slug.MatchString(name) {
+				continue
+			}
+		}
+		r := chatGPTPresetRoute(companion, name, account)
+		if !providerSlugAvailable(c, name, id) || routeSlotTaken(r, c.Routes) {
 			continue
 		}
 		out = append(out, r)
@@ -28,13 +37,19 @@ func chatGPTCompanionRoutes(preset routePreset, account string, routes []Route) 
 	return out
 }
 
-func routePresetByID(id string) (routePreset, bool) {
-	for _, p := range routePresets {
-		if p.ID == id {
-			return p, true
+func providerSlugAvailable(c Config, name, own string) bool {
+	_, exists := c.Providers[name]
+	_, builtin := providerspec.Lookup(name)
+	return !exists && (!builtin || name == own)
+}
+
+func unusedProviderSlug(c Config, base, own string) string {
+	for i := 1; ; i++ {
+		name := nativeSetupName(base, i)
+		if providerSlugAvailable(c, name, own) && !routeSlotTaken(Route{Name: name, LocalPrefix: "/" + name + "/"}, c.Routes) {
+			return name
 		}
 	}
-	return routePreset{}, false
 }
 
 func routeSlotTaken(r Route, routes []Route) bool {

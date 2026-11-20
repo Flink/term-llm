@@ -299,7 +299,7 @@ func TestPayloadDebugDefaultDirectoryProtectedFromSecrets(t *testing.T) {
 	if err := os.Symlink(dir, alias); err == nil && !forbiddenSecretFile(filepath.Join(alias, "secret"), st, []string{dir}) {
 		t.Fatal("archive symlink alias accepted")
 	}
-	config := Config{Secrets: map[string]SecretRef{"capture": {File: path, Origin: "https://example.test/"}}}
+	config := Config{Secrets: map[string]SecretRef{"capture": {File: path}}}
 	if _, err := s.resolveSecrets(config, nil, true); err == nil {
 		t.Fatal("service allowed capture as credential")
 	}

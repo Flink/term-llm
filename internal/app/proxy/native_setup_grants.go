@@ -2,7 +2,7 @@ package proxy
 
 import "strings"
 
-// Native routes only have siblings through explicit provider grouping. Every
+// Native siblings share a stored provider. Every
 // device route must support the same account custody and the launcher's Bearer
 // credential. Never mint a partial device token for a mixed-custody provider.
 func (s *Service) nativeSetupGrants(next *snapshot, chosen Route, p *nativeProxyProvider, operator bool) ([]string, error) {
@@ -17,7 +17,7 @@ func (s *Service) nativeSetupGrants(next *snapshot, chosen Route, p *nativeProxy
 	accounts := accountsByName(infos)
 	for _, route := range next.routes {
 		if route.Name != chosen.Name {
-			if chosen.Provider == "" || route.Provider != chosen.Provider {
+			if route.Provider != chosen.Provider {
 				continue
 			}
 			if !nativeDeviceSibling(chosen, route.Route, p) {

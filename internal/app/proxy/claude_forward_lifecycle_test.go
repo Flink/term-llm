@@ -128,7 +128,7 @@ func TestClaudeForwardFollowsCurrentLocalPrefixAndAuth(t *testing.T) {
 	r := f.service.snap.routes[0].Route
 	r.LocalPrefix = "/moved-claude/"
 	r.CallerAuth = Auth{Header: "Authorization", Prefix: "Bearer "}
-	snap, err := compile(Config{Routes: []Route{r}}, f.service.snap.revision+1, nil)
+	snap, err := compile(fixtureProviders(Config{Routes: []Route{r}}), f.service.snap.revision+1, nil)
 	if err == nil {
 		err = f.service.store.saveConfig(snap, false)
 	}
@@ -208,7 +208,7 @@ func TestClaudeForwardBootstrapSecurityAndEligibility(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer func() {
-					if _, err := f.service.store.db.Exec("UPDATE accounts SET kind='claude-code' WHERE name='claude'"); err != nil {
+					if _, err := f.service.store.db.Exec("UPDATE accounts SET kind='claude-bin' WHERE name='claude'"); err != nil {
 						t.Error("restore account kind:", err)
 					}
 				}()
@@ -375,7 +375,7 @@ func TestClaudeForwardScopeGuardBlocksPrefixReassignment(t *testing.T) {
 	f := newClaudeForwardFixture(t)
 	original := f.service.snap.routes[0]
 	other := original.Route
-	other.Name = "other"
+	other.Name, other.Provider = "other", "other"
 	other.LocalPrefix = "/other/"
 	configure(t, f.service, Config{Routes: []Route{original.Route, other}}, nil)
 	token := caller(t, f.service, "claude", "other")

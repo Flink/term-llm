@@ -26,7 +26,7 @@ func TestAgyBoundStreamAndModelsFailBeforeAnySubprocess(t *testing.T) {
 	defer srv.Close()
 	for _, test := range []struct{ name, kind, needle string }{
 		{"unregistered", "", "registered scoped"},
-		{"wrong-kind", "claude-code", "registered scoped"},
+		{"wrong-kind", "claude-bin", "registered scoped"},
 		{"bootstrap-denied", "agy-bin", "HTTP 403"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

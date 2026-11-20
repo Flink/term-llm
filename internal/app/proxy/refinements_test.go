@@ -21,39 +21,34 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestFileSecretsRequireDeclaredMatchingOrigin(t *testing.T) {
+func TestFileSecretCompilesAcrossOrigins(t *testing.T) {
 	s := testService(t)
 	file := filepath.Join(t.TempDir(), "key")
 	if err := os.WriteFile(file, []byte("file-held-private\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	base := route("file-route", "/file/", "https://example.test/base/", "X-Local", "key")
-	for _, tt := range []struct {
-		name, origin string
-		wantOK       bool
-	}{{"absent", "", false}, {"path is not origin", "https://example.test/base/", false}, {"wrong origin", "https://other.test", false}, {"normalized", "https://EXAMPLE.test:0443/", true}} {
-		t.Run(tt.name, func(t *testing.T) {
-			c := Config{Routes: []Route{base}, Secrets: map[string]SecretRef{"key": {File: file, Origin: tt.origin}}}
-			secrets, err := resolveSecrets(c, nil, s.opts.AdminTokenFile, true)
-			if err == nil {
-				_, err = compile(c, 1, secrets)
-			}
-			if (err == nil) != tt.wantOK {
-				t.Fatalf("origin validation %v", err)
-			}
-			if tt.wantOK && (secrets["key"].Origin != "https://example.test:443" || secrets["key"].Value != "file-held-private") {
-				t.Fatal("file value/binding not normalized")
-			}
-		})
+	c := fixtureProviders(Config{Routes: []Route{
+		route("one", "/one/", "https://one.example.test/", "X-Local", "key"),
+		route("two", "/two/", "https://two.example.test/", "X-Local", "key"),
+	}, Secrets: map[string]SecretRef{"key": {File: file}}})
+	secrets, err := resolveSecrets(c, nil, s.opts.AdminTokenFile, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := compile(fixtureProviders(c), 1, secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range snap.routes {
+		if r.headers.Get("X-Upstream-Key") != "Real file-held-private" {
+			t.Fatal("secret not substituted")
+		}
 	}
 	if err := os.WriteFile(file, []byte("\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resolveSecrets(Config{Secrets: map[string]SecretRef{"key": {File: file, Origin: "https://example.test"}}}, nil, s.opts.AdminTokenFile, true); err == nil {
-		t.Fatal("empty file credential accepted")
-	}
-	if _, err := compile(Config{Routes: []Route{base}}, 1, map[string]material{"key": {Value: "private"}}); err == nil {
-		t.Fatal("empty material origin bypassed binding")
+	if _, err := resolveSecrets(c, nil, s.opts.AdminTokenFile, true); err == nil {
+		t.Fatal("empty credential accepted")
 	}
 }
 
@@ -140,7 +135,7 @@ func TestSecretCreateReplaceAndGrantEditing(t *testing.T) {
 	s := testService(t)
 	cookie, csrf := loginAdmin(t, s)
 	put := func(value string, replace bool) *httptest.ResponseRecorder {
-		return adminRequest(s, "PUT", "secrets", map[string]any{"name": "key", "origin": "https://example.test", "value": value, "replace": replace}, cookie, csrf)
+		return adminRequest(s, "PUT", "secrets", map[string]any{"name": "key", "value": value, "replace": replace}, cookie, csrf)
 	}
 	if rr := put("original", false); rr.Code != 200 {
 		t.Fatal(rr.Body.String())
@@ -274,7 +269,7 @@ func TestCompatibleFileModeGrantsRemainButMissingRoutesNeverResurrect(t *testing
 	materials := map[string]material{"key": boundMaterial(t, a.Upstream, "real")}
 	configure(t, s, Config{Routes: []Route{a, b}}, materials)
 	token := caller(t, s, "a", "b")
-	next, err := compile(Config{Routes: []Route{a}}, s.snap.revision+1, materials)
+	next, err := compile(fixtureProviders(Config{Routes: []Route{a}}), s.snap.revision+1, materials)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +408,7 @@ func TestGrantMigrationRollsBackAndRetries(t *testing.T) {
 func TestStoredSecretRotationDoesNotImplicitlyReloadFileSecrets(t *testing.T) {
 	s := testService(t)
 	cookie, csrf := loginAdmin(t, s)
-	rr := adminRequest(s, "PUT", "secrets", map[string]string{"name": "stored", "origin": "https://example.test", "value": "stored-old"}, cookie, csrf)
+	rr := adminRequest(s, "PUT", "secrets", map[string]string{"name": "stored", "value": "stored-old"}, cookie, csrf)
 	if rr.Code != 200 {
 		t.Fatal(rr.Body.String())
 	}
@@ -421,8 +416,8 @@ func TestStoredSecretRotationDoesNotImplicitlyReloadFileSecrets(t *testing.T) {
 	if err := os.WriteFile(file, []byte("file-old"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	c := Config{Routes: []Route{route("file-route", "/file/", "https://example.test/", "X-Local", "file")}, Secrets: map[string]SecretRef{"file": {File: file, Origin: "https://example.test"}, "stored": {Stored: "stored"}}}
-	data, err := yaml.Marshal(c)
+	c := Config{Routes: []Route{route("file-route", "/file/", "https://example.test/", "X-Local", "file")}, Secrets: map[string]SecretRef{"file": {File: file}, "stored": {Stored: "stored"}}}
+	data, err := yaml.Marshal(fixtureProviders(c))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,10 +430,14 @@ func TestStoredSecretRotationDoesNotImplicitlyReloadFileSecrets(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatal(rr.Body.String())
 	}
+	state := proxyResponse[struct{ Providers []adminProviderInfo }](t, adminRequest(s, "GET", "state", nil, cookie, csrf), 200)
+	if len(state.Providers) != 1 || state.Providers[0].Status != "green" {
+		t.Fatalf("file-backed secret missing from provider health: %+v", state.Providers)
+	}
 	if err := os.WriteFile(file, []byte("file-new"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	rr = adminRequest(s, "PUT", "secrets", map[string]any{"name": "stored", "origin": "https://example.test", "value": "stored-new", "replace": true}, cookie, csrf)
+	rr = adminRequest(s, "PUT", "secrets", map[string]any{"name": "stored", "value": "stored-new", "replace": true}, cookie, csrf)
 	if rr.Code != 200 || s.snap.secrets["file"].Value != "file-old" || s.snap.secrets["stored"].Value != "stored-new" {
 		t.Fatal("stored rotation implicitly reloaded file", rr.Body.String())
 	}
@@ -465,7 +464,7 @@ func TestOriginCanonicalIPAndCaseSensitiveZones(t *testing.T) {
 	if err != nil || one == other {
 		t.Fatal("different IPv6 zones collapsed", one, other, err)
 	}
-	if again, err := secretOrigin(one); err != nil || again != one {
+	if again, err := Origin(one); err != nil || again != one {
 		t.Fatal("scoped origin did not roundtrip", one, again, err)
 	}
 }

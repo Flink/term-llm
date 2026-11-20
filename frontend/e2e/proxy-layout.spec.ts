@@ -1,3 +1,4 @@
+import { withSingletonProviders } from '../proxy/test-fixtures';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
@@ -18,6 +19,7 @@ function asset(name: string): Buffer {
 const javascript = asset('proxy.js');
 const stylesheet = asset('proxy.css');
 const snapshot: ProxyState = {
+  defaults: null,
   auth: 'passkey',
   mode: 'ui',
   revision: 1,
@@ -212,49 +214,37 @@ for (const [id, upstream, header, prefix] of [
   ['openai', 'https://api.openai.com/v1', 'Authorization', 'Bearer '],
   ['anthropic', 'https://api.anthropic.com', 'x-api-key', ''],
 ]) {
-  test(`${id} preset fills an editable route and saves with native client authentication`, async ({
+  test(`${id} preset creates an editable inference provider atomically`, async ({
     page,
   }, testInfo) => {
     await page.route('http://proxy.test/_proxy/api/state', (route) =>
       route.fulfill({
         json: {
           ...snapshot,
-          presets: [{ id, label: id, upstream, auth: { header, prefix } }],
-          secrets: [{ name: 'provider-key', origin: new URL(upstream).origin, source: 'stored' }],
+          presets: [{ family: 'inference', id, label: id, upstream, auth: { header, prefix } }],
+          secrets: [{ name: 'provider-key', routes: null, source: 'stored' }],
         },
       }),
     );
-    await page.route('http://proxy.test/_proxy/api/config', (route) =>
+    await page.route('http://proxy.test/_proxy/api/providers', (route) =>
       route.fulfill({ json: { revision: 2 } }),
     );
     await page.goto('http://proxy.test/_proxy/?tab=routes');
     await choosePreset(page, id);
-    await expect(page.getByLabel('Upstream base URL', { exact: true })).toBeHidden();
-    await page
-      .locator('.route-form summary')
-      .filter({ hasText: /^Advanced$/ })
-      .click();
-    await expect(page.getByLabel('Name', { exact: true })).toHaveValue(id);
+    await expect(page.getByLabel('Provider name', { exact: true })).toHaveValue(id);
     await expect(page.getByLabel('Upstream base URL', { exact: true })).toHaveValue(upstream);
-    await expect(
-      page.getByLabel('Local client authentication header', { exact: true }),
-    ).toHaveValue(header);
+    await page.getByLabel('Credential source').selectOption('existing');
     await page.getByLabel('Secret name', { exact: true }).selectOption('provider-key');
-    await page.getByLabel('Name', { exact: true }).fill(`${id}-mine`);
+    await page.getByLabel('Provider name', { exact: true }).fill(`${id}-mine`);
     await page.screenshot({ path: testInfo.outputPath(`preset-${id}.png`), fullPage: true });
-    const saved = page.waitForRequest('http://proxy.test/_proxy/api/config');
-    await page.getByRole('button', { name: 'Save route', exact: true }).click();
+    const saved = page.waitForRequest('http://proxy.test/_proxy/api/providers');
+    await page.getByRole('button', { name: 'Create provider', exact: true }).click();
     expect((await saved).postDataJSON()).toEqual({
       revision: 1,
-      routes: [
-        expect.objectContaining({
-          name: `${id}-mine`,
-          upstream,
-          local_prefix: `/${id}-mine/`,
-          caller_auth: { header, prefix },
-          set_headers: { [header]: { secret: 'provider-key', prefix } },
-        }),
-      ],
+      name: `${id}-mine`,
+      preset: id,
+      label: id,
+      secret: 'provider-key',
     });
     await expect(page.getByRole('status')).toContainText('No upstream request was made');
   });
@@ -264,6 +254,7 @@ test('OpenCode Go preset is one route with one shared key and three subpath mapp
   page,
 }, testInfo) => {
   const preset = {
+    family: 'inference',
     id: 'opencode-go',
     label: 'OpenCode Go',
     // Actual backend preset: the rules own every destination.
@@ -294,113 +285,35 @@ test('OpenCode Go preset is one route with one shared key and three subpath mapp
       json: {
         ...snapshot,
         presets: [preset],
-        secrets: [{ name: 'opencode-go-key', origin: 'https://opencode.ai', source: 'stored' }],
+        secrets: [{ name: 'opencode-go-key', routes: null, source: 'stored' }],
       },
     }),
   );
-  await page.route('http://proxy.test/_proxy/api/config', (route) =>
+  await page.route('http://proxy.test/_proxy/api/providers', (route) =>
     route.fulfill({ json: { revision: 2 } }),
   );
   await page.goto('http://proxy.test/_proxy/?tab=routes');
   await choosePreset(page, 'OpenCode Go');
-  await expect(page.getByLabel('Name', { exact: true })).toHaveValue('opencode-go');
-  await expect(page.getByLabel('Local prefix', { exact: true })).toHaveValue('/opencode-go/');
-  await expect(page.getByLabel('Billing', { exact: true })).toHaveValue('plan');
-  const ruleRows = page.locator('.subpath-rule');
-  await expect(ruleRows).toHaveCount(3);
-  // Technical mappings, protocol auth, and edits stay in Advanced.
-  const summary = page.locator('.route-rule-summary li');
-  await expect(summary).toHaveCount(3);
-  await expect(summary.nth(0)).toContainText('/ → https://opencode.ai/zen/go/v1');
-  await expect(summary.nth(1)).toContainText('/messages/ → https://opencode.ai/zen/go');
-  await expect(summary.nth(2)).toContainText('/gemini/ → https://opencode.ai/inference/go/v1');
+  await expect(page.getByLabel('Provider name', { exact: true })).toHaveValue('opencode-go');
+  await expect(page.getByText('/ → https://opencode.ai/zen/go/v1', { exact: true })).toBeVisible();
   await expect(
-    page.getByText('One key and one client grant cover all three protocol paths.', { exact: true }),
-  ).toBeHidden();
-  await expect(page.getByText('Edit subpath rules', { exact: true })).toBeHidden();
-  // One shared key and no unused parent upstream/auth controls.
-  await expect(page.getByLabel('Upstream base URL', { exact: true })).toHaveCount(3);
-  await expect(page.getByLabel('Secret name', { exact: true })).toHaveCount(1);
-  await expect(page.getByLabel('Local client authentication header', { exact: true })).toHaveCount(
-    0,
-  );
-  await expect(page.locator('.route-form details[open]')).toHaveCount(0);
-  await expect(ruleRows.nth(0)).toBeHidden();
+    page.getByText('/messages/ → https://opencode.ai/zen/go', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('/gemini/ → https://opencode.ai/inference/go/v1', { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator('input[type=password]')).toHaveCount(1);
+  await page.getByLabel('Credential source').selectOption('existing');
   await page.getByLabel('Secret name', { exact: true }).selectOption('opencode-go-key');
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
-    ),
-  ).toBe(true);
-  await page.screenshot({
-    path: testInfo.outputPath('preset-opencode-go.png'),
-    fullPage: true,
-  });
-  await page
-    .locator('.route-form summary')
-    .filter({ hasText: /^Advanced$/ })
-    .click();
-  await page.getByText('Edit subpath rules', { exact: true }).click();
-  await expect(ruleRows.nth(0)).toBeVisible();
-  await expect(ruleRows.nth(0).getByLabel('Subpath', { exact: true })).toHaveValue('/');
-  await expect(ruleRows.nth(0).getByLabel('Upstream base URL', { exact: true })).toHaveValue(
-    'https://opencode.ai/zen/go/v1',
-  );
-  await expect(ruleRows.nth(1).getByLabel('Subpath', { exact: true })).toHaveValue('/messages/');
-  await expect(ruleRows.nth(1).getByLabel('Upstream base URL', { exact: true })).toHaveValue(
-    'https://opencode.ai/zen/go',
-  );
-  await expect(ruleRows.nth(2).getByLabel('Subpath', { exact: true })).toHaveValue('/gemini/');
-  await expect(ruleRows.nth(2).getByLabel('Upstream base URL', { exact: true })).toHaveValue(
-    'https://opencode.ai/inference/go/v1',
-  );
-  // Protocol headers and the regrant warning live in Advanced.
-  const protocol = page.locator('.route-protocol-details li');
-  await expect(protocol).toHaveCount(3);
-  await expect(protocol.nth(0)).toContainText('/ · client Authorization: Bearer');
-  await expect(protocol.nth(1)).toContainText('/messages/ · client x-api-key');
-  await expect(protocol.nth(2)).toContainText('/gemini/ · client x-goog-api-key');
-  await expect(page.locator('.route-form')).toContainText('Changing a subpath mapping');
-  await page.screenshot({
-    path: testInfo.outputPath('preset-opencode-go-rules.png'),
-    fullPage: true,
-  });
-  const saved = page.waitForRequest('http://proxy.test/_proxy/api/config');
-  await page.getByRole('button', { name: 'Save route', exact: true }).click();
-  const payload = (await saved).postDataJSON() as {
-    revision: number;
-    routes: Record<string, unknown>[];
-  };
-  expect(payload.revision).toBe(1);
-  expect(payload.routes).toHaveLength(1);
-  expect(payload.routes[0]).toMatchObject({
+  await page.screenshot({ path: testInfo.outputPath('preset-opencode-go.png'), fullPage: true });
+  const saved = page.waitForRequest('http://proxy.test/_proxy/api/providers');
+  await page.getByRole('button', { name: 'Create provider', exact: true }).click();
+  expect((await saved).postDataJSON()).toEqual({
+    revision: 1,
     name: 'opencode-go',
-    local_prefix: '/opencode-go/',
-    upstream: '',
-    caller_auth: { header: '', prefix: '' },
-    set_headers: {},
-    billing: 'plan',
-    usage: 'auto',
-    rules: [
-      {
-        path_prefix: '/',
-        upstream: 'https://opencode.ai/zen/go/v1',
-        caller_auth: { header: 'Authorization', prefix: 'Bearer ' },
-        set_headers: { Authorization: { secret: 'opencode-go-key', prefix: 'Bearer ' } },
-      },
-      {
-        path_prefix: '/messages/',
-        upstream: 'https://opencode.ai/zen/go',
-        caller_auth: { header: 'x-api-key', prefix: '' },
-        set_headers: { 'x-api-key': { secret: 'opencode-go-key', prefix: '' } },
-      },
-      {
-        path_prefix: '/gemini/',
-        upstream: 'https://opencode.ai/inference/go/v1',
-        caller_auth: { header: 'x-goog-api-key', prefix: '' },
-        set_headers: { 'x-goog-api-key': { secret: 'opencode-go-key', prefix: '' } },
-      },
-    ],
+    preset: 'opencode-go',
+    label: 'OpenCode Go',
+    secret: 'opencode-go-key',
   });
   await expect(page.getByRole('status')).toContainText('No upstream request was made');
 });
@@ -410,21 +323,12 @@ test('adds a missing API key without leaving or resetting the route', async ({
 }, testInfo) => {
   let stored = false;
   let submittedKey: unknown;
-  const preset = {
-    id: 'venice',
-    label: 'Venice',
-    upstream: 'https://api.venice.ai/api/v1',
-    auth: { header: 'Authorization', prefix: 'Bearer ' },
-  };
   await page.route('http://proxy.test/_proxy/api/state', (route) =>
     route.fulfill({
       json: {
         ...snapshot,
-        presets: [preset],
         revision: stored ? 2 : 1,
-        secrets: stored
-          ? [{ name: 'my-venice-key', origin: 'https://api.venice.ai', source: 'stored' }]
-          : [],
+        secrets: stored ? [{ name: 'my-venice-key', routes: null, source: 'stored' }] : [],
       },
     }),
   );
@@ -437,19 +341,15 @@ test('adds a missing API key without leaving or resetting the route', async ({
     route.fulfill({ json: { revision: 3 } }),
   );
   await page.goto('http://proxy.test/_proxy/?tab=routes');
-  await choosePreset(page, 'Venice');
-  await page
-    .locator('.route-form summary')
-    .filter({ hasText: /^Advanced$/ })
-    .click();
+  await choosePreset(page, 'Custom endpoint');
   await page.getByLabel('Name', { exact: true }).fill('my-venice');
   await page.getByLabel('Local prefix', { exact: true }).fill('/my-custom-path/');
+  await page.getByLabel('Upstream base URL', { exact: true }).fill('https://api.venice.ai/api/v1');
+  await page.getByRole('button', { name: 'Add substitution', exact: true }).click();
+  await page.getByLabel('Header name').fill('Authorization');
   await page.getByRole('button', { name: 'Add API key', exact: true }).click();
   let dialog = page.getByRole('dialog', { name: 'Add API key' });
-  await expect(dialog.getByLabel('Bound origin', { exact: true })).toHaveValue(
-    'https://api.venice.ai',
-  );
-  await expect(dialog.getByLabel('Bound origin', { exact: true })).toHaveAttribute('readonly', '');
+  await expect(dialog.getByLabel(/Bound origin|Use route origin/)).toHaveCount(0);
   await expect(dialog.getByLabel('New secret value', { exact: true })).toBeFocused();
   await expect(page.locator('.route-form form')).toHaveCount(0);
   await page.keyboard.press('Escape');
@@ -466,19 +366,19 @@ test('adds a missing API key without leaving or resetting the route', async ({
   await expect(page.locator('dialog')).toHaveCount(0);
   expect(submittedKey).toEqual({
     name: 'my-venice-key',
-    origin: 'https://api.venice.ai',
     value: 'synthetic-private-provider-key',
-    replace: false,
   });
   await expect(page.getByLabel('Name', { exact: true })).toHaveValue('my-venice');
   await expect(page.getByLabel('Local prefix', { exact: true })).toHaveValue('/my-custom-path/');
-  await expect(page.getByRole('heading', { name: 'Set up Venice' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Custom endpoint' })).toBeVisible();
   await expect(page.getByLabel('Secret name', { exact: true })).toHaveValue('my-venice-key');
   await expect(page.getByRole('status')).toContainText('Your route is not saved yet');
   const saved = page.waitForRequest('http://proxy.test/_proxy/api/config');
   await page.getByRole('button', { name: 'Save route', exact: true }).click();
   expect((await saved).postDataJSON()).toEqual({
     revision: 2,
+    providers: { 'my-venice': { label: 'my-venice' } },
+    defaults: null,
     routes: [expect.objectContaining({ name: 'my-venice', local_prefix: '/my-custom-path/' })],
   });
 });
@@ -510,18 +410,27 @@ test('Clients creates one client for approved providers without per-route contro
   const routes = [
     {
       ...routeDefaults,
+      provider: 'alpha',
+      profile: '',
+      serves: [],
       name: 'alpha',
       local_prefix: '/alpha/',
       upstream: 'https://alpha.example.test/v1',
     },
     {
       ...routeDefaults,
+      provider: 'alpha-extra',
+      profile: '',
+      serves: [],
       name: 'alpha-extra',
       local_prefix: '/alpha-extra/',
       upstream: 'https://alpha.example.test/extra',
     },
     {
       ...routeDefaults,
+      provider: 'beta',
+      profile: '',
+      serves: [],
       name: 'beta',
       local_prefix: '/beta/',
       upstream: 'https://beta.example.test/v1',
@@ -533,15 +442,30 @@ test('Clients creates one client for approved providers without per-route contro
     revision: 3,
     routes,
     providers: [
-      { id: 'alpha', label: 'Alpha', routes: ['alpha', 'alpha-extra'] },
-      { id: 'beta', label: 'Beta', routes: ['beta'] },
+      {
+        family: 'inference',
+        status: 'green',
+        reason: '',
+        id: 'alpha',
+        label: 'Alpha',
+        routes: ['alpha', 'alpha-extra'],
+      },
+      {
+        family: 'inference',
+        status: 'green',
+        reason: '',
+        id: 'beta',
+        label: 'Beta',
+        routes: ['beta'],
+      },
     ],
     callers: [],
   };
   const creations: unknown[] = [];
   await page.route('http://proxy.test/_proxy/api/**', async (request) => {
     const url = new URL(request.request().url());
-    if (url.pathname.endsWith('/state')) return request.fulfill({ json: state });
+    if (url.pathname.endsWith('/state'))
+      return request.fulfill({ json: withSingletonProviders(state) });
     if (url.pathname.endsWith('/callers') && request.request().method() === 'POST') {
       const body = request.request().postDataJSON() as {
         name: string;
@@ -607,26 +531,49 @@ test('Clients preserves legacy partial approvals and edits only explicit provide
     routes: [
       {
         ...routeDefaults,
+        provider: 'alpha',
+        profile: '',
+        serves: [],
         name: 'alpha',
         local_prefix: '/alpha/',
         upstream: 'https://alpha.example.test/v1',
       },
       {
         ...routeDefaults,
+        provider: 'alpha-extra',
+        profile: '',
+        serves: [],
         name: 'alpha-extra',
         local_prefix: '/alpha-extra/',
         upstream: 'https://alpha.example.test/extra',
       },
       {
         ...routeDefaults,
+        provider: 'beta',
+        profile: '',
+        serves: [],
         name: 'beta',
         local_prefix: '/beta/',
         upstream: 'https://beta.example.test/v1',
       },
     ],
     providers: [
-      { id: 'alpha', label: 'Alpha', routes: ['alpha', 'alpha-extra'] },
-      { id: 'beta', label: 'Beta', routes: ['beta'] },
+      {
+        family: 'inference',
+        status: 'green',
+        reason: '',
+        id: 'alpha',
+        label: 'Alpha',
+        routes: ['alpha', 'alpha-extra'],
+      },
+      {
+        family: 'inference',
+        status: 'green',
+        reason: '',
+        id: 'beta',
+        label: 'Beta',
+        routes: ['beta'],
+      },
     ],
     callers: [
       {
@@ -643,7 +590,8 @@ test('Clients preserves legacy partial approvals and edits only explicit provide
   const changes: unknown[] = [];
   await page.route('http://proxy.test/_proxy/api/**', async (request) => {
     const url = new URL(request.request().url());
-    if (url.pathname.endsWith('/state')) return request.fulfill({ json: state });
+    if (url.pathname.endsWith('/state'))
+      return request.fulfill({ json: withSingletonProviders(state) });
     if (url.pathname.endsWith('/callers') && request.request().method() === 'PUT') {
       const body = request.request().postDataJSON() as {
         id: string;
@@ -1091,7 +1039,7 @@ for (const width of [1440, 390]) {
         accounts: [
           {
             name: 'native',
-            kind: 'claude-code',
+            kind: 'claude-bin',
             auth_mode: 'shared_vault',
             state: 'needs_login',
             generation: 1,
@@ -1099,26 +1047,46 @@ for (const width of [1440, 390]) {
           },
         ],
         providers: [
-          { id: 'native', label: 'Claude Code', routes: ['native'] },
-          { id: 'venice', label: 'Venice', routes: ['venice'] },
+          {
+            family: 'inference',
+            status: 'red',
+            reason: 'Sign-in needed',
+            id: 'native',
+            label: 'Claude Code',
+            routes: ['native'],
+          },
+          {
+            family: 'inference',
+            status: enabled ? 'green' : 'grey',
+            reason: enabled ? '' : 'Disabled',
+            id: 'venice',
+            label: 'Venice',
+            routes: ['venice'],
+          },
         ],
         routes: [
           {
             ...defaults,
+            provider: 'native',
+            profile: '',
+            serves: [],
             name: 'native',
             account: 'native',
-            local_prefix: '/claude-code/',
+            local_prefix: '/claude-bin/',
             upstream: 'https://api.anthropic.com',
           },
           {
             ...defaults,
+            provider: 'venice',
+            profile: 'venice',
+            serves: [],
             name: 'venice',
             local_prefix: '/venice/',
             upstream: 'https://api.venice.ai/api/v1',
           },
         ],
       };
-      return route.fulfill({ json: state });
+      return route.fulfill({ json: withSingletonProviders(state) });
     });
     for (const disabled of [false, true]) {
       enabled = !disabled;
@@ -1126,34 +1094,16 @@ for (const width of [1440, 390]) {
       await expect(page.locator('article.route-card')).toHaveCount(2);
       const claude = providerCard(page, 'native');
       const venice = providerCard(page, 'venice');
-      await expect(claude.getByRole('heading', { name: 'Claude Code', exact: true })).toBeVisible();
-      await expect(venice.getByRole('heading', { name: 'Venice', exact: true })).toBeVisible();
+      await expect(claude.getByRole('heading', { name: 'native', exact: true })).toBeVisible();
+      await expect(venice.getByRole('heading', { name: 'venice', exact: true })).toBeVisible();
       await expect(claude.locator('details.provider-manage')).toHaveCount(1);
       await expect(venice.locator('details.provider-manage')).toHaveCount(1);
-      const claudeStatus = claude.locator('.provider-status');
-      const veniceStatus = venice.locator('.provider-status');
-      await expect(claudeStatus).toHaveText('Shared Claude sign-in needed');
-      await expect(veniceStatus).toHaveText('Configured');
-      const claudeSize = (await claudeStatus.boundingBox())!;
-      const veniceSize = (await veniceStatus.boundingBox())!;
-      expect(claudeSize.height).toBeCloseTo(veniceSize.height, 0);
-      expect(await claudeStatus.evaluate((node) => getComputedStyle(node).fontSize)).toBe(
-        await veniceStatus.evaluate((node) => getComputedStyle(node).fontSize),
-      );
-      // Route-specific conditions stay beside their route, not in the provider status.
-      const claudeWarning = claude.locator('.provider-route-line .provider-route-warning');
-      const veniceWarning = venice.locator('.provider-route-line .provider-route-warning');
-      if (disabled) {
-        await expect(claudeWarning).toHaveText('Disabled');
-        await expect(veniceWarning).toHaveText('Disabled');
-        const claudeWarningSize = (await claudeWarning.boundingBox())!;
-        const veniceWarningSize = (await veniceWarning.boundingBox())!;
-        expect(claudeWarningSize.width).toBeCloseTo(veniceWarningSize.width, 0);
-        expect(claudeWarningSize.height).toBeCloseTo(veniceWarningSize.height, 0);
-      } else {
-        await expect(claudeWarning).toHaveCount(0);
-        await expect(veniceWarning).toHaveCount(0);
-      }
+      await expect(claude.getByRole('img', { name: 'Status: red, Sign-in needed' })).toBeVisible();
+      await expect(claude.locator('.provider-status')).toHaveText('Sign-in needed');
+      await expect(
+        venice.getByRole('img', { name: disabled ? 'Status: grey, Disabled' : 'Status: green' }),
+      ).toBeVisible();
+      await expect(venice.locator('.provider-status')).toHaveText(disabled ? 'Disabled' : '');
       await expect(claude.locator('.provider-approval-summary')).toHaveText('No clients approved');
       await expect(venice.locator('.provider-approval-summary')).toHaveText('No clients approved');
       expect(await claude.locator('.provider-route-line .provider-route-clients').count()).toBe(0);
@@ -1182,7 +1132,7 @@ for (const width of [1440, 390]) {
 
   for (const launcherName of ['claude', 'agy'] as const) {
     const agy = launcherName === 'agy';
-    const kind = agy ? 'agy-bin' : 'claude-code';
+    const kind = agy ? 'agy-bin' : 'claude-bin';
     const provider = agy ? 'Antigravity' : 'Claude Code';
     const shortName = agy ? 'Antigravity' : 'Claude';
     const presetChoice = agy ? 'Antigravity personal subscription' : provider;
@@ -1190,7 +1140,7 @@ for (const width of [1440, 390]) {
       ? 'https://daily-cloudcode-pa.googleapis.com'
       : 'https://api.anthropic.com';
     const prefix = `/${kind}/`;
-    test(`${provider} shared setup, one-time operator and worker launchers, and clear at ${width}px`, async ({
+    test(`${provider} shared setup, one-time operator and worker launchers, and delete at ${width}px`, async ({
       page,
     }, testInfo) => {
       await page.setViewportSize({ width, height: 1000 });
@@ -1212,6 +1162,7 @@ for (const width of [1440, 390]) {
         callers: [],
         presets: [
           {
+            family: 'inference',
             id: kind,
             label: presetChoice,
             upstream,
@@ -1219,6 +1170,7 @@ for (const width of [1440, 390]) {
             account_kind: kind,
           },
           {
+            family: 'inference',
             id: 'openai',
             label: 'OpenAI API',
             upstream: 'https://api.openai.com/v1',
@@ -1233,18 +1185,20 @@ for (const width of [1440, 390]) {
       const workerToken = 'scoped-browser-canary-worker';
       await page.route('http://proxy.test/_proxy/api/**', async (request) => {
         const path = new URL(request.request().url()).pathname;
-        if (path.endsWith('/state')) return request.fulfill({ json: state });
-        if (path === `/_proxy/api/${launcherName}/setup`) {
+        if (path.endsWith('/state'))
+          return request.fulfill({ json: withSingletonProviders(state) });
+        if (
+          path === `/_proxy/api/${launcherName}/setup` ||
+          path === `/_proxy/api/providers/${kind}`
+        ) {
           const method = request.request().method();
           const body = request.request().postDataJSON() as { shared_action?: string };
           mutations.push({ method, body });
           state.revision++;
           if (method === 'DELETE') {
-            state.accounts = [];
             state.routes = [];
             state.providers = [];
             state.callers.forEach((caller) => {
-              caller.revoked = true;
               caller.grants = [];
             });
             return request.fulfill({ status: 204 });
@@ -1263,7 +1217,10 @@ for (const width of [1440, 390]) {
             ];
             state.routes = [
               {
-                name: 'native',
+                serves: [],
+                profile: kind,
+                provider: kind,
+                name: kind,
                 account: 'native',
                 local_prefix: prefix,
                 upstream,
@@ -1273,12 +1230,21 @@ for (const width of [1440, 390]) {
                 set_headers: {},
               },
             ];
-            state.providers = [{ id: 'native', label: provider, routes: ['native'] }];
+            state.providers = [
+              {
+                family: 'inference',
+                status: 'red',
+                reason: 'Sign-in needed',
+                id: kind,
+                label: provider,
+                routes: [kind],
+              },
+            ];
           }
           const caller = {
             id: operator ? 'operator' : 'worker',
             name: operator ? `${provider} sign-in launcher` : `${shortName} worker`,
-            grants: ['native'],
+            grants: [kind],
             revoked: false,
             created: 1,
             created_by: '',
@@ -1340,19 +1306,17 @@ for (const width of [1440, 390]) {
       await page.getByRole('button', { name: 'I saved it — dismiss' }).click();
       await expect(operatorCommand).toHaveCount(0);
 
-      const card = providerCard(page, 'native');
-      const line = routeLine(page, 'native');
-      await expect(card.getByRole('heading', { name: provider, exact: true })).toBeVisible();
+      const card = providerCard(page, kind);
+      const line = routeLine(page, kind);
+      await expect(card.getByRole('heading', { name: kind, exact: true })).toBeVisible();
       await expect(line.locator('code')).toHaveText(prefix);
-      await expect(card.locator('.provider-status')).toHaveText(
-        `Shared ${shortName} sign-in needed`,
-      );
+      await expect(card.getByRole('img', { name: 'Status: red, Sign-in needed' })).toBeVisible();
       await expect(card.locator('.provider-route-clients')).toHaveCount(0);
       await expect(page.getByText(upstream, { exact: true })).toBeHidden();
       await expect(card).not.toContainText('scoped-browser-canary');
       await expect(page.locator('.account-controls', { hasText: 'native' })).toHaveCount(0);
 
-      const manage = await openManage(page, 'native');
+      const manage = await openManage(page, kind);
       await expect(manage.locator('details')).toHaveCount(0);
       await expect(
         manage.getByRole('button', { name: 'Get operator sign-in launcher', exact: true }),
@@ -1361,11 +1325,11 @@ for (const width of [1440, 390]) {
       await expect(addDevice).toHaveCount(0);
       // The operator finishes sign-in outside this browser UI.
       state.accounts![0].state = 'ready';
+      state.providers[0].status = 'green';
+      state.providers[0].reason = '';
       await page.getByRole('button', { name: 'Refresh state', exact: true }).click();
-      await expect(card.locator('.provider-status')).toHaveText(
-        `Shared ${shortName} subscription ready`,
-      );
-      await openManage(page, 'native');
+      await expect(card.getByRole('img', { name: 'Status: green' })).toBeVisible();
+      await openManage(page, kind);
       await addDevice.click();
       await expect(workerCommand).toHaveValue(launcher(workerToken));
       await expect(operatorCommand).toHaveCount(0);
@@ -1396,16 +1360,14 @@ for (const width of [1440, 390]) {
       await page.getByRole('button', { name: 'Clients', exact: true }).click();
       await expect(page.getByText(`${shortName} worker`, { exact: true })).toBeVisible();
       await page.getByRole('button', { name: 'Providers', exact: true }).click();
-      await openManage(page, 'native');
+      await openManage(page, kind);
       const removeProvider = manage.getByRole('button', {
-        name: `Delete provider native`,
+        name: `Delete provider ${provider}`,
         exact: true,
       });
       page.once('dialog', async (dialog) => {
-        expect(dialog.message()).toContain(
-          `Removes all ${shortName} proxy routes, device access, and saved proxy sign-ins`,
-        );
-        expect(dialog.message()).toContain(`your normal ${shortName} setup are unchanged`);
+        expect(dialog.message()).toContain(`Removes route ${kind}`);
+        expect(dialog.message()).toContain('Connected accounts stay');
         await dialog.dismiss();
       });
       await removeProvider.click();
@@ -1416,10 +1378,10 @@ for (const width of [1440, 390]) {
       await expect(
         page.getByRole('heading', { name: 'Add your first provider', exact: true }),
       ).toBeVisible();
-      await expect(page.getByRole('status')).toContainText(`${shortName} proxy setup cleared`);
+      await expect(page.getByRole('status')).toContainText(`Deleted provider ${kind}`);
       expect(mutations).toEqual([
         { method: 'POST', body: { revision: 1, shared_action: 'create' } },
-        { method: 'POST', body: { revision: 2, route: 'native' } },
+        { method: 'POST', body: { revision: 2, route: kind } },
         { method: 'DELETE', body: { revision: 3 } },
       ]);
       expect(legacyCalls).toEqual([]);
@@ -1452,7 +1414,7 @@ function configuredClaudeState(mode: ProxyState['mode'] = 'ui'): ProxyState {
     accounts: [
       {
         name: 'manual-slot',
-        kind: 'claude-code',
+        kind: 'claude-bin',
         auth_mode: 'shared_vault',
         state: 'ready',
         generation: 1,
@@ -1461,6 +1423,9 @@ function configuredClaudeState(mode: ProxyState['mode'] = 'ui'): ProxyState {
     ],
     routes: [
       {
+        serves: [],
+        profile: '',
+        provider: 'manual-claude',
         name: 'manual-claude',
         account: 'manual-slot',
         local_prefix: '/manual/',
@@ -1471,6 +1436,9 @@ function configuredClaudeState(mode: ProxyState['mode'] = 'ui'): ProxyState {
         set_headers: {},
       },
       {
+        serves: [],
+        profile: 'openai',
+        provider: 'openai',
         name: 'openai',
         local_prefix: '/openai/',
         upstream: 'https://api.openai.com/v1',
@@ -1484,19 +1452,22 @@ function configuredClaudeState(mode: ProxyState['mode'] = 'ui'): ProxyState {
 }
 
 for (const status of [409, 503]) {
-  test(`Claude clear failure retains the route; clear is blocked during token display (${status})`, async ({
+  test(`Claude provider delete failure retains the route; delete is blocked during token display (${status})`, async ({
     page,
   }) => {
     const state = configuredClaudeState();
     let deletes = 0;
     await page.route('http://proxy.test/_proxy/api/**', async (request) => {
       const path = new URL(request.request().url()).pathname;
-      if (path.endsWith('/state')) return request.fulfill({ json: state });
+      if (path.endsWith('/state')) return request.fulfill({ json: withSingletonProviders(state) });
+      if (
+        path === '/_proxy/api/providers/manual-claude' &&
+        request.request().method() === 'DELETE'
+      ) {
+        deletes++;
+        return request.fulfill({ status, json: { error: 'Claude delete unavailable.' } });
+      }
       if (path === '/_proxy/api/claude/setup') {
-        if (request.request().method() === 'DELETE') {
-          deletes++;
-          return request.fulfill({ status, json: { error: 'Claude clear unavailable.' } });
-        }
         state.revision++;
         return request.fulfill({
           json: {
@@ -1528,7 +1499,7 @@ for (const status of [409, 503]) {
     page.once('dialog', (dialog) => dialog.accept());
     await removeProvider.click();
     await expect(page.getByRole('status')).toContainText(
-      status === 409 ? 'Claude clear unavailable.' : '503',
+      status === 409 ? 'Claude delete unavailable.' : '503',
     );
     await expect(line).toBeVisible();
     await expect(page.getByRole('status')).not.toContainText('cleared');
@@ -1542,7 +1513,7 @@ for (const width of [1440, 390]) {
   }) => {
     await page.setViewportSize({ width, height: 1000 });
     await page.route('http://proxy.test/_proxy/api/state', (request) =>
-      request.fulfill({ json: configuredClaudeState('file') }),
+      request.fulfill({ json: withSingletonProviders(configuredClaudeState('file')) }),
     );
     await page.goto('http://proxy.test/_proxy/?tab=routes');
     const claude = routeLine(page, 'manual-claude');
@@ -1568,13 +1539,13 @@ for (const width of [1440, 390]) {
     page,
   }, testInfo) => {
     await page.setViewportSize({ width, height: 1000 });
-    const configured = {
+    const configured: ProxyState = {
       ...snapshot,
       has_requests: true,
       accounts: [
         {
           name: 'claude',
-          kind: 'claude-code',
+          kind: 'claude-bin',
           state: 'ready',
           auth_mode: 'shared_vault',
           generation: 1,
@@ -1583,8 +1554,12 @@ for (const width of [1440, 390]) {
       ],
       routes: [
         {
+          serves: [],
+          profile: '',
+          provider: 'claude',
           name: 'claude',
           local_prefix: '/claude/',
+          allow_insecure_http: false,
           upstream: 'https://api.anthropic.com',
           enabled: true,
           account: 'claude',
@@ -1595,6 +1570,7 @@ for (const width of [1440, 390]) {
       ],
       presets: [
         {
+          family: 'inference',
           id: 'openai',
           label: 'OpenAI API',
           upstream: 'https://api.openai.com/v1',
@@ -1602,6 +1578,7 @@ for (const width of [1440, 390]) {
           billing: 'pay_as_you_go',
         },
         {
+          family: 'inference',
           id: 'long-label',
           label: 'ChatGPT OAuth embeddings and live — billing not specified',
           upstream: 'https://example.invalid',
@@ -1610,7 +1587,7 @@ for (const width of [1440, 390]) {
       ],
     };
     await page.route('http://proxy.test/_proxy/api/state', (route) =>
-      route.fulfill({ json: configured }),
+      route.fulfill({ json: withSingletonProviders(configured) }),
     );
     await page.goto('http://proxy.test/_proxy/?tab=routes');
     await expect(page.getByRole('heading', { name: 'Providers', exact: true })).toBeVisible();
@@ -1634,7 +1611,7 @@ for (const width of [1440, 390]) {
       manage.getByRole('button', { name: 'Add Claude account', exact: true }),
     ).toHaveCount(0);
     await choosePreset(page, 'OpenAI');
-    await expect(page.getByLabel('Name', { exact: true })).toHaveValue('openai');
+    await expect(page.getByLabel('Provider name', { exact: true })).toHaveValue('openai');
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
     expect(
       await page.evaluate(
@@ -1671,6 +1648,9 @@ for (const width of [1440, 390]) {
 
 test('ChatGPT sign-in creates a route before approving the provider', async ({ page }) => {
   const chatGPTRoute = {
+    serves: [],
+    profile: 'chatgpt',
+    provider: 'chatgpt',
     name: 'chatgpt',
     local_prefix: '/chatgpt/',
     upstream: 'https://chatgpt.com/backend-api/codex',
@@ -1686,6 +1666,9 @@ test('ChatGPT sign-in creates a route before approving the provider', async ({ p
     routes: [
       {
         ...chatGPTRoute,
+        provider: 'legacy',
+        profile: '',
+        serves: [],
         name: 'legacy',
         local_prefix: '/legacy/',
         upstream: 'https://example.test/v1',
@@ -1704,6 +1687,7 @@ test('ChatGPT sign-in creates a route before approving the provider', async ({ p
     ],
     presets: [
       {
+        family: 'inference',
         id: 'chatgpt',
         label: 'ChatGPT plan',
         upstream: chatGPTRoute.upstream,
@@ -1717,7 +1701,8 @@ test('ChatGPT sign-in creates a route before approving the provider', async ({ p
   await page.route('http://proxy.test/_proxy/api/**', async (request) => {
     const url = new URL(request.request().url());
     const method = request.request().method();
-    if (url.pathname.endsWith('/state')) return request.fulfill({ json: state });
+    if (url.pathname.endsWith('/state'))
+      return request.fulfill({ json: withSingletonProviders(state) });
     if (url.pathname.endsWith('/chatgpt/setup')) {
       if (method === 'POST') {
         expect(request.request().postDataJSON()).toEqual({});
@@ -1732,7 +1717,16 @@ test('ChatGPT sign-in creates a route before approving the provider', async ({ p
       expect(url.searchParams.get('id')).toBe('mock-attempt');
       if (!approved) return request.fulfill({ json: { status: 'pending' } });
       state.routes.push({ ...chatGPTRoute, account: 'chatgpt-account' });
-      state.providers = [{ id: 'chatgpt', label: 'ChatGPT', routes: ['chatgpt'] }];
+      state.providers = [
+        {
+          family: 'inference',
+          status: 'green',
+          reason: '',
+          id: 'chatgpt',
+          label: 'ChatGPT',
+          routes: ['chatgpt'],
+        },
+      ];
       state.accounts = [
         { name: 'chatgpt-account', kind: 'chatgpt', state: 'ready', generation: 1, updated: 1 },
       ];
@@ -1769,8 +1763,8 @@ test('ChatGPT sign-in creates a route before approving the provider', async ({ p
   approved = true;
   await expect(row).toBeFocused();
   const card = providerCard(page, 'chatgpt');
-  await expect(card.getByRole('heading', { name: 'ChatGPT', exact: true })).toBeVisible();
-  await expect(card.locator('.provider-status')).toHaveText('Connected');
+  await expect(card.getByRole('heading', { name: 'chatgpt', exact: true })).toBeVisible();
+  await expect(card.getByRole('img', { name: 'Status: green' })).toBeVisible();
   await expect(card.locator('.provider-approval-summary')).toHaveCount(1);
   await expect(card.locator('.provider-approval-summary')).toHaveText('No clients approved');
   await expect(row.locator('.provider-route-clients')).toHaveCount(0);
@@ -1801,12 +1795,18 @@ test('Provider approval creates one show-once client for every current route', a
   const routes = [
     {
       ...routeDefaults,
+      provider: 'alpha',
+      profile: '',
+      serves: [],
       name: 'alpha',
       local_prefix: '/alpha/',
       upstream: 'https://alpha.example.test/v1',
     },
     {
       ...routeDefaults,
+      provider: 'alpha-extra',
+      profile: '',
+      serves: [],
       name: 'alpha-extra',
       local_prefix: '/alpha-extra/',
       upstream: 'https://alpha.example.test/extra',
@@ -1817,14 +1817,24 @@ test('Provider approval creates one show-once client for every current route', a
     auth: 'token',
     revision: 4,
     routes,
-    providers: [{ id: 'alpha', label: 'Alpha', routes: ['alpha', 'alpha-extra'] }],
+    providers: [
+      {
+        family: 'inference',
+        status: 'green',
+        reason: '',
+        id: 'alpha',
+        label: 'Alpha',
+        routes: ['alpha', 'alpha-extra'],
+      },
+    ],
     callers: [],
   };
   const creations: unknown[] = [];
   await page.route('http://proxy.test/_proxy/api/**', async (request) => {
     const url = new URL(request.request().url());
     const method = request.request().method();
-    if (url.pathname.endsWith('/state')) return request.fulfill({ json: state });
+    if (url.pathname.endsWith('/state'))
+      return request.fulfill({ json: withSingletonProviders(state) });
     if (url.pathname.endsWith('/callers') && method === 'POST') {
       const body = request.request().postDataJSON() as {
         name: string;
@@ -1884,6 +1894,9 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
   const chatgptRoutes = [
     {
       ...routeDefaults,
+      provider: 'chatgpt',
+      profile: 'chatgpt',
+      serves: ['providers.chatgpt.base_url'],
       name: 'chatgpt',
       account: 'chatgpt-work',
       local_prefix: '/chatgpt/',
@@ -1892,6 +1905,9 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
     },
     {
       ...routeDefaults,
+      provider: 'chatgpt',
+      profile: 'chatgpt-backend',
+      serves: ['transcription: chatgpt'],
       name: 'chatgpt-backend',
       account: 'chatgpt-work',
       local_prefix: '/chatgpt-backend/',
@@ -1900,6 +1916,9 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
     },
     {
       ...routeDefaults,
+      provider: 'chatgpt',
+      profile: 'chatgpt-openai',
+      serves: ['embed: chatgpt'],
       name: 'chatgpt-openai',
       account: 'chatgpt-work',
       local_prefix: '/chatgpt-openai/',
@@ -1909,6 +1928,9 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
   ];
   const openaiRoute = {
     ...routeDefaults,
+    provider: 'openai',
+    profile: 'openai',
+    serves: [],
     name: 'openai',
     local_prefix: '/openai/',
     upstream: 'https://api.openai.com/v1',
@@ -1925,13 +1947,23 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
     routes: [...chatgptRoutes, openaiRoute],
     providers: [
       {
+        family: 'inference',
+        status: 'green',
+        reason: '',
         id: 'chatgpt',
         label: 'ChatGPT',
         routes: ['chatgpt', 'chatgpt-backend', 'chatgpt-openai'],
       },
-      { id: 'openai', label: 'OpenAI API', routes: ['openai'] },
+      {
+        family: 'inference',
+        status: 'green',
+        reason: '',
+        id: 'openai',
+        label: 'OpenAI API',
+        routes: ['openai'],
+      },
     ],
-    secrets: [{ name: 'openai-key', origin: 'https://api.openai.com', source: 'stored' }],
+    secrets: [{ name: 'openai-key', routes: ['openai'], source: 'stored' }],
     callers: [
       {
         id: 'jarvis',
@@ -1954,6 +1986,7 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
     ],
     presets: [
       {
+        family: 'inference',
         id: 'chatgpt',
         label: 'ChatGPT plan',
         upstream: 'https://chatgpt.com/backend-api/codex',
@@ -1963,6 +1996,7 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
         companions: ['chatgpt-backend', 'chatgpt-openai'],
       },
       {
+        family: 'inference',
         id: 'chatgpt-backend',
         label: 'ChatGPT plan usage and dictation',
         upstream: 'https://chatgpt.com/backend-api',
@@ -1971,6 +2005,7 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
         billing: 'plan',
       },
       {
+        family: 'inference',
         id: 'chatgpt-openai',
         label: 'ChatGPT OAuth embeddings and live (billing unspecified)',
         upstream: 'https://api.openai.com/v1',
@@ -1979,6 +2014,7 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
         billing: 'unspecified',
       },
       {
+        family: 'inference',
         id: 'openai',
         label: 'OpenAI API',
         upstream: 'https://api.openai.com/v1',
@@ -1995,7 +2031,8 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
   await page.route('http://proxy.test/_proxy/api/**', async (request) => {
     const url = new URL(request.request().url());
     const method = request.request().method();
-    if (url.pathname.endsWith('/state')) return request.fulfill({ json: state });
+    if (url.pathname.endsWith('/state'))
+      return request.fulfill({ json: withSingletonProviders(state) });
     if (url.pathname.endsWith('/callers') && method === 'PUT') {
       const body = request.request().postDataJSON() as {
         id: string;
@@ -2024,8 +2061,8 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
   await expect(page.getByRole('heading', { name: 'Providers', exact: true })).toBeVisible();
   const cards = page.locator('article.route-card');
   await expect(cards).toHaveCount(2);
-  await expect(cards.nth(0).getByRole('heading', { name: 'ChatGPT' })).toBeVisible();
-  await expect(cards.nth(1).getByRole('heading', { name: 'OpenAI API' })).toBeVisible();
+  await expect(cards.nth(0).getByRole('heading', { name: 'chatgpt', exact: true })).toBeVisible();
+  await expect(cards.nth(1).getByRole('heading', { name: 'openai', exact: true })).toBeVisible();
   const chatgpt = cards.nth(0);
   const openai = cards.nth(1);
   const lines = chatgpt.locator('.provider-route-line');
@@ -2036,9 +2073,9 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
   await expect(lines.nth(0).locator('code')).toHaveText('/chatgpt/');
   await expect(lines.nth(1).locator('code')).toHaveText('/chatgpt-backend/');
   await expect(lines.nth(2).locator('code')).toHaveText('/chatgpt-openai/');
-  await expect(lines.nth(0)).toContainText('Chat, models, images & realtime call setup');
-  await expect(lines.nth(1)).toContainText('Usage & dictation');
-  await expect(lines.nth(2)).toContainText('Embeddings & realtime sideband');
+  await expect(lines.nth(0)).toContainText('providers.chatgpt.base_url');
+  await expect(lines.nth(1)).toContainText('transcription: chatgpt');
+  await expect(lines.nth(2)).toContainText('embed: chatgpt');
   // Route lines are informational only: approval belongs to the provider.
   await expect(chatgpt.locator('.provider-route-clients')).toHaveCount(0);
   await expect(openai.locator('.provider-route-clients')).toHaveCount(0);

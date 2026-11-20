@@ -73,7 +73,7 @@ func prepareClaudeProxyCommand(ctx context.Context, cmd *exec.Cmd) (func(), erro
 		return nil, nil
 	}
 	binding, ok := proxyclient.Lookup(root)
-	if !ok || binding.Kind != "claude-code" || !proxyclient.SameRoot(binding.Root, root) ||
+	if !ok || binding.Kind != "claude-bin" || !proxyclient.SameRoot(binding.Root, root) ||
 		proxyclient.ValidateClaudeNativeToken(binding.Token) != nil {
 		return nil, errors.New("claude-bin proxy root has no scoped credential binding")
 	}

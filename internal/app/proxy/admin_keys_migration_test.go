@@ -10,7 +10,10 @@ import (
 	"github.com/term-llm/term-llm/internal/sqliteutil"
 )
 
-const removeProxyV7 = `DROP TABLE claude_shared_enrollment; `
+// Older fixtures reconstructed from the fresh schema also need the v8 secret
+// origin, which was present in every released schema before v9.
+const removeProxyV7 = `ALTER TABLE secrets ADD COLUMN origin TEXT NOT NULL DEFAULT '';
+DROP TABLE claude_shared_enrollment; `
 
 // Remove version 6 objects before reconstructing older fixtures from live stores.
 const removeProxyV6 = `DROP INDEX callers_external_id; DROP TABLE admin_keys;

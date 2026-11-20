@@ -56,7 +56,7 @@ var errAccountUnavailable = errors.New("trusted account unavailable; sign in or 
 
 func accountKind(kind string) bool {
 	switch kind {
-	case "chatgpt", "grok", "copilot", "claude-code", "agy-bin", "aws-sigv4":
+	case "chatgpt", "grok", "copilot", "claude-bin", "agy-bin", "aws-sigv4":
 		return true
 	}
 	return false
@@ -121,8 +121,9 @@ func validateAccountOperator(o accountOperator) error {
 		return inputError("at most eight fixture origins")
 	}
 	for i, raw := range o.Origins {
-		origin, e := secretOrigin(raw)
-		if e != nil || !strings.HasPrefix(origin, "https://") {
+		origin, e := Origin(raw)
+		u, _ := url.Parse(raw)
+		if e != nil || !strings.HasPrefix(origin, "https://") || (u.Path != "" && u.Path != "/") {
 			return inputError("fixture origins must be HTTPS origins")
 		}
 		o.Origins[i] = origin
@@ -290,7 +291,7 @@ func accountOriginAllowed(a accountRecord, origin string) bool {
 		hosts = []string{"https://cli-chat-proxy.grok.com:443"}
 	case "copilot":
 		hosts = []string{"https://api.githubcopilot.com:443", "https://api.business.githubcopilot.com:443", "https://api.enterprise.githubcopilot.com:443"}
-	case "claude-code":
+	case "claude-bin":
 		hosts = []string{"https://" + claudeAPIHost + ":443"}
 	case "aws-sigv4":
 		if !validAWSRegion(a.operator.Region) {
@@ -359,10 +360,11 @@ func boundedAttribution(value string) string {
 	return out.String()
 }
 
-// Native subscription accounts always share an operator-owned login.
-func accountAuthMode(kind string, _ accountCredentials) string {
-	if nativeProviderForKind(kind) != nil {
-		return claudeSharedMode
+// Report the actual custody mode so provider status can distinguish legacy
+// slots from shared sign-in and detect expiration of token-only credentials.
+func accountAuthMode(kind string, credentials accountCredentials) string {
+	if credentials.Mode == "token_only" || nativeProviderForKind(kind) != nil && credentials.Mode == claudeSharedMode {
+		return credentials.Mode
 	}
 	return ""
 }

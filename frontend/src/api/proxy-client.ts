@@ -47,7 +47,8 @@ export interface ProxyRouteRule {
   allow?: string[];
 }
 export interface ProxyRoute {
-  provider?: string;
+  provider: string;
+  profile?: string;
   billing?: ProxyBilling;
   account?: string;
   websocket?: boolean;
@@ -64,11 +65,16 @@ export interface ProxyRoute {
   request_id_header?: string;
   rules?: ProxyRouteRule[];
 }
+export interface ProxyAdminRoute extends ProxyRoute {
+  profile: string;
+  serves: string[];
+}
 /** Creation-time defaults for a unified route's subpath rules. */
 export interface ProxyPresetRule {
   path_prefix: string;
   upstream: string;
   auth: ProxyAuth;
+  allow?: string[];
 }
 export interface ProxyChatGPTDeviceSignIn {
   id: string;
@@ -88,8 +94,8 @@ export interface ProxyNativeConnection {
 }
 export interface ProxySecret {
   name: string;
-  origin: string;
   source: 'stored' | 'file';
+  routes: string[] | null;
 }
 export interface ProxyCaller {
   id: string;
@@ -120,14 +126,14 @@ export interface ProxyPreset {
   account_kind?: ProxyAccount['kind'];
   /** Subpath rules that make this one route serve several protocol roots. */
   rules?: ProxyPresetRule[];
-  /** Picker section. */
-  group?: 'plan' | 'api_key' | 'self_hosted' | 'media';
+  family: ProxyProviderFamily;
+  allow?: string[];
   /** Sibling presets created alongside this one under their own fixed names. */
   companions?: string[];
 }
 export interface ProxyAccount {
   name: string;
-  kind: 'chatgpt' | 'grok' | 'copilot' | 'claude-code' | 'agy-bin' | 'aws-sigv4';
+  kind: 'chatgpt' | 'grok' | 'copilot' | 'claude-bin' | 'agy-bin' | 'aws-sigv4';
   state: string;
   generation: number;
   auth_mode?: 'token_only' | 'rotating' | 'vault' | 'shared_vault';
@@ -196,9 +202,35 @@ export interface ProxyParsedProviderConfig {
   stripped?: string[];
 }
 
+export type ProxyProviderFamily = 'inference' | 'search' | 'media' | 'embeddings';
+export type ProxyProviderStatus = 'green' | 'orange' | 'red' | 'grey';
+export type ProxyDefaultSlot = 'search' | 'fetch' | 'image' | 'audio' | 'music' | 'transcription';
+export type ProxyDefaults = Partial<Record<ProxyDefaultSlot, string>>;
+
+export interface ProxyStoredProvider {
+  label: string;
+  family?: ProxyProviderFamily;
+  client?: ProxyProviderClientConfig;
+}
+
+export interface ProxyProviderCreate {
+  name: string;
+  label?: string;
+  preset: string;
+  routes?: (Pick<ProxyRoute, 'name' | 'profile'> &
+    Partial<
+      Pick<ProxyRoute, 'local_prefix' | 'upstream' | 'account' | 'allow_insecure_http' | 'enabled'>
+    > & { profile: string })[];
+  secret?: string;
+  value?: string;
+}
+
 export interface ProxyProvider {
   id: string;
   label: string;
+  family: ProxyProviderFamily;
+  status: ProxyProviderStatus;
+  reason: string;
   routes: string[];
   config?: ProxyProviderClientConfig;
   config_yaml?: string;
@@ -206,13 +238,14 @@ export interface ProxyProvider {
 
 export interface ProxyState {
   accounts?: ProxyAccount[];
-  providers?: ProxyProvider[];
+  providers: ProxyProvider[];
+  defaults: ProxyDefaults | null;
   money?: ProxyMoneySettings;
   presets?: ProxyPreset[];
   auth: 'passkey' | 'token';
   mode: 'ui' | 'file';
   revision: number;
-  routes: ProxyRoute[];
+  routes: ProxyAdminRoute[];
   secrets: ProxySecret[];
   callers: ProxyCaller[];
   admin_keys: ProxyAdminKey[];
@@ -561,6 +594,7 @@ export class ProxyClient {
       ...state,
       routes: (state.routes ?? []).map((route) => ({
         ...route,
+        serves: route.serves ?? [],
         set_headers: route.set_headers ?? {},
         ...(route.rules
           ? {
@@ -612,17 +646,52 @@ export class ProxyClient {
     return this.request(`${launcher}/setup`, 'DELETE', { revision });
   }
   config(
-    revision: number,
+    state: ProxyState,
     routes: ProxyRoute[],
+    newProviders: Record<string, ProxyStoredProvider> = {},
     providerConfigYAML?: Record<string, string>,
   ): Promise<void> {
+    const providers = Object.fromEntries(
+      state.providers.map((provider) => [
+        provider.id,
+        {
+          label: provider.label,
+          ...(provider.config ? { client: provider.config } : {}),
+          // Admin state exposes the effective family; profiled routes must omit it in storage.
+          ...(provider.family !== 'inference' &&
+          !routes.some((r) => r.provider === provider.id && r.profile)
+            ? { family: provider.family }
+            : {}),
+        },
+      ]),
+    );
     return this.request('config', 'PUT', {
-      revision,
-      routes,
-      ...(providerConfigYAML && Object.keys(providerConfigYAML).length
-        ? { provider_config_yaml: providerConfigYAML }
-        : {}),
+      revision: state.revision,
+      routes: routes.map((route) => {
+        const config: ProxyRoute & Partial<ProxyAdminRoute> = { ...route };
+        delete config.serves;
+        return config;
+      }),
+      providers: { ...providers, ...newProviders },
+      defaults: state.defaults,
+      ...(providerConfigYAML ? { provider_config_yaml: providerConfigYAML } : {}),
     });
+  }
+  createProvider(revision: number, input: ProxyProviderCreate): Promise<{ revision: number }> {
+    return this.request('providers', 'POST', { revision, ...input });
+  }
+  renameProviderLabel(
+    revision: number,
+    name: string,
+    label: string,
+  ): Promise<{ revision: number }> {
+    return this.request(`providers/${encodeURIComponent(name)}`, 'PUT', { revision, label });
+  }
+  deleteProvider(revision: number, name: string): Promise<{ revision: number }> {
+    return this.request(`providers/${encodeURIComponent(name)}`, 'DELETE', { revision });
+  }
+  updateDefaults(revision: number, defaults: ProxyDefaults): Promise<{ revision: number }> {
+    return this.request('defaults', 'PUT', { revision, defaults });
   }
   updateProviderConfig(
     revision: number,
@@ -670,8 +739,8 @@ export class ProxyClient {
   reload(): Promise<void> {
     return this.request('reload', 'POST');
   }
-  secret(name: string, origin: string, value: string, replace = false): Promise<void> {
-    return this.request('secrets', 'PUT', { name, origin, value, replace });
+  secret(name: string, value: string, replace = false): Promise<void> {
+    return this.request('secrets', 'PUT', { name, value, ...(replace ? { replace } : {}) });
   }
   deleteSecret(name: string): Promise<void> {
     return this.request('secrets', 'DELETE', { name });

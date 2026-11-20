@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -74,7 +73,7 @@ func TestSRVUpstreamForwardsTLSWithBoundCredential(t *testing.T) {
 	}
 }
 
-func TestSRVUpstreamRecompileKeepsPinnedOriginAndRejectsCredentialMismatch(t *testing.T) {
+func TestSRVUpstreamRecompileKeepsPinnedOriginButRediscoveryChangesAuthority(t *testing.T) {
 	const raw = "srv://_inference._tcp.example.test/v1"
 	const endpoint = "https://api.example.test:8443"
 	calls := 0
@@ -82,32 +81,32 @@ func TestSRVUpstreamRecompileKeepsPinnedOriginAndRejectsCredentialMismatch(t *te
 	stubUpstreamSRV(t, func(string) (string, error) { calls++; return resolved, nil })
 	c := Config{Routes: []Route{route("svc", "/svc/", raw, "X-Local", "key")}}
 	secrets := map[string]material{"key": boundMaterial(t, endpoint, "old-key")}
-	first, err := compile(c, 1, secrets)
+	first, err := compile(fixtureProviders(c), 1, secrets)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resolved = "https://api.example.test:9443/v1"
 	secrets = map[string]material{"key": boundMaterial(t, endpoint, "rotated-key")}
-	next, err := first.recompile(c, secrets)
+	next, err := first.recompile(fixtureProviders(c), secrets)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 || next.routes[0].target.String() != endpoint+"/v1" || next.routes[0].authority != first.routes[0].authority || next.routes[0].headers.Get("X-Upstream-Key") != "Real rotated-key" {
 		t.Fatal("secret rotation did not retain the exact pinned upstream and scope")
 	}
-	if _, err := compile(c, 2, secrets); err == nil || !strings.Contains(err.Error(), "not bound to this upstream origin") {
-		t.Fatalf("rediscovery must not attach a credential to a new port, got %v", err)
-	}
-	if _, err := secretOrigin("srv://_inference._tcp.example.test"); err == nil {
-		t.Fatal("a secret must be bound to a concrete origin, not an SRV reference")
+	changed, err := compile(fixtureProviders(c), 2, secrets)
+	if err != nil || changed.routes[0].authority == first.routes[0].authority {
+		t.Fatalf("rediscovery must change authority for the new port: %v", err)
 	}
 }
 
 func TestSRVUpstreamReloadReconcilesGrantsAndKeepsLastGoodSnapshot(t *testing.T) {
 	s := testService(t)
 	s.opts.ConfigFile = filepath.Join(t.TempDir(), "proxy.yaml")
-	if err := os.WriteFile(s.opts.ConfigFile, []byte(`routes:
+	if err := os.WriteFile(s.opts.ConfigFile, []byte(`providers: {svc: {label: Test}}
+routes:
   - name: svc
+    provider: svc
     local_prefix: /svc/
     upstream: srv://_inference._tcp.example.test/v1
 `), 0o600); err != nil {

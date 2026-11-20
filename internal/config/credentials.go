@@ -286,6 +286,9 @@ func (c SearchConfig) ExaMCPURLRef() CredentialRef {
 // applies to the hosted default endpoint; a custom endpoint must configure its
 // own key. Callers must resolve the endpoint before selecting its fallback.
 func (c SearchConfig) ExaMCPKey(resolvedURL string) CredentialRef {
+	if c.suppressExaMCPKey {
+		return Cred("")
+	}
 	url := strings.TrimSpace(resolvedURL)
 	if url == "" || url == DefaultSearchExaMCPURL {
 		return Cred(c.ExaMCP.APIKey, "EXA_API_KEY")
@@ -305,11 +308,17 @@ func (c SearchConfig) ParallelKey() CredentialRef {
 
 // KeenableKey returns the optional Keenable search credential.
 func (c SearchConfig) KeenableKey() CredentialRef {
+	if c.suppressKeenableKey {
+		return Cred("")
+	}
 	return Cred(c.Keenable.APIKey, "KEENABLE_API_KEY")
 }
 
 // YouComKey returns the optional You.com search credential.
 func (c SearchConfig) YouComKey() CredentialRef {
+	if c.suppressYouComKey {
+		return Cred("")
+	}
 	return Cred(c.YouCom.APIKey, "YDC_API_KEY")
 }
 

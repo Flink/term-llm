@@ -90,8 +90,7 @@ API endpoints, JSON fields and `caller_auth` configuration compatible. Legacy
 `?tab=callers` links open Clients and normalize to `?tab=clients`.
 
 `/_proxy/api/state` is authoritative for CSRF, revision and mode. Mutations use
-`X-CSRF-Token` and same-origin session credentials. Configuration writes replace
-routes only and submit the loaded revision; conflicts require explicit refresh.
+`X-CSRF-Token` and same-origin session credentials. Configuration writes submit the loaded revision; conflicts require explicit refresh.
 File-managed routes and file-sourced secrets are read-only, with explicit file
 reload; stored secrets remain rotatable. The UI cannot edit file references.
 The **Admin** tab owns secret-free route download and confirmed YAML replacement
@@ -99,33 +98,35 @@ The **Admin** tab owns secret-free route download and confirmed YAML replacement
 visible, without nested disclosures. The server parses YAML; this is route
 configuration transfer, not a full backup.
 
-Provider presets come from `internal/app/proxy/presets.go` through authenticated
-state. A single **Provider preset** dropdown fills the route editor without
-persisting preset IDs or loading normal provider configuration. **Add API key**
-reuses the Secrets form without discarding the route draft. Secret storage and
-route save are separate commits; concurrent changes still require conflict checks.
-Saving never probes an upstream.
+The Providers page uses stored provider IDs, families, status and per-route
+capabilities from state. Family sections paginate independently. **Client
+defaults** saves route names for search, fetch, image, audio, music and
+transcription with `PUT /_proxy/api/defaults`. These defaults apply only to
+clients with access to the selected route and no explicit local selector.
+Embeddings deliberately have no proxy default.
 
-A preset may carry **subpath rules**: one local route, one client token and one
-client grant serving several upstream roots, with the client's protocol auth
-(e.g. bearer, `x-api-key`, `x-goog-api-key`) shown per subpath. A unified route
-has no parent client authentication or parent upstream substitution; each rule
-declares its own, and subpath mappings count as grant authority. OpenCode Go is
-a single preset with three editable rules for `/`, `/messages/` and `/gemini/`.
-Rules use one shared, origin-bound stored key selected or added once; every
-key-bearing rule's upstream must share that origin. Existing single-upstream
-routes keep the legacy editor and are never converted implicitly.
+The **Add provider** picker groups presets by family. Inference names can be
+edited at creation; other families use canonical names. Key-backed presets send
+one new key or an existing secret name to `POST /_proxy/api/providers`; the
+server creates the provider, its routes and any new secret together. For an
+advanced route edit, **Add API key** opens the Secrets form without discarding
+the draft. Those secret and route writes are separate. Route saves do not probe
+an upstream.
 
-The Routes setup guide disappears after the first persisted request.
-`has_requests` uses the SQLite sequence high-water mark, surviving retention and
-server restarts.
+Subpath rules let one route, one client token and one grant serve several
+upstream roots. Each rule declares its own upstream, authentication and optional
+allowlist, with no parent substitution. OpenCode Go uses `/`, `/messages/` and
+`/gemini/`. `METHOD /prefix/*` allows that method on any safe path below the
+prefix; `GET /*` allows GET on any safe path. The route editor keeps the exact
+syntax; Manage displays it in prose. Adding a missing companion never grants
+client access automatically.
 
-Secrets are write-only and origin-bound. Duplicate names are rejected unless an
-explicit, confirmed Replace action sends `replace: true`. Header substitutions
-default to stored secrets matching the upstream origin; literal values are public
-configuration, not a credential store. Administrator tokens, secret values and
-client tokens are never persisted **in browser storage**; the server does store
-secrets, in plaintext at rest.
+Secrets are write-only and referenced by name, including across upstreams.
+The Secrets page shows the source and the routes using each key. Duplicate
+names require explicit Replace with `replace: true`. Literal header values are
+public configuration, not a credential store. Administrator tokens, secret
+values and client tokens are never persisted in browser storage; server-stored
+secrets are plaintext at rest.
 
 **Providers → Add provider** uses shared subscriptions for Claude Code and
 personal Antigravity. **Create shared route & get sign-in launcher** posts
@@ -149,14 +150,12 @@ sign-ins. It converts per-device accounts to `shared_vault` with state
 `needs_login`; the operator must sign in again once for each converted account.
 The UI does not offer per-device sign-in and keeps `needs_login` and `refreshing`
 routes out of new worker access. Existing clients can still be managed.
-Every editable provider exposes a confirmed **Manage → Delete provider** action
-without nested disclosures: for route-based providers it removes every route in
-the group in one revision-checked `PUT /_proxy/api/config`, and for native
-shared providers it sends `DELETE` with `{ revision }` to remove that provider’s
-native routes, access and saved proxy sign-ins (leftover native sign-ins without
-routes retain **Clear all … setup**). It is not the same as revoking a single
-client. Normal vendor CLI profiles remain unchanged. File-managed routes expose
-no provider or native setup mutation controls.
+**Manage → Delete provider** uses `DELETE /_proxy/api/providers/{name}` with
+`{ revision }`. It removes the provider, its routes and their grants and
+defaults, plus secrets no remaining route references. Accounts stay until
+removed separately. Leftover native sign-ins retain **Clear all … setup**.
+File-managed providers and defaults are read-only. Canonical Claude launchers
+and worker YAML use `/claude-bin/`; custom mounts use the saved route prefix.
 
 Native routes are recognized by their account kind, not their name or URL. The
 native presets use guided setup instead of the generic account editor. There is

@@ -11,6 +11,7 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/term-llm/term-llm/internal/config"
+	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 const (
@@ -125,10 +126,15 @@ func (e *ExaMCPClient) callTool(ctx context.Context, tool string, args json.RawM
 	}
 
 	httpClient := &http.Client{Timeout: 30 * time.Second}
-	if e.apiKey != "" {
+	apiKey := e.apiKey
+	if binding, bound := proxyclient.Lookup(e.url); bound {
+		apiKey = binding.Token
+		httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	}
+	if apiKey != "" {
 		httpClient.Transport = &exaMCPHeaderTransport{
 			base:    http.DefaultTransport,
-			headers: map[string]string{"x-api-key": e.apiKey},
+			headers: map[string]string{"x-api-key": apiKey},
 		}
 	}
 
@@ -160,6 +166,7 @@ type exaMCPHeaderTransport struct {
 }
 
 func (t *exaMCPHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
 	for k, v := range t.headers {
 		req.Header.Set(k, v)
 	}

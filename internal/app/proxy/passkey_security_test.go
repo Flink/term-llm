@@ -171,12 +171,12 @@ func TestProxyPasskeyFileSecretsCannotReadAuthMaterial(t *testing.T) {
 		}
 	}
 	for _, path := range paths {
-		c := Config{Secrets: map[string]SecretRef{"forbidden": {Origin: "https://upstream.example.test", File: path}}}
+		c := Config{Secrets: map[string]SecretRef{"forbidden": {File: path}}}
 		if _, err := s.resolveSecrets(c, nil, true); err == nil {
 			t.Fatalf("auth material accepted as upstream: %s", path)
 		}
 	}
-	c := Config{Secrets: map[string]SecretRef{"valid": {Origin: "https://upstream.example.test", File: upstream}}}
+	c := Config{Secrets: map[string]SecretRef{"valid": {File: upstream}}}
 	if materials, err := s.resolveSecrets(c, nil, true); err != nil || materials["valid"].Value != "upstream-secret" {
 		t.Fatalf("ordinary file secrets broken without admin-token file: %v", err)
 	}

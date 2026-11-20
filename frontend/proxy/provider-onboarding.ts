@@ -15,6 +15,8 @@ import {
 } from './native';
 import { actions, button, disclosure, el, field, input, submit, type UIContext } from './dom';
 
+import { requireProviderName, slugPattern } from './provider-name';
+
 const chatGPTDeviceURL = 'https://auth.openai.com/codex/device';
 
 function chatGPTSignIn(
@@ -28,7 +30,7 @@ function chatGPTSignIn(
   view.className = 'provider-onboarding';
   const name = input();
   name.placeholder = 'chatgpt';
-  name.pattern = '[A-Za-z0-9][A-Za-z0-9_-]{0,63}';
+  name.pattern = slugPattern;
   name.maxLength = 64;
   const form = el(
     'form',
@@ -40,7 +42,7 @@ function chatGPTSignIn(
     ),
   );
   if (!route) {
-    form.append(disclosure('Route name (optional)', field('Route name', name)));
+    form.append(disclosure('Provider name (optional)', field('Provider name', name)));
     form.append(button('Cancel', close));
   }
   let active: string | undefined;
@@ -148,6 +150,7 @@ function chatGPTSignIn(
     context,
     async () => {
       const requested = name.value.trim();
+      if (!route && requested) requireProviderName(requested, state);
       const signIn = await api.startChatGPTSetup(
         route ? { account: route.account } : requested ? { name: requested } : {},
       );

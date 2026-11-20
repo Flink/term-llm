@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/term-llm/term-llm/internal/proxyclient"
+	"github.com/term-llm/term-llm/internal/proxyprofile"
 )
 
 func stubProxyDiscovery(t *testing.T, fn func(root, token string) (*proxyDiscoveryCatalog, error)) {
@@ -36,7 +37,7 @@ func TestProxyDiscoveryMaterializesCustomProviderOncePerProcess(t *testing.T) {
 	const wantToken = "scoped-discovery-client-token-0123456789"
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/_proxy/client/v1/providers" {
+		if r.URL.Path != "/_proxy/client/v2/providers" {
 			http.NotFound(w, r)
 			return
 		}
@@ -50,10 +51,9 @@ func TestProxyDiscoveryMaterializesCustomProviderOncePerProcess(t *testing.T) {
 			"revision": 7,
 			"providers": []map[string]any{
 				{
-					"id":           "cdck_deepseek",
-					"local_prefix": "/cdck_deepseek/",
-					"websocket":    false,
-					"routes":       []map[string]any{{"name": "cdck_deepseek", "local_prefix": "/cdck_deepseek/", "websocket": false}},
+					"id":     "cdck_deepseek",
+					"family": "inference",
+					"routes": []map[string]any{{"name": "cdck_deepseek", "local_prefix": "/cdck_deepseek/", "websocket": false}},
 					"config": map[string]any{
 						"type":                "vllm",
 						"model":               "deepseek-ai/DeepSeek-V4-Flash",
@@ -135,8 +135,9 @@ func TestProxyDiscoveryLocalOverridesAndTypeConflict(t *testing.T) {
 			"revision": 3,
 			"providers": []map[string]any{
 				{
-					"id":           "cdck_deepseek",
-					"local_prefix": "/team/deepseek/",
+					"id":     "cdck_deepseek",
+					"family": "inference",
+					"routes": []map[string]any{{"name": "backend", "local_prefix": "/team/deepseek/", "profile": "vllm"}},
 					"config": map[string]any{
 						"type":                "vllm",
 						"model":               "deepseek-ai/DeepSeek-V4-Flash",
@@ -225,18 +226,105 @@ func TestProxyDiscoveryFailsHardOnErrorsAndRejectsUnsafeResponses(t *testing.T) 
 		t.Fatalf("expected unauthorized discovery error, got %v", err)
 	}
 
-	// Server returning unknown/forbidden field (e.g. api_key) in config is rejected fail-closed.
-	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"revision":1,"providers":[{"id":"cdck_deepseek","local_prefix":"/cdck_deepseek/","config":{"type":"vllm","api_key":"$(touch pwned)"}}]}`))
+	// Unknown fields are ignored and never materialized as credentials.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"revision":1,"future":true,"providers":[{"id":"cdck_deepseek","family":"inference","future":{},"routes":[{"name":"cdck_deepseek","local_prefix":"/cdck_deepseek/","profile":"vllm","future":[]},{"name":"new-backend","local_prefix":"/new/","profile":"future-profile"}],"config":{"type":"vllm","api_key":"$(must-not-run)"}}]}`))
 	}))
-	defer evil.Close()
+	defer srv.Close()
+	const token = "scoped-unknown-field-token-0123456789"
+	cat, err := fetchProxyProvidersHTTP(srv.URL, token)
+	if err != nil || len(cat.Providers["cdck_deepseek"].Routes) != 1 {
+		t.Fatalf("unknown fields or profile did not get ignored: catalog=%+v err=%v", cat, err)
+	}
 	writeTestConfig(t, home, `proxy:
-  url: `+evil.URL+`
-  token: scoped-evil-token-0123456789
+  url: `+srv.URL+`
+  token: `+token+`
   providers: [cdck_deepseek]
 `)
-	if _, err := LoadWithoutCredentials(); err == nil || !strings.Contains(err.Error(), "invalid JSON") {
-		t.Fatalf("expected strict rejection of api_key in discovery JSON, got %v", err)
+	cfg, err := LoadWithoutCredentials()
+	if err != nil || cfg.Providers["cdck_deepseek"].APIKey != token {
+		t.Fatalf("discovery did not use only the delegated credential: err=%v", err)
+	}
+}
+
+func TestProxyDiscoveryV2ValidatesRoutesAndDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*proxyDiscoveryPayload)
+		want   string
+	}{
+		{"valid", func(*proxyDiscoveryPayload) {}, ""},
+		{"provider-slug", func(p *proxyDiscoveryPayload) { p.Providers[0].ID = "exa?" }, "provider id"},
+		{"duplicate-provider", func(p *proxyDiscoveryPayload) { p.Providers[1].ID = "exa" }, "duplicate provider id"},
+		{"slug", func(p *proxyDiscoveryPayload) { p.Providers[0].Routes[0].Name = "bad/name" }, "route name"},
+		{"empty", func(p *proxyDiscoveryPayload) { p.Providers[0].Routes = nil }, "has no routes"},
+		{"family", func(p *proxyDiscoveryPayload) { p.Providers[0].Family = "fetch" }, "unknown family"},
+		{"config-family", func(p *proxyDiscoveryPayload) { p.Providers[0].Config = &proxyprofile.ClientProviderConfig{} }, "outside the inference family"},
+		{"unsafe-prefix", func(p *proxyDiscoveryPayload) { p.Providers[0].Routes[0].LocalPrefix = "/v1/../foo/" }, "unsafe or duplicate local_prefix"},
+		{"reserved-prefix", func(p *proxyDiscoveryPayload) {
+			p.Providers[0].Routes[0].LocalPrefix = "/_proxy/client/unavailable/exa/"
+		}, "unsafe or duplicate local_prefix"},
+		{"duplicate-prefix", func(p *proxyDiscoveryPayload) { p.Providers[1].Routes[0].LocalPrefix = "/my-exa/" }, "unsafe or duplicate local_prefix"},
+		{"duplicate-route", func(p *proxyDiscoveryPayload) { p.Providers[1].Routes[0].Name = "exa-rest" }, "duplicate route name"},
+		{"cross-provider-collision", func(p *proxyDiscoveryPayload) { p.Providers[1].Routes[0].Name = "exa" }, "collides with an unrelated provider"},
+		{"wrong-slot", func(p *proxyDiscoveryPayload) { p.Defaults["fetch"] = p.Defaults["search"] }, "cannot serve"},
+		{"wrong-provider", func(p *proxyDiscoveryPayload) { p.Defaults["search"] = proxyDiscoveredDefault{"brave", "exa-rest"} }, "listed route"},
+		{"missing-route", func(p *proxyDiscoveryPayload) { p.Defaults["search"] = proxyDiscoveredDefault{"exa", "exa-mcp"} }, "listed route"},
+		{"future-profile", func(p *proxyDiscoveryPayload) { p.Providers[0].Routes[0].Profile = "future-exa" }, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := proxyDiscoveryPayload{Providers: []proxyDiscoveredProvider{
+				familyProvider("exa", "search", familyRoute("exa-rest", "exa", "/my-exa/")),
+				familyProvider("brave", "search", familyRoute("brave", "brave", "/brave/")),
+			}, Defaults: map[string]proxyDiscoveredDefault{"search": {"exa", "exa-rest"}}}
+			tc.change(&payload)
+			cat, err := validateDiscoveryPayload(payload)
+			if tc.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("wanted %q, got %v", tc.want, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.name == "future-profile" && (len(cat.Providers) != 1 || len(cat.Defaults) != 0) {
+				t.Fatal("future route or its default was not skipped")
+			}
+		})
+	}
+}
+
+func TestProxyDiscoveryV2ProbesV1OnHTTPError(t *testing.T) {
+	const token = "test-old-proxy-client-token"
+	for _, tc := range []struct {
+		v2, v1 int
+		want   string
+	}{
+		{401, 200, "proxy predates discovery v2; upgrade the proxy"},
+		{403, 410, "check proxy.token"},
+		{503, 404, "HTTP 503"},
+	} {
+		var probes atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != "GET" || r.Header.Get("Authorization") != "Bearer "+token {
+				t.Error("request did not use same scoped credentials")
+			}
+			switch r.URL.Path {
+			case "/_proxy/client/v2/providers":
+				w.WriteHeader(tc.v2)
+				_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+			case "/_proxy/client/v1/providers":
+				probes.Add(1)
+				w.WriteHeader(tc.v1)
+			default:
+				t.Errorf("unexpected request %s", r.URL.Path)
+			}
+		}))
+		cat, err := fetchProxyProvidersHTTP(srv.URL, token)
+		srv.Close()
+		if cat != nil || err == nil || !strings.Contains(err.Error(), tc.want) || probes.Load() != 1 {
+			t.Fatalf("v2=%d v1=%d: err=%v, probes=%d", tc.v2, tc.v1, err, probes.Load())
+		}
 	}
 }

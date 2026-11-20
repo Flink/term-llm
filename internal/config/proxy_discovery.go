@@ -22,25 +22,32 @@ const (
 type proxyDiscoveredRoute struct {
 	Name        string `json:"name"`
 	LocalPrefix string `json:"local_prefix"`
+	Profile     string `json:"profile"`
 	WebSocket   bool   `json:"websocket"`
 }
 
 type proxyDiscoveredProvider struct {
-	ID          string                             `json:"id"`
-	LocalPrefix string                             `json:"local_prefix,omitempty"`
-	WebSocket   bool                               `json:"websocket"`
-	Routes      []proxyDiscoveredRoute             `json:"routes"`
-	Config      *proxyprofile.ClientProviderConfig `json:"config,omitempty"`
+	ID     string                             `json:"id"`
+	Family string                             `json:"family"`
+	Routes []proxyDiscoveredRoute             `json:"routes"`
+	Config *proxyprofile.ClientProviderConfig `json:"config,omitempty"`
+}
+
+type proxyDiscoveredDefault struct {
+	Provider string `json:"provider"`
+	Route    string `json:"route"`
 }
 
 type proxyDiscoveryCatalog struct {
 	Revision  int64
 	Providers map[string]proxyDiscoveredProvider
+	Defaults  map[string]proxyDiscoveredDefault
 }
 
 type proxyDiscoveryPayload struct {
-	Revision  int64                     `json:"revision"`
-	Providers []proxyDiscoveredProvider `json:"providers"`
+	Revision  int64                             `json:"revision"`
+	Providers []proxyDiscoveredProvider         `json:"providers"`
+	Defaults  map[string]proxyDiscoveredDefault `json:"defaults"`
 }
 
 type proxyDiscoveryKey struct {
@@ -70,7 +77,7 @@ func proxyDiscoveryCacheKey(root, token string) proxyDiscoveryKey {
 	return proxyDiscoveryKey{root: root, tokenHash: hex.EncodeToString(sum[:])}
 }
 
-// discoverProxyProviders fetches GET /_proxy/client/v1/providers at most once
+// discoverProxyProviders fetches GET /_proxy/client/v2/providers at most once
 // per process for a given (proxyRoot, token) pair. No TTL is used so an active
 // process/conversation is never silently reconfigured mid-flight.
 func discoverProxyProviders(root, token string) (*proxyDiscoveryCatalog, error) {
@@ -111,71 +118,147 @@ func resetProxyDiscoveryCache() {
 }
 
 func fetchProxyProvidersHTTP(root, token string) (*proxyDiscoveryCatalog, error) {
-	endpoint := strings.TrimRight(root, "/") + "/_proxy/client/v1/providers"
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("proxy provider discovery request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-
 	client := &http.Client{
 		Timeout: proxyDiscoveryTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
-	resp, err := client.Do(req)
+	get := func(version string) (*http.Response, error) {
+		endpoint := strings.TrimRight(root, "/") + "/_proxy/client/" + version + "/providers"
+		req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", "application/json")
+		return client.Do(req)
+	}
+	resp, err := get("v2")
 	if err != nil {
 		return nil, fmt.Errorf("proxy provider discovery failed: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("proxy provider discovery unauthorized (check proxy.token)")
-	}
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		if old, err := get("v1"); err == nil {
+			old.Body.Close()
+			if old.StatusCode == http.StatusOK {
+				return nil, fmt.Errorf("proxy predates discovery v2; upgrade the proxy")
+			}
+		}
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, fmt.Errorf("proxy provider discovery unauthorized (check proxy.token)")
+		}
 		return nil, fmt.Errorf("proxy provider discovery failed: HTTP %d", resp.StatusCode)
 	}
 
-	var payload proxyDiscoveryPayload
-	dec := json.NewDecoder(io.LimitReader(resp.Body, proxyDiscoveryMaxBytes+1))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&payload); err != nil {
-		return nil, fmt.Errorf("proxy provider discovery returned invalid JSON: %w", err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, proxyDiscoveryMaxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read proxy provider discovery response: %w", err)
 	}
-	var extra any
-	if dec.Decode(&extra) != io.EOF {
-		return nil, fmt.Errorf("proxy provider discovery returned trailing data")
+	if len(body) > proxyDiscoveryMaxBytes {
+		return nil, fmt.Errorf("proxy provider discovery response is too large")
+	}
+	var payload proxyDiscoveryPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("proxy provider discovery returned invalid JSON: %w", err)
 	}
 	return validateDiscoveryPayload(payload)
 }
 
 func validateDiscoveryPayload(payload proxyDiscoveryPayload) (*proxyDiscoveryCatalog, error) {
-	byID := make(map[string]proxyDiscoveredProvider, len(payload.Providers))
+	catalog := &proxyDiscoveryCatalog{
+		Revision: payload.Revision, Providers: make(map[string]proxyDiscoveredProvider), Defaults: make(map[string]proxyDiscoveredDefault),
+	}
+	providerIDs := make(map[string]bool)
+	routeOwners := make(map[string]string)
+	prefixes := make(map[string]bool)
+	profiles := make(map[string]string)
 	for _, p := range payload.Providers {
-		if !proxyRouteName.MatchString(p.ID) {
-			return nil, fmt.Errorf("proxy provider discovery returned invalid provider id %q", p.ID)
+		if !proxyRouteName.MatchString(p.ID) || providerIDs[p.ID] {
+			return nil, fmt.Errorf("proxy provider discovery returned invalid or duplicate provider id %q", p.ID)
 		}
-		if p.LocalPrefix != "" && !validProxyLocalPrefix(p.LocalPrefix) {
-			return nil, fmt.Errorf("proxy provider %q returned unsafe local_prefix %q", p.ID, p.LocalPrefix)
+		providerIDs[p.ID] = true
+		if err := validateDiscoveredProvider(p); err != nil {
+			return nil, err
 		}
-		if p.Config != nil {
-			if err := p.Config.Validate(); err != nil {
-				return nil, fmt.Errorf("proxy provider %q returned invalid client config: %w", p.ID, err)
+		known := p
+		known.Routes = nil
+		for _, r := range p.Routes {
+			if !proxyRouteName.MatchString(r.Name) || routeOwners[r.Name] != "" {
+				return nil, fmt.Errorf("proxy provider %q returned invalid or duplicate route name %q", p.ID, r.Name)
+			}
+			if !validProxyLocalPrefix(r.LocalPrefix) || prefixes[r.LocalPrefix] {
+				return nil, fmt.Errorf("proxy route %q returned unsafe or duplicate local_prefix %q", r.Name, r.LocalPrefix)
+			}
+			routeOwners[r.Name], prefixes[r.LocalPrefix], profiles[r.Name] = p.ID, true, r.Profile
+			if _, ok := proxyprofile.ByID(r.Profile); ok || r.Profile == "" {
+				known.Routes = append(known.Routes, r)
 			}
 		}
-		byID[p.ID] = p
+		if len(known.Routes) != 0 {
+			catalog.Providers[p.ID] = known
+		}
 	}
-	return &proxyDiscoveryCatalog{Revision: payload.Revision, Providers: byID}, nil
+	for name, owner := range routeOwners {
+		if providerIDs[name] && name != owner {
+			return nil, fmt.Errorf("proxy route %q collides with an unrelated provider ID", name)
+		}
+	}
+	for slot, d := range payload.Defaults {
+		if _, exists := routeOwners[d.Route]; !exists || routeOwners[d.Route] != d.Provider {
+			return nil, fmt.Errorf("proxy discovery default for %q does not name a listed route of provider %q", slot, d.Provider)
+		}
+		profileID := profiles[d.Route]
+		p, known := proxyprofile.ByID(profileID)
+		if !known && profileID != "" {
+			continue // Ignore defaults for routes with future profiles as well.
+		}
+		if !defaultProxySlot(slot) || p.Slots[slot] == "" || d.Provider != proxyprofile.CanonicalParent(profileID) {
+			return nil, fmt.Errorf("proxy discovery default route %q cannot serve %q", d.Route, slot)
+		}
+		catalog.Defaults[slot] = d
+	}
+	return catalog, nil
+}
+
+func validateDiscoveredProvider(p proxyDiscoveredProvider) error {
+	switch p.Family {
+	case "inference", "search", "media", "embeddings":
+	default:
+		return fmt.Errorf("proxy provider %q returned unknown family %q", p.ID, p.Family)
+	}
+	if len(p.Routes) == 0 {
+		return fmt.Errorf("proxy provider %q has no routes", p.ID)
+	}
+	if p.Config != nil {
+		if p.Family != "inference" {
+			return fmt.Errorf("proxy provider %q returned client config outside the inference family", p.ID)
+		}
+		if err := p.Config.Validate(); err != nil {
+			return fmt.Errorf("proxy provider %q returned invalid client config: %w", p.ID, err)
+		}
+	}
+	return nil
 }
 
 func validProxyLocalPrefix(prefix string) bool {
 	if len(prefix) > 512 || !strings.HasPrefix(prefix, "/") || !strings.HasSuffix(prefix, "/") || prefix == "/" {
 		return false
 	}
-	if strings.Contains(prefix, "//") || strings.ContainsAny(prefix, "%\\\r\n\t ") {
+	for _, reserved := range []string{"/_proxy/", "/healthz/", "/assets/"} {
+		if strings.HasPrefix(prefix, reserved) {
+			return false
+		}
+	}
+	if strings.Contains(prefix, "//") || strings.ContainsAny(prefix, "%\\?# ") {
 		return false
+	}
+	for _, r := range prefix {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
 	}
 	for _, seg := range strings.Split(prefix, "/") {
 		if seg == "." || seg == ".." {
@@ -186,27 +269,8 @@ func validProxyLocalPrefix(prefix string) bool {
 }
 
 func isReservedProxyRouteID(id string) bool {
-	for _, p := range proxyprofile.All() {
-		if p.ID == id && (p.Provider == "" || p.ID != string(p.Provider)) {
-			return true
-		}
-	}
-	return false
-}
-
-func lookupDiscoveredProvider(catalog *proxyDiscoveryCatalog, name, canonicalID string) (proxyDiscoveredProvider, bool) {
-	if catalog == nil {
-		return proxyDiscoveredProvider{}, false
-	}
-	if p, ok := catalog.Providers[name]; ok {
-		return p, true
-	}
-	if canonicalID != "" && canonicalID != name {
-		if p, ok := catalog.Providers[canonicalID]; ok {
-			return p, true
-		}
-	}
-	return proxyDiscoveredProvider{}, false
+	p, ok := proxyprofile.ByID(id)
+	return ok && !proxyprofile.InferenceCapable(p)
 }
 
 func mergeDiscoveredProviderConfig(name string, pc ProviderConfig, discovered proxyprofile.ClientProviderConfig, file *fileSettings) (ProviderConfig, error) {

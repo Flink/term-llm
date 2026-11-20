@@ -11,13 +11,16 @@ import {
   type ProxyAccount,
   type ProxyCaller,
   type ProxyProvider,
-  type ProxyRoute,
+  type ProxyAdminRoute,
   type ProxyState,
 } from '../src/api/proxy-client';
 import type { UIContext } from './dom';
 import { routesView } from './routes';
 
-const veniceRoute: ProxyRoute = {
+const veniceRoute: ProxyAdminRoute = {
+  serves: [],
+  profile: 'venice',
+  provider: 'venice',
   name: 'venice',
   local_prefix: '/venice/',
   upstream: 'https://api.venice.ai/api/v1',
@@ -27,8 +30,11 @@ const veniceRoute: ProxyRoute = {
   set_headers: { Authorization: { secret: 'venice-key', prefix: 'Bearer ' } },
 };
 
-const chatgptRoutes: ProxyRoute[] = [
+const chatgptRoutes: ProxyAdminRoute[] = [
   {
+    serves: [],
+    profile: 'chatgpt',
+    provider: 'chatgpt',
     name: 'chatgpt',
     local_prefix: '/chatgpt/',
     upstream: 'https://chatgpt.com/backend-api/codex',
@@ -39,6 +45,9 @@ const chatgptRoutes: ProxyRoute[] = [
     set_headers: {},
   },
   {
+    serves: [],
+    profile: 'chatgpt-backend',
+    provider: 'chatgpt',
     name: 'chatgpt-backend',
     local_prefix: '/chatgpt-backend/',
     upstream: 'https://chatgpt.com/backend-api',
@@ -49,6 +58,9 @@ const chatgptRoutes: ProxyRoute[] = [
     set_headers: {},
   },
   {
+    serves: [],
+    profile: 'chatgpt-openai',
+    provider: 'chatgpt',
     name: 'chatgpt-openai',
     local_prefix: '/chatgpt-openai/',
     upstream: 'https://api.openai.com/v1',
@@ -60,18 +72,24 @@ const chatgptRoutes: ProxyRoute[] = [
   },
 ];
 
-const claudeRoute: ProxyRoute = {
-  name: 'claude-code',
-  local_prefix: '/claude-code/',
+const claudeRoute: ProxyAdminRoute = {
+  serves: [],
+  profile: 'claude-bin',
+  provider: 'claude-bin',
+  name: 'claude-bin',
+  local_prefix: '/claude-bin/',
   upstream: 'https://api.anthropic.com',
   enabled: true,
   allow_insecure_http: false,
-  account: 'claude-code',
+  account: 'claude-bin',
   caller_auth: { header: 'Authorization', prefix: 'Bearer ' },
   set_headers: {},
 };
 
-const agyRoute: ProxyRoute = {
+const agyRoute: ProxyAdminRoute = {
+  serves: [],
+  profile: 'agy-bin',
+  provider: 'agy-bin',
   name: 'agy-bin',
   local_prefix: '/agy-bin/',
   upstream: 'https://daily-cloudcode-pa.googleapis.com',
@@ -85,8 +103,8 @@ const agyRoute: ProxyRoute = {
 const accounts: ProxyAccount[] = [
   { name: 'chatgpt', kind: 'chatgpt', state: 'ready', generation: 1, updated: 1 },
   {
-    name: 'claude-code',
-    kind: 'claude-code',
+    name: 'claude-bin',
+    kind: 'claude-bin',
     auth_mode: 'shared_vault',
     state: 'ready',
     generation: 1,
@@ -108,16 +126,33 @@ const callers: ProxyCaller[] = [
     name: 'arch2',
     created: 1,
     revoked: false,
-    grants: ['venice', 'chatgpt', 'chatgpt-backend', 'chatgpt-openai', 'claude-code'],
+    grants: ['venice', 'chatgpt', 'chatgpt-backend', 'chatgpt-openai', 'claude-bin'],
     created_by: '',
     external_id: '',
   },
 ];
 
 const providers: ProxyProvider[] = [
-  { id: 'venice', label: 'Venice', routes: ['venice'] },
-  { id: 'claude-code', label: 'Claude Code plan', routes: ['claude-code'] },
   {
+    family: 'inference',
+    status: 'green',
+    reason: '',
+    id: 'venice',
+    label: 'Venice',
+    routes: ['venice'],
+  },
+  {
+    family: 'inference',
+    status: 'green',
+    reason: '',
+    id: 'claude-bin',
+    label: 'Claude Code plan',
+    routes: ['claude-bin'],
+  },
+  {
+    family: 'inference',
+    status: 'green',
+    reason: '',
     id: 'chatgpt',
     label: 'ChatGPT',
     routes: ['chatgpt', 'chatgpt-backend', 'chatgpt-openai'],
@@ -126,11 +161,11 @@ const providers: ProxyProvider[] = [
 
 function setup(overrides: Partial<ProxyState> = {}) {
   const api = new ProxyClient(vi.fn());
-  const config = vi.spyOn(api, 'config').mockResolvedValue();
+  const deleteProvider = vi.spyOn(api, 'deleteProvider').mockResolvedValue({ revision: 8 });
   const clearNative = vi.spyOn(api, 'clearNative').mockResolvedValue();
   const setupNative = vi.spyOn(api, 'setupNative').mockResolvedValue({
     revision: 8,
-    url: 'https://proxy.example/claude-code/',
+    url: 'https://proxy.example/claude-bin/',
     token: 'scoped-canary-worker',
     caller_id: 'w1',
   });
@@ -156,13 +191,14 @@ function setup(overrides: Partial<ProxyState> = {}) {
     navigate: vi.fn(),
   };
   const state: ProxyState = {
+    defaults: null,
     auth: 'token',
     mode: 'ui',
     revision: 7,
     csrf: 'csrf',
     routes: [veniceRoute, claudeRoute, ...chatgptRoutes],
     providers,
-    secrets: [{ name: 'venice-key', origin: 'https://api.venice.ai', source: 'stored' }],
+    secrets: [{ name: 'venice-key', routes: null, source: 'stored' }],
     accounts,
     callers,
     admin_keys: [],
@@ -170,7 +206,7 @@ function setup(overrides: Partial<ProxyState> = {}) {
   };
   const root = routesView(state, api, context);
   document.body.append(root);
-  return { root, api, config, clearNative, setupNative, announce, refresh };
+  return { root, api, deleteProvider, clearNative, setupNative, announce, refresh };
 }
 
 function openProvider(root: HTMLElement, label: string): HTMLDetailsElement {
@@ -186,73 +222,75 @@ afterEach(() => {
 });
 
 it('deletes a single-route API-key provider after confirmation and respects cancellation', async () => {
-  const { root, config, clearNative, refresh, announce } = setup();
+  const { root, deleteProvider, clearNative, refresh, announce } = setup();
   const manage = openProvider(root, 'Venice');
   const remove = getByRole(manage, 'button', { name: 'Delete provider Venice' });
   const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
 
   fireEvent.click(remove);
   expect(confirm).toHaveBeenCalledOnce();
-  expect(config).not.toHaveBeenCalled();
+  expect(deleteProvider).not.toHaveBeenCalled();
 
   fireEvent.click(remove);
-  await waitFor(() => expect(config).toHaveBeenCalledOnce());
-  expect(confirm.mock.calls[0]?.[0]).toContain('Delete provider Venice?');
+  await waitFor(() => expect(deleteProvider).toHaveBeenCalledOnce());
+  expect(confirm.mock.calls[0]?.[0]).toContain('Delete provider venice?');
   expect(confirm.mock.calls[0]?.[0]).toContain('Removes route venice');
   expect(confirm.mock.calls[0]?.[0]).toContain('for arch2');
-  expect(confirm.mock.calls[0]?.[0]).toContain('Stored API keys stay in Secrets.');
-  expect(config).toHaveBeenCalledWith(7, [claudeRoute, ...chatgptRoutes]);
+  expect(confirm.mock.calls[0]?.[0]).toContain(
+    'Keys no other route uses are removed from Secrets.',
+  );
+  expect(deleteProvider).toHaveBeenCalledWith(7, 'venice');
   expect(clearNative).not.toHaveBeenCalled();
   expect(refresh).toHaveBeenCalledOnce();
-  expect(announce).toHaveBeenLastCalledWith(expect.stringContaining('Deleted provider Venice.'));
+  expect(announce).toHaveBeenLastCalledWith(expect.stringContaining('Deleted provider venice.'));
 });
 
 it('deletes every route of a multi-route provider in one revision-checked write', async () => {
-  const { root, config, clearNative, refresh } = setup();
+  const { root, deleteProvider, clearNative, refresh } = setup();
   const manage = openProvider(root, 'ChatGPT');
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
   fireEvent.click(getByRole(manage, 'button', { name: 'Delete provider ChatGPT' }));
-  await waitFor(() => expect(config).toHaveBeenCalledOnce());
-  expect(confirm.mock.calls[0]?.[0]).toContain('Delete provider ChatGPT?');
+  await waitFor(() => expect(deleteProvider).toHaveBeenCalledOnce());
+  expect(confirm.mock.calls[0]?.[0]).toContain('Delete provider chatgpt?');
   expect(confirm.mock.calls[0]?.[0]).toContain(
     'Removes 3 routes (chatgpt, chatgpt-backend, chatgpt-openai)',
   );
-  expect(confirm.mock.calls[0]?.[0]).toContain(
-    'Connected accounts stay under Unused accounts until removed.',
-  );
-  expect(config).toHaveBeenCalledWith(7, [veniceRoute, claudeRoute]);
+  expect(confirm.mock.calls[0]?.[0]).toContain('Connected accounts stay until removed separately.');
+  expect(deleteProvider).toHaveBeenCalledWith(7, 'chatgpt');
   expect(clearNative).not.toHaveBeenCalled();
   expect(refresh).toHaveBeenCalledOnce();
 });
 
 it.each([
-  ['Claude Code plan', 'claude', 'Claude', claudeRoute, 'claude-code'],
+  ['Claude Code plan', 'claude', 'Claude', claudeRoute, 'claude-bin'],
   ['Antigravity', 'agy', 'Antigravity', agyRoute, 'agy-bin'],
 ] as const)(
-  'deletes native provider %s via clearNative after confirmation',
-  async (label, launcher, shortName, route, id) => {
-    const { root, config, clearNative, refresh, announce } = setup({
+  'deletes native provider %s with the providers API after confirmation',
+  async (label, _launcher, _shortName, route, id) => {
+    const { root, deleteProvider, clearNative, refresh, announce } = setup({
       routes: [veniceRoute, route],
       providers: [
-        { id: 'venice', label: 'Venice', routes: ['venice'] },
-        { id, label, routes: [route.name] },
+        {
+          family: 'inference',
+          status: 'green',
+          reason: '',
+          id: 'venice',
+          label: 'Venice',
+          routes: ['venice'],
+        },
+        { family: 'inference', status: 'green', reason: '', id, label, routes: [route.name] },
       ],
     });
     const manage = openProvider(root, label);
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     fireEvent.click(getByRole(manage, 'button', { name: `Delete provider ${label}` }));
-    await waitFor(() => expect(clearNative).toHaveBeenCalledExactlyOnceWith(launcher, 7));
-    expect(confirm.mock.calls[0]?.[0]).toContain(`Delete provider ${label}?`);
-    expect(confirm.mock.calls[0]?.[0]).toContain(
-      `Removes all ${shortName} proxy routes, device access, and saved proxy sign-ins.`,
-    );
-    expect(config).not.toHaveBeenCalled();
+    await waitFor(() => expect(deleteProvider).toHaveBeenCalledExactlyOnceWith(7, id));
+    expect(confirm.mock.calls[0]?.[0]).toContain(`Delete provider ${id}?`);
+    expect(clearNative).not.toHaveBeenCalled();
     expect(refresh).toHaveBeenCalledOnce();
-    expect(announce).toHaveBeenLastCalledWith(
-      expect.stringContaining(`Deleted provider ${label}.`),
-    );
+    expect(announce).toHaveBeenLastCalledWith(expect.stringContaining(`Deleted provider ${id}.`));
   },
 );
 

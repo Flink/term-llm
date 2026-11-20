@@ -26,7 +26,7 @@ func parseClaudeTestBootstrap(t *testing.T, metadata map[string]any) (*nativeBoo
 	if err != nil {
 		t.Fatal(err)
 	}
-	return claudeNativePolicy.parseBootstrap(claudeSharedTestOrigin+"/team/claude-code", body)
+	return claudeNativePolicy.parseBootstrap(claudeSharedTestOrigin+"/team/claude-bin", body)
 }
 
 func TestClaudeNativeSharedBootstrapRejectsInvalidAccess(t *testing.T) {
@@ -42,7 +42,7 @@ func TestClaudeNativeSharedBootstrapRejectsInvalidAccess(t *testing.T) {
 		{"control in scopes", claudeSharedTestPlaceholder, "user:inference\x00hidden", "scopes"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			metadata := claudeNativeTestMetadata(ca, claudeSharedTestOrigin, "claude-code")
+			metadata := claudeNativeTestMetadata(ca, claudeSharedTestOrigin, "claude-bin")
 			metadata["access_placeholder"], metadata["scopes"] = tt.placeholder, tt.scopes
 			if _, err := parseClaudeTestBootstrap(t, metadata); err == nil || !strings.Contains(err.Error(), tt.invalidField) || (tt.placeholder != "" && strings.Contains(err.Error(), tt.placeholder)) {
 				t.Fatalf("invalid or unsafe bootstrap result: %v", err)
@@ -61,7 +61,7 @@ func TestClaudeNativeCommandHandoffOffline(t *testing.T) {
 		{"operator login", "", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			metadata := claudeNativeTestMetadata(ca, claudeSharedTestOrigin, "claude-code")
+			metadata := claudeNativeTestMetadata(ca, claudeSharedTestOrigin, "claude-bin")
 			if tt.placeholder != "" {
 				metadata["access_placeholder"] = tt.placeholder
 			}
@@ -145,7 +145,7 @@ func assertClaudeChildIsIsolated(t *testing.T, got map[string]string, stateDir s
 		t.Fatal("child did not receive the isolated Claude profile and CA")
 	}
 	proxy, err := url.Parse(got["HTTPS_PROXY"])
-	if err != nil || proxy.Host != "proxy.example.test" || proxy.User.Username() != "claude-code" || got["NO_PROXY"] == "*" {
+	if err != nil || proxy.Host != "proxy.example.test" || proxy.User.Username() != "claude-bin" || got["NO_PROXY"] == "*" {
 		t.Fatal("child did not receive the scoped Claude tunnel")
 	}
 }

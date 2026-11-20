@@ -30,6 +30,8 @@ afterEach(() => {
 async function setup(overrides: Partial<ProxyState> = {}) {
   window.history.replaceState(null, '', '/_proxy/?tab=admin');
   const snapshot: ProxyState = {
+    defaults: null,
+    providers: [],
     auth: 'passkey',
     mode: 'ui',
     revision: 23,

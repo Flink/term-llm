@@ -27,7 +27,7 @@ func TestPayloadDebugExactRequestLookup(t *testing.T) {
 		fmt.Fprint(w, "PRIVATE-RESPONSE")
 	}))
 	defer up.Close()
-	if out := adminRequest(s, "PUT", "secrets", map[string]string{"name": "key", "origin": up.URL, "value": "PRIVATE-HEADER"}, cookie, csrf); out.Code != 200 {
+	if out := adminRequest(s, "PUT", "secrets", map[string]string{"name": "key", "value": "PRIVATE-HEADER"}, cookie, csrf); out.Code != 200 {
 		t.Fatal(out.Code, out.Body.String())
 	}
 	configure(t, s, Config{Routes: []Route{route("r", "/r/", up.URL, "X-Local", "key")}}, map[string]material{"key": boundMaterial(t, up.URL, "PRIVATE-HEADER")})

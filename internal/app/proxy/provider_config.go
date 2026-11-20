@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/proxyprofile"
@@ -11,116 +13,41 @@ import (
 type clientProviderRoute struct {
 	Name        string `json:"name"`
 	LocalPrefix string `json:"local_prefix"`
+	Profile     string `json:"profile"`
 	WebSocket   bool   `json:"websocket"`
 }
 
 type clientProviderInfo struct {
-	ID          string                             `json:"id"`
-	LocalPrefix string                             `json:"local_prefix,omitempty"`
-	WebSocket   bool                               `json:"websocket"`
-	Routes      []clientProviderRoute              `json:"routes"`
-	Config      *proxyprofile.ClientProviderConfig `json:"config,omitempty"`
+	ID     string                             `json:"id"`
+	Family string                             `json:"family"`
+	Routes []clientProviderRoute              `json:"routes"`
+	Config *proxyprofile.ClientProviderConfig `json:"config,omitempty"`
 }
 
-func validateProviderConfigs(configs map[string]proxyprofile.ClientProviderConfig, routes []Route) (map[string]proxyprofile.ClientProviderConfig, error) {
-	if len(configs) == 0 {
-		return nil, nil
-	}
-	if len(configs) > 128 {
-		return nil, fmt.Errorf("at most 128 provider configs")
-	}
-	known := validProviderConfigIDs(routes)
-	cleaned := make(map[string]proxyprofile.ClientProviderConfig, len(configs))
-	for id, cfg := range configs {
-		if !slug.MatchString(id) {
-			return nil, fmt.Errorf("provider config key %q must be a slug of at most 64 characters", id)
-		}
-		if !known[id] {
-			return nil, fmt.Errorf("provider config %q does not match any configured route or provider group", id)
-		}
-		if err := cfg.Validate(); err != nil {
-			return nil, fmt.Errorf("provider config %s: %w", id, err)
-		}
-		if !cfg.IsZero() {
-			cleaned[id] = cfg
-		}
-	}
-	if len(cleaned) == 0 {
-		return nil, nil
-	}
-	return cleaned, nil
+type clientProviderDefault struct {
+	Provider string `json:"provider"`
+	Route    string `json:"route"`
 }
 
-func validProviderConfigIDs(routes []Route) map[string]bool {
-	known := make(map[string]bool, len(routes)*2)
-	for _, r := range routes {
-		known[r.Name] = true
-		if r.Provider != "" {
-			known[r.Provider] = true
+func mergeProviderConfigUpdates(providers map[string]Provider, updates map[string]string) error {
+	for id, raw := range updates {
+		p, ok := providers[id]
+		if !ok {
+			return fmt.Errorf("unknown provider %s", id)
 		}
-	}
-	return known
-}
-
-func attachProviderConfigs(groups []providerGroup, configs map[string]proxyprofile.ClientProviderConfig) []providerGroup {
-	if len(configs) == 0 {
-		return groups
-	}
-	for i := range groups {
-		cfg, ok := configs[groups[i].ID]
-		if !ok || cfg.IsZero() {
-			continue
+		p.Client = nil
+		if strings.TrimSpace(raw) != "" {
+			cfg, err := proxyprofile.ParseClientProviderYAML([]byte(raw))
+			if err != nil {
+				return fmt.Errorf("provider config %s: %w", id, err)
+			}
+			if !cfg.IsZero() {
+				p.Client = &cfg
+			}
 		}
-		copyCfg := cfg
-		groups[i].Config = &copyCfg
-		if rendered, err := proxyprofile.MarshalClientProviderYAML(cfg); err == nil {
-			groups[i].ConfigYAML = rendered
-		}
+		providers[id] = p
 	}
-	return groups
-}
-
-func cloneProviderConfigs(in map[string]proxyprofile.ClientProviderConfig) map[string]proxyprofile.ClientProviderConfig {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]proxyprofile.ClientProviderConfig, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
-func mergeProviderConfigUpdates(existing map[string]proxyprofile.ClientProviderConfig, updates map[string]string, routes []Route) (map[string]proxyprofile.ClientProviderConfig, error) {
-	known := validProviderConfigIDs(routes)
-	merged := make(map[string]proxyprofile.ClientProviderConfig, len(existing)+len(updates))
-	for id, cfg := range existing {
-		if known[id] && !cfg.IsZero() {
-			merged[id] = cfg
-		}
-	}
-	for id, rawYAML := range updates {
-		if !slug.MatchString(id) {
-			return nil, fmt.Errorf("provider config key %q must be a slug of at most 64 characters", id)
-		}
-		if strings.TrimSpace(rawYAML) == "" {
-			delete(merged, id)
-			continue
-		}
-		cfg, err := proxyprofile.ParseClientProviderYAML([]byte(rawYAML))
-		if err != nil {
-			return nil, fmt.Errorf("provider config %s: %w", id, err)
-		}
-		if cfg.IsZero() {
-			delete(merged, id)
-		} else {
-			merged[id] = cfg
-		}
-	}
-	if len(merged) == 0 {
-		return nil, nil
-	}
-	return merged, nil
+	return nil
 }
 
 // clientProviders serves caller-token-authenticated discovery for granted
@@ -150,58 +77,33 @@ func (s *Service) clientProviders(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	accounts, err := s.store.accountInfos()
-	if err != nil {
-		http.Error(w, "provider discovery unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	activeByName := make(map[string]activeRoute, len(s.snap.routes))
+	c := s.snap.config
+	groups := providerRoutes(c)
+	granted := make(map[string]string)
+	byProvider := make(map[string][]clientProviderRoute)
 	for _, ar := range s.snap.routes {
-		activeByName[ar.Name] = ar
-	}
-	groups := providerGroups(s.snap.config.Routes, accounts)
-	providers := make([]clientProviderInfo, 0, len(groups))
-	for _, group := range groups {
-		var granted []clientProviderRoute
-		var primary *activeRoute
-		for _, routeName := range group.Routes {
-			ar, ok := activeByName[routeName]
-			if !ok || !ar.Enabled {
-				continue
-			}
-			var authority string
-			if s.store.db.QueryRow("SELECT authority FROM grants WHERE caller=? AND route=?", callerID, ar.Name).Scan(&authority) != nil || authority != ar.authority {
-				continue
-			}
-			granted = append(granted, clientProviderRoute{
-				Name:        ar.Name,
-				LocalPrefix: ar.LocalPrefix,
-				WebSocket:   ar.WebSocket,
-			})
-			if primary == nil || ar.Name == group.ID {
-				cp := ar
-				primary = &cp
-			}
-		}
-		if len(granted) == 0 || primary == nil {
+		if !ar.Enabled {
 			continue
 		}
-		entry := clientProviderInfo{
-			ID:          group.ID,
-			LocalPrefix: primary.LocalPrefix,
-			WebSocket:   primary.WebSocket,
-			Routes:      granted,
+		var authority string
+		if s.store.db.QueryRow("SELECT authority FROM grants WHERE caller=? AND route=?", callerID, ar.Name).Scan(&authority) != nil || authority != ar.authority {
+			continue
 		}
-		if cfg, ok := s.snap.config.Providers[group.ID]; ok && !cfg.IsZero() {
-			cp := cfg
-			entry.Config = &cp
-		}
-		providers = append(providers, entry)
+		granted[ar.Name] = ar.Provider
+		byProvider[ar.Provider] = append(byProvider[ar.Provider], clientProviderRoute{ar.Name, ar.LocalPrefix, ar.Profile, ar.WebSocket})
 	}
-	jsonReply(w, http.StatusOK, map[string]any{
-		"revision":  s.snap.revision,
-		"providers": providers,
-	})
+	providers := make([]clientProviderInfo, 0, len(byProvider))
+	for _, id := range slices.Sorted(maps.Keys(byProvider)) {
+		p := c.Providers[id]
+		providers = append(providers, clientProviderInfo{id, providerFamily(p, primaryProfile(id, groups[id])), byProvider[id], p.Client})
+	}
+	defaults := make(map[string]clientProviderDefault)
+	for slot, name := range c.Defaults {
+		if provider, ok := granted[name]; ok {
+			defaults[slot] = clientProviderDefault{provider, name}
+		}
+	}
+	jsonReply(w, http.StatusOK, map[string]any{"revision": s.snap.revision, "providers": providers, "defaults": defaults})
 }
 
 func (s *Service) updateProviderConfig(w http.ResponseWriter, r *http.Request) {
@@ -218,34 +120,16 @@ func (s *Service) updateProviderConfig(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "Provider ID must be a valid slug")
 		return
 	}
-	var parsed proxyprofile.ClientProviderConfig
-	if strings.TrimSpace(in.YAML) != "" {
-		var err error
-		parsed, err = proxyprofile.ParseClientProviderYAML([]byte(in.YAML))
-		if err != nil {
-			fail(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.opts.ConfigFile != "" {
-		fail(w, http.StatusConflict, "Provider config is operator-managed; edit the mounted file and Reload")
-		return
-	}
-	if in.Revision != s.snap.revision {
-		fail(w, http.StatusConflict, "Configuration changed in another tab; refresh before saving")
+	if !s.checkConfigEdit(w, in.Revision) {
 		return
 	}
 	nextCfg := s.snap.config
-	nextCfg.Providers = cloneProviderConfigs(s.snap.config.Providers)
-	if parsed.IsZero() {
-		delete(nextCfg.Providers, in.Provider)
-	} else {
-		if nextCfg.Providers == nil {
-			nextCfg.Providers = make(map[string]proxyprofile.ClientProviderConfig)
-		}
-		nextCfg.Providers[in.Provider] = parsed
+	nextCfg.Providers = maps.Clone(nextCfg.Providers)
+	if err := mergeProviderConfigUpdates(nextCfg.Providers, map[string]string{in.Provider: in.YAML}); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	next, err := s.snap.recompile(nextCfg, s.snap.secrets)
 	if err != nil {
@@ -257,18 +141,12 @@ func (s *Service) updateProviderConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.snap = next
-	var cfgPtr *proxyprofile.ClientProviderConfig
+	cfg := nextCfg.Providers[in.Provider].Client
 	var rendered string
-	if !parsed.IsZero() {
-		cp := parsed
-		cfgPtr = &cp
-		rendered, _ = proxyprofile.MarshalClientProviderYAML(parsed)
+	if cfg != nil {
+		rendered, _ = proxyprofile.MarshalClientProviderYAML(*cfg)
 	}
-	jsonReply(w, http.StatusOK, map[string]any{
-		"revision":    next.revision,
-		"config":      cfgPtr,
-		"config_yaml": rendered,
-	})
+	jsonReply(w, http.StatusOK, map[string]any{"revision": next.revision, "config": cfg, "config_yaml": rendered})
 }
 
 func (s *Service) parseProviderConfig(w http.ResponseWriter, r *http.Request) {

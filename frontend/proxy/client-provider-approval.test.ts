@@ -10,13 +10,16 @@ import {
   ProxyClient,
   type ProxyAccount,
   type ProxyCaller,
-  type ProxyRoute,
+  type ProxyAdminRoute,
   type ProxyState,
 } from '../src/api/proxy-client';
 import type { UIContext } from './dom';
 import { callersView } from './security';
 
-const route = (name: string): ProxyRoute => ({
+const route = (name: string): ProxyAdminRoute => ({
+  serves: [],
+  profile: '',
+  provider: name,
   name,
   local_prefix: `/${name}/`,
   upstream: 'https://example.com/',
@@ -39,7 +42,7 @@ const caller = (overrides: Partial<ProxyCaller> = {}): ProxyCaller => ({
 
 const sharedAccount: ProxyAccount = {
   name: 'shared-claude',
-  kind: 'claude-code',
+  kind: 'claude-bin',
   auth_mode: 'shared_vault',
   state: 'needs_login',
   generation: 1,
@@ -48,13 +51,28 @@ const sharedAccount: ProxyAccount = {
 
 function snapshot(overrides: Partial<ProxyState> = {}): ProxyState {
   return {
+    defaults: null,
     auth: 'token',
     mode: 'ui',
     revision: 7,
     routes: [route('chatgpt'), route('chatgpt-backend'), route('venice')],
     providers: [
-      { id: 'chatgpt', label: 'ChatGPT plan', routes: ['chatgpt', 'chatgpt-backend'] },
-      { id: 'venice', label: 'Venice', routes: ['venice'] },
+      {
+        family: 'inference',
+        status: 'green',
+        reason: '',
+        id: 'chatgpt',
+        label: 'ChatGPT plan',
+        routes: ['chatgpt', 'chatgpt-backend'],
+      },
+      {
+        family: 'inference',
+        status: 'green',
+        reason: '',
+        id: 'venice',
+        label: 'Venice',
+        routes: ['venice'],
+      },
     ],
     secrets: [],
     callers: [],
@@ -226,7 +244,16 @@ describe('provider-wide client approval', () => {
     const { root } = setup(
       snapshot({
         routes: [sharedRoute],
-        providers: [{ id: 'claude', label: 'Claude Code', routes: ['claude'] }],
+        providers: [
+          {
+            family: 'inference',
+            status: 'green',
+            reason: '',
+            id: 'claude',
+            label: 'Claude Code',
+            routes: ['claude'],
+          },
+        ],
         accounts: [sharedAccount],
         callers: [caller({ id: 'c1' })],
       }),
@@ -248,7 +275,16 @@ describe('provider-wide client approval', () => {
     const { root, updateProviderApprovals } = setup(
       snapshot({
         routes,
-        providers: [{ id: 'claude', label: 'Claude Code', routes: routes.map(({ name }) => name) }],
+        providers: [
+          {
+            family: 'inference',
+            status: 'green',
+            reason: '',
+            id: 'claude',
+            label: 'Claude Code',
+            routes: routes.map(({ name }) => name),
+          },
+        ],
         accounts: [sharedAccount],
         callers: [caller({ grants: ['claude'] })],
       }),
@@ -263,7 +299,7 @@ describe('provider-wide client approval', () => {
     const claudeRoute = { ...route('claude'), account: 'claude-slot' };
     const account: ProxyAccount = {
       name: 'claude-slot',
-      kind: 'claude-code',
+      kind: 'claude-bin',
       auth_mode: 'shared_vault',
       state: 'ready',
       generation: 1,
@@ -272,7 +308,16 @@ describe('provider-wide client approval', () => {
     const { root, createProviderCaller } = setup(
       snapshot({
         routes: [claudeRoute],
-        providers: [{ id: 'claude', label: 'Claude Code', routes: ['claude'] }],
+        providers: [
+          {
+            family: 'inference',
+            status: 'green',
+            reason: '',
+            id: 'claude',
+            label: 'Claude Code',
+            routes: ['claude'],
+          },
+        ],
         accounts: [account],
       }),
     );
@@ -296,7 +341,16 @@ describe('provider-wide client approval', () => {
     const { root, updateProviderApprovals } = setup(
       snapshot({
         routes: [sharedRoute],
-        providers: [{ id: 'claude', label: 'Claude Code', routes: ['claude'] }],
+        providers: [
+          {
+            family: 'inference',
+            status: 'green',
+            reason: '',
+            id: 'claude',
+            label: 'Claude Code',
+            routes: ['claude'],
+          },
+        ],
         accounts: [sharedAccount],
         callers: [caller({ id: 'c1', grants: ['claude'] })],
       }),

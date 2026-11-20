@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"maps"
 	"time"
 )
 
@@ -36,14 +37,15 @@ func (s *Service) prepareChatGPTSetup(in chatGPTSetupInput) (chatGPTSetupTarget,
 	target := chatGPTSetupTarget{name: in.Name, reconnect: in.Account != ""}
 	if target.reconnect {
 		target.name = in.Account
-	} else if target.name == "" {
-		target.name = "chatgpt"
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if target.name == "" {
+		target.name = unusedProviderSlug(s.snap.config, "chatgpt", "chatgpt")
 	}
 	if !slug.MatchString(target.name) {
 		return chatGPTSetupTarget{}, &chatGPTSetupError{400, "Name must be a slug of at most 64 characters"}
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	old, problem := s.checkChatGPTSetupTarget(target)
 	target.identityVersion = old.identityVersion
 	return target, problem
@@ -82,6 +84,9 @@ func (s *Service) checkChatGPTSetupTarget(target chatGPTSetupTarget) (accountRec
 func (s *Service) checkNewChatGPTRoute(name string) *chatGPTSetupError {
 	if len(s.snap.routes) >= 128 {
 		return &chatGPTSetupError{409, "Route limit reached"}
+	}
+	if !providerSlugAvailable(s.snap.config, name, "chatgpt") {
+		return &chatGPTSetupError{409, "A provider or built-in name already exists; choose a different name"}
 	}
 	for _, route := range s.snap.routes {
 		if route.Name == name {
@@ -169,26 +174,21 @@ func (s *Service) chatGPTRouteForAccount(name string) string {
 }
 
 func (s *Service) provisionChatGPTRoute(ctx context.Context, a accountRecord) (string, *chatGPTSetupError) {
-	var preset routePreset
-	for _, p := range routePresets {
-		if p.ID == "chatgpt" && p.AccountKind == a.Kind {
-			preset = p
-			break
-		}
-	}
+	preset, _ := routePresetByID("chatgpt")
 	c := s.snap.config
 	money, err := s.currentMoneySettingsLocked(ctx)
 	if err != nil {
 		return "", &chatGPTSetupError{503, "Could not read current proxy configuration"}
 	}
 	c.Money = money
-	route := chatGPTPresetRoute(preset, a.Name, a.Name)
-	route.Provider = unusedProviderSlug(c.Routes, route.Name)
-	c.Routes = append(append([]Route(nil), c.Routes...), route)
-	companions := chatGPTCompanionRoutes(preset, a.Name, c.Routes)
-	for i := range companions {
-		companions[i].Provider = route.Provider
+	c.Providers = maps.Clone(c.Providers)
+	if c.Providers == nil {
+		c.Providers = make(map[string]Provider)
 	}
+	c.Providers[a.Name] = Provider{Label: preset.Label}
+	route := chatGPTPresetRoute(preset, a.Name, a.Name)
+	c.Routes = append(append([]Route(nil), c.Routes...), route)
+	companions := chatGPTCompanionRoutes(preset, a.Name, c)
 	c.Routes = append(c.Routes, companions...)
 	added := 1 + len(companions)
 	next, err := s.snap.recompile(c, s.snap.secrets)

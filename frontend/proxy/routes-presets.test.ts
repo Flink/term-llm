@@ -1,3 +1,4 @@
+import { withSingletonProviders } from './test-fixtures';
 import { afterEach, expect, it, vi } from 'vitest';
 import {
   fireEvent,
@@ -11,7 +12,7 @@ import {
   ProxyClient,
   type ProxyAccount,
   type ProxyPreset,
-  type ProxyRoute,
+  type ProxyAdminRoute,
   type ProxyState,
 } from '../src/api/proxy-client';
 import type { UIContext } from './dom';
@@ -19,6 +20,7 @@ import { routesView } from './routes';
 
 const presets: ProxyPreset[] = [
   {
+    family: 'inference',
     id: 'openai',
     label: 'OpenAI API',
     upstream: 'https://api.openai.com/v1',
@@ -28,6 +30,7 @@ const presets: ProxyPreset[] = [
     websocket: true,
   },
   {
+    family: 'inference',
     id: 'chatgpt',
     label: 'ChatGPT plan',
     upstream: 'https://chatgpt.com/backend-api/codex',
@@ -38,8 +41,10 @@ const presets: ProxyPreset[] = [
     account_kind: 'chatgpt',
   },
   {
+    family: 'embeddings',
     id: 'jina',
-    label: 'Jina embeddings',
+    label: 'Jina',
+
     upstream: 'https://api.jina.ai/v1',
     auth: { header: 'Authorization', prefix: 'Bearer ' },
     billing: 'pay_as_you_go',
@@ -48,13 +53,16 @@ const presets: ProxyPreset[] = [
 const featuredPresets: ProxyPreset[] = [
   ...presets,
   {
-    id: 'claude-code',
+    family: 'inference',
+    id: 'claude-bin',
     label: 'Claude Code plan',
     upstream: 'https://api.anthropic.com',
     auth: { header: 'Authorization', prefix: 'Bearer ' },
-    account_kind: 'claude-code',
+    account_kind: 'claude-bin',
+    billing: 'plan',
   },
   {
+    family: 'inference',
     id: 'venice',
     label: 'Venice',
     upstream: 'https://api.venice.ai/api/v1',
@@ -68,6 +76,7 @@ const accounts: ProxyAccount[] = [
 function setup(overrides: Partial<ProxyState> = {}) {
   const api = new ProxyClient(vi.fn());
   const save = vi.spyOn(api, 'config').mockResolvedValue();
+  const create = vi.spyOn(api, 'createProvider').mockResolvedValue({ revision: 8 });
   const announce = vi.fn();
   const context: UIContext = {
     run: async (action) => {
@@ -85,6 +94,8 @@ function setup(overrides: Partial<ProxyState> = {}) {
     navigate: vi.fn(),
   };
   const state: ProxyState = {
+    defaults: null,
+    providers: [],
     auth: 'token',
     mode: 'ui',
     revision: 7,
@@ -97,9 +108,9 @@ function setup(overrides: Partial<ProxyState> = {}) {
     accounts,
     ...overrides,
   };
-  const root = routesView(state, api, context);
+  const root = routesView(withSingletonProviders(state), api, context);
   document.body.append(root);
-  return { root, save, announce };
+  return { root, save, create, announce };
 }
 function choose(root: HTMLElement, label: string) {
   fireEvent.click(getByRole(root, 'button', { name: 'Add provider' }));
@@ -140,10 +151,18 @@ afterEach(() => {
 
 it('opens one grouped picker from one Add provider button', () => {
   const { root } = setup({
-    presets: featuredPresets.map((preset) => ({
-      ...preset,
-      group: preset.billing === 'plan' || preset.account_kind ? 'plan' : 'api_key',
-    })),
+    presets: [
+      ...featuredPresets.map((preset): ProxyPreset => ({
+        ...preset,
+      })),
+      {
+        family: 'search',
+        id: 'brave',
+        label: 'Brave Search',
+        upstream: 'https://api.search.brave.com/res/v1',
+        auth: { header: 'X-Subscription-Token', prefix: '' },
+      },
+    ],
   });
   const intro = root.querySelector<HTMLElement>('.providers-intro')!;
   expect(getByRole(intro, 'heading', { name: 'Providers' })).toBeVisible();
@@ -153,26 +172,26 @@ it('opens one grouped picker from one Add provider button', () => {
   const picker = root.querySelector<HTMLElement>('.route-picker')!;
   expect(getByRole(picker, 'heading', { name: 'Add a provider' })).toHaveFocus();
   expect(picker.querySelector('details')).toBeNull();
-  const groups = [...picker.querySelectorAll('.route-preset-group')].map((group) => [
-    group.querySelector('h3')!.textContent,
-    [...group.querySelectorAll('button')].map((node) => node.getAttribute('aria-label')),
-  ]);
-  // Featured plans lead their group; group headings replace the plan/API suffixes.
-  expect(groups).toEqual([
-    ['Subscriptions', ['Claude Code', 'ChatGPT']],
-    ['API keys', ['OpenAI', 'Jina embeddings', 'Venice']],
-  ]);
+  expect([...picker.querySelectorAll('.route-preset-family h3')].map((h) => h.textContent)).toEqual(
+    ['Inference', 'Search', 'Embeddings'],
+  );
+  expect(
+    [...picker.querySelectorAll('.route-preset-family[aria-label="Inference"] h4')].map(
+      (h) => h.textContent,
+    ),
+  ).toEqual(['Subscriptions', 'API keys']);
+  expect(picker.querySelector('.route-preset-family[aria-label="Search"] h4')).toBeNull();
   expect(getByRole(picker, 'button', { name: 'Custom endpoint' })).toBeVisible();
   fireEvent.click(getByRole(picker, 'button', { name: 'OpenAI' }));
-  expect(getByLabelText(root, 'Name')).toHaveValue('openai');
+  expect(getByLabelText(root, 'Provider name')).toHaveValue('openai');
   expect(queryByLabelText(root, 'Provider')).toBeNull();
 });
 
 it('filters presets by search, hides companions and chooses the first match on Enter', () => {
   const { root } = setup({
     presets: [
-      { ...presets[1], group: 'plan', companions: ['chatgpt-backend'] },
-      { ...presets[1], id: 'chatgpt-backend', label: 'ChatGPT plan usage', group: 'plan' },
+      { ...presets[1], companions: ['chatgpt-backend'] },
+      { ...presets[1], id: 'chatgpt-backend', label: 'ChatGPT plan usage' },
       ...presets.filter((preset) => preset.id !== 'chatgpt'),
     ],
   });
@@ -181,61 +200,41 @@ it('filters presets by search, hides companions and chooses the first match on E
   expect(queryByRole(picker, 'button', { name: 'ChatGPT plan usage' })).toBeNull();
   const search = getByRole(picker, 'searchbox', { name: 'Search providers' });
   fireEvent.input(search, { target: { value: 'embed' } });
-  expect(getByRole(picker, 'button', { name: 'Jina embeddings' })).toBeVisible();
+  expect(getByRole(picker, 'button', { name: 'Jina' })).toBeVisible();
   expect(picker.querySelector('[aria-label="OpenAI"]')).not.toBeVisible();
   fireEvent.input(search, { target: { value: 'nothing-matches' } });
   expect(picker.querySelector('.route-preset-empty')).toBeVisible();
   fireEvent.input(search, { target: { value: 'openai' } });
   fireEvent.keyDown(search, { key: 'Enter' });
-  expect(getByLabelText(root, 'Name')).toHaveValue('openai');
+  expect(getByLabelText(root, 'Provider name')).toHaveValue('openai');
 });
 
-it('creates companion routes with the shared key unless declined', async () => {
-  const gemini: ProxyPreset = {
-    id: 'gemini',
-    label: 'Google Gemini',
-    upstream: 'https://generativelanguage.googleapis.com/v1beta',
-    auth: { header: 'x-goog-api-key', prefix: '' },
-    billing: 'pay_as_you_go',
-    usage: 'auto',
-    group: 'api_key',
-    companions: ['gemini-live'],
+it('locks the Exa name and submits one key for both route profiles', async () => {
+  const exa: ProxyPreset = {
+    ...presets[0],
+    family: 'search',
+    id: 'exa',
+    label: 'Exa',
+    companions: ['exa-mcp'],
   };
-  const live: ProxyPreset = {
-    id: 'gemini-live',
-    label: 'Gemini Live',
-    upstream: 'https://generativelanguage.googleapis.com',
-    auth: { header: 'x-goog-api-key', prefix: '' },
-    billing: 'pay_as_you_go',
-    websocket: true,
-    group: 'api_key',
-  };
-  const secrets = [
-    { name: 'gemini-key', origin: 'https://generativelanguage.googleapis.com', source: 'stored' },
-  ] as ProxyState['secrets'];
-  for (const keep of [true, false]) {
-    const { root, save } = setup({ presets: [gemini, live], secrets });
-    choose(root, 'Google Gemini');
-    const toggle = getByLabelText(root, 'Also create gemini-live for the related client features');
-    expect(toggle).toBeChecked();
-    if (!keep) fireEvent.click(toggle);
-    fireEvent.change(getByLabelText(root, 'Secret name'), { target: { value: 'gemini-key' } });
-    fireEvent.click(getByRole(root, 'button', { name: 'Save route' }));
-    await waitFor(() => expect(save).toHaveBeenCalled());
-    const routes = save.mock.calls[0][1];
-    expect(routes.map((route) => route.name)).toEqual(
-      keep ? ['gemini', 'gemini-live'] : ['gemini'],
-    );
-    if (keep)
-      expect(routes[1]).toMatchObject({
-        local_prefix: '/gemini-live/',
-        upstream: live.upstream,
-        websocket: true,
-        set_headers: { 'x-goog-api-key': { secret: 'gemini-key', prefix: '' } },
-      });
-    document.body.replaceChildren();
-    vi.restoreAllMocks();
-  }
+  const { root, create } = setup({
+    presets: [exa, { ...exa, id: 'exa-mcp', label: 'Exa MCP', companions: [] }],
+  });
+  choose(root, 'Exa');
+  expect(getByLabelText(root, 'Provider name')).toHaveValue('exa');
+  expect(getByLabelText(root, 'Provider name')).toHaveAttribute('readonly');
+  expect(root.querySelectorAll('input[type=password]')).toHaveLength(1);
+  fireEvent.input(getByLabelText(root, 'API key'), { target: { value: 'synthetic-key' } });
+  fireEvent.click(getByRole(root, 'button', { name: 'Create provider' }));
+  await waitFor(() =>
+    expect(create).toHaveBeenCalledWith(7, {
+      name: 'exa',
+      label: 'Exa',
+      preset: 'exa',
+      value: 'synthetic-key',
+    }),
+  );
+  expect(getByLabelText(root, 'API key')).toHaveValue('');
 });
 
 it('keeps Custom endpoint explicit and restores focus on cancel', () => {
@@ -248,14 +247,17 @@ it('keeps Custom endpoint explicit and restores focus on cancel', () => {
   expect(getByRole(root, 'button', { name: 'Add provider' })).toHaveFocus();
 });
 
-it.each<ProxyRoute['set_headers']>([
+it.each<ProxyAdminRoute['set_headers']>([
   {},
   { Authorization: { value: 'public' } },
   { Authorization: { secret: 'key' } },
-])('derives route status from provider readiness and client access: %j', (setHeaders) => {
+])('keeps server status separate from credential details: %j', (setHeaders) => {
   const { root } = setup({
     routes: [
       {
+        serves: [],
+        profile: '',
+        provider: 'local',
         name: 'local',
         local_prefix: '/local/',
         upstream: 'https://example.com',
@@ -267,10 +269,7 @@ it.each<ProxyRoute['set_headers']>([
     ],
   });
   const row = root.querySelector<HTMLElement>('.route-card')!;
-  const needsKey = Object.values(setHeaders).some((rule) => rule.secret);
-  expect(row.querySelector('.provider-status')).toHaveTextContent(
-    needsKey ? 'Provider key needed' : 'Configured',
-  );
+  expect(getByRole(row, 'img', { name: 'Status: green' })).toBeVisible();
   // Client access is a grant, not a provider-health warning on the route line.
   expect(root).not.toHaveTextContent('Needs client access');
   const manage = row.querySelector<HTMLDetailsElement>('details.provider-manage')!;
@@ -284,7 +283,10 @@ it.each<ProxyRoute['set_headers']>([
 });
 
 it('does not show credentials, queries, fragments, or malformed upstream text in a row', () => {
-  const base: ProxyRoute = {
+  const base: ProxyAdminRoute = {
+    serves: [],
+    profile: '',
+    provider: 'legacy',
     name: 'legacy',
     local_prefix: '/legacy/',
     enabled: true,
@@ -297,7 +299,15 @@ it('does not show credentials, queries, fragments, or malformed upstream text in
   const { root } = setup({
     routes: [
       base,
-      { ...base, name: 'broken', local_prefix: '/broken/', upstream: 'sensitive-malformed' },
+      {
+        ...base,
+        provider: 'broken',
+        profile: '',
+        serves: [],
+        name: 'broken',
+        local_prefix: '/broken/',
+        upstream: 'sensitive-malformed',
+      },
     ],
   });
   expect(settingsFor(root, 'legacy')).toHaveTextContent('https://example.com/api');
@@ -309,6 +319,9 @@ it('reports account readiness separately from provider approval', () => {
   const { root } = setup({
     routes: [
       {
+        serves: [],
+        profile: '',
+        provider: 'chat',
         name: 'chat',
         local_prefix: '/chat/',
         upstream: presets[1].upstream,
@@ -331,7 +344,7 @@ it('reports account readiness separately from provider approval', () => {
       },
     ],
   });
-  expect(root.querySelector('.provider-status')).toHaveTextContent('Connected');
+  expect(getByRole(root, 'img', { name: 'Status: green' })).toBeVisible();
   // The provider card summarizes approval once, not on each route line.
   const summary = root.querySelector<HTMLElement>('.provider-approval-summary')!;
   expect(summary).toHaveTextContent('Approved: Client');
@@ -370,65 +383,31 @@ it('keeps file-managed route setup read-only', () => {
   expect(root).toHaveTextContent('Routes are file-managed and read-only.');
 });
 
-it('creates an account-kind route from an explicitly chosen same-kind account, with no static secret', async () => {
-  const { root, save } = setup();
+it('creates ChatGPT from an existing trusted account without a static secret', async () => {
+  const { root, create } = setup();
   openManualChatGPT(root);
-  const form = root.querySelector<HTMLFormElement>('.route-form')!;
-  expect(form.querySelector('.header-substitution')).toBeNull();
-  expect(form.textContent).not.toContain('Upstream headers');
-  expect(queryByRole(form, 'button', { name: 'Add substitution', hidden: true })).toBeNull();
-  const account = getByLabelText(root, 'Trusted account') as HTMLSelectElement;
-  expect([...account.options].map((o) => o.value)).toEqual(['', 'home-chat']);
-  expect(account).toHaveValue('');
-  expect(account.required).toBe(true);
-  expect(getByLabelText(root, 'Billing')).toHaveValue('plan');
-  fireEvent.change(account, { target: { value: 'home-chat' } });
-  fireEvent.click(getByRole(root, 'button', { name: 'Save route' }));
-  await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  expect(save.mock.calls[0][1]).toEqual([
-    {
+  expect((getByLabelText(root, 'Trusted account') as HTMLSelectElement).options).toHaveLength(2);
+  expect(queryByLabelText(root, 'API key')).toBeNull();
+  fireEvent.change(getByLabelText(root, 'Trusted account'), { target: { value: 'home-chat' } });
+  fireEvent.click(getByRole(root, 'button', { name: 'Create provider' }));
+  await waitFor(() =>
+    expect(create).toHaveBeenCalledWith(7, {
       name: 'chatgpt',
-      local_prefix: '/chatgpt/',
-      upstream: 'https://chatgpt.com/backend-api/codex',
-      enabled: true,
-      allow_insecure_http: false,
-      caller_auth: { header: 'Authorization', prefix: 'Bearer ' },
-      set_headers: {},
-      billing: 'plan',
-      account: 'home-chat',
-      websocket: true,
-      usage: 'auto',
-    },
-  ]);
-});
-
-it('refuses to save an account-kind route without a valid same-kind account', async () => {
-  const { root, save, announce } = setup();
-  openManualChatGPT(root);
-  const form = root.querySelector<HTMLFormElement>('.route-form')!;
-  // fireEvent.submit bypasses native "required" validation, as a scripted submit would.
-  fireEvent.submit(form);
-  await waitFor(() => expect(announce).toHaveBeenCalledWith(expect.stringContaining('chatgpt')));
-  // A forged option of another kind is rejected too.
-  const account = getByLabelText(root, 'Trusted account') as HTMLSelectElement;
-  const forged = document.createElement('option');
-  forged.value = 'home-grok';
-  account.append(forged);
-  fireEvent.change(account, { target: { value: 'home-grok' } });
-  fireEvent.submit(form);
-  await waitFor(() => expect(announce).toHaveBeenCalledTimes(2));
-  expect(save).not.toHaveBeenCalled();
+      label: 'ChatGPT plan',
+      preset: 'chatgpt',
+      routes: [
+        expect.objectContaining({ name: 'chatgpt', profile: 'chatgpt', account: 'home-chat' }),
+      ],
+    }),
+  );
 });
 
 it('connects a missing account inline without losing the route draft', async () => {
   const { root } = setup({ accounts: [accounts[1]] });
   openManualChatGPT(root);
-  fireEvent.input(getByLabelText(root, 'Name'), { target: { value: 'draft-name' } });
+  fireEvent.input(getByLabelText(root, 'Provider name'), { target: { value: 'draft-name' } });
   const select = getByLabelText(root, 'Trusted account') as HTMLSelectElement;
   expect(select.options).toHaveLength(1);
-  expect(root.querySelector('.route-form')?.textContent).toContain(
-    'Connect a chatgpt account to continue.',
-  );
   HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
     this.open = true;
   };
@@ -457,45 +436,14 @@ it('connects a missing account inline without losing the route draft', async () 
   await waitFor(() => expect(save).toHaveBeenCalled());
   await waitFor(() => expect(select).toHaveValue('chatgpt'));
   expect(root.querySelector('dialog')).toBeNull();
-  expect(getByLabelText(root, 'Name')).toHaveValue('draft-name');
-});
-
-it('applies profile billing, usage and WebSocket defaults to API-key routes only when present', async () => {
-  const { root, save } = setup({
-    secrets: [
-      { name: 'openai-key', origin: 'https://api.openai.com', source: 'stored' },
-      { name: 'jina-key', origin: 'https://api.jina.ai', source: 'stored' },
-    ],
-  });
-  choose(root, 'OpenAI');
-  expect(queryByLabelText(root, 'Trusted account')).toBeNull();
-  expect(getByLabelText(root, 'Forward WebSocket upgrades')).toBeChecked();
-  expect(getByLabelText(root, 'Usage measurement')).toHaveValue('auto');
-  fireEvent.change(getByLabelText(root, 'Secret name'), { target: { value: 'openai-key' } });
-  fireEvent.click(getByRole(root, 'button', { name: 'Save route' }));
-  await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  expect(save.mock.calls[0][1][0]).toMatchObject({
-    billing: 'pay_as_you_go',
-    websocket: true,
-    usage: 'auto',
-    set_headers: { Authorization: { secret: 'openai-key', prefix: 'Bearer ' } },
-  });
-  expect(save.mock.calls[0][1][0]).not.toHaveProperty('account');
-
-  fireEvent.click(getByRole(root, 'button', { name: 'Cancel' }));
-  choose(root, 'Jina embeddings');
-  expect(getByLabelText(root, 'Forward WebSocket upgrades')).not.toBeChecked();
-  expect(getByLabelText(root, 'Usage measurement')).toHaveValue('off');
-  fireEvent.change(getByLabelText(root, 'Secret name'), { target: { value: 'jina-key' } });
-  fireEvent.click(getByRole(root, 'button', { name: 'Save route' }));
-  await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
-  const jina = save.mock.calls[1][1][0];
-  expect(jina.websocket).toBeUndefined();
-  expect(jina.usage).toBeUndefined();
+  expect(getByLabelText(root, 'Provider name')).toHaveValue('draft-name');
 });
 
 it('preserves an existing route’s account, transport and admission policy when unrelated fields change', async () => {
-  const existing: ProxyRoute = {
+  const existing: ProxyAdminRoute = {
+    serves: [],
+    profile: '',
+    provider: 'plan',
     name: 'plan',
     local_prefix: '/plan/',
     upstream: 'https://chatgpt.com/backend-api/codex',
@@ -529,7 +477,10 @@ it('preserves an existing route’s account, transport and admission policy when
 });
 
 it('asks before a transport change that drops grants on an existing route', async () => {
-  const existing: ProxyRoute = {
+  const existing: ProxyAdminRoute = {
+    serves: [],
+    profile: '',
+    provider: 'api',
     name: 'api',
     local_prefix: '/api/',
     upstream: 'https://api.openai.com/v1',
@@ -550,9 +501,8 @@ it('asks before a transport change that drops grants on an existing route', asyn
 });
 
 it('keeps billing choices concise and technical guidance and preview in closed Advanced', () => {
-  const note = 'Use this route as the client base URL.';
-  const { root } = setup({ presets: [{ ...presets[0], note }] });
-  choose(root, 'OpenAI');
+  const { root } = setup();
+  choose(root, 'Custom endpoint');
   const form = root.querySelector<HTMLFormElement>('.route-form')!;
   const billing = getByLabelText(form, 'Billing') as HTMLSelectElement;
   expect([...billing.options].map((option) => option.text)).toEqual([
@@ -566,22 +516,22 @@ it('keeps billing choices concise and technical guidance and preview in closed A
   expect(advanced.open).toBe(false);
   expect(advanced.textContent).toContain('Names are permanent');
   expect(advanced.textContent).toContain('does not change provider charges');
-  expect(advanced.textContent).toContain(note);
   expect(advanced.contains(form.querySelector('.preview'))).toBe(true);
   expect(form.querySelector('.route-form-grid small')).toBeNull();
-  // API-key routes still expose credential setup without opening Advanced.
-  expect(getByRole(form, 'button', { name: 'Add API key' }).closest('details')).toBeNull();
   advanced.open = true;
   expect(getByRole(form, 'heading', { name: 'Preview' })).toBeVisible();
   fireEvent.input(getByLabelText(form, 'Name'), { target: { value: 'my-api' } });
   expect(form.querySelector('.preview')).toHaveTextContent('/my-api/');
 });
 
-it.each<ProxyRoute['set_headers']>([
+it.each<ProxyAdminRoute['set_headers']>([
   { 'X-Project': { value: 'project-name' } },
   { 'X-Api-Key': { secret: 'chat-key', prefix: 'Bearer ' } },
 ])('preserves and edits existing account-backed header substitutions: %j', async (setHeaders) => {
-  const existing: ProxyRoute = {
+  const existing: ProxyAdminRoute = {
+    serves: [],
+    profile: '',
+    provider: 'chat',
     name: 'chat',
     local_prefix: '/chat/',
     upstream: presets[1].upstream,
@@ -594,7 +544,7 @@ it.each<ProxyRoute['set_headers']>([
   };
   const { root, save } = setup({
     routes: [existing],
-    secrets: [{ name: 'chat-key', origin: 'https://chatgpt.com', source: 'stored' }],
+    secrets: [{ name: 'chat-key', routes: null, source: 'stored' }],
   });
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
   openManage(root, 'chat');
@@ -625,7 +575,9 @@ it.each<ProxyRoute['set_headers']>([
 
 it('retains visible credential warnings for literal headers and insecure upstreams', () => {
   const { root } = setup();
-  choose(root, 'OpenAI');
+  choose(root, 'Custom endpoint');
+  fireEvent.click(getByRole(root, 'button', { name: 'Add substitution' }));
+  fireEvent.input(getByLabelText(root, 'Header name'), { target: { value: 'Authorization' } });
   const form = root.querySelector<HTMLFormElement>('.route-form')!;
   form.querySelector('details')!.open = true;
   fireEvent.change(getByLabelText(form, 'Source'), { target: { value: 'value' } });
@@ -649,10 +601,20 @@ it('retains visible credential warnings for literal headers and insecure upstrea
 it('keeps pending shared Claude out of the generic credentials form', () => {
   const { root } = setup({
     presets: featuredPresets,
+    providers: [
+      {
+        id: 'claude',
+        label: 'Claude Code',
+        family: 'inference',
+        status: 'red',
+        reason: 'Sign-in needed',
+        routes: ['claude'],
+      },
+    ],
     accounts: [
       {
         name: 'claude',
-        kind: 'claude-code',
+        kind: 'claude-bin',
         generation: 1,
         updated: 1,
         auth_mode: 'shared_vault',
@@ -661,6 +623,9 @@ it('keeps pending shared Claude out of the generic credentials form', () => {
     ],
     routes: [
       {
+        serves: [],
+        profile: '',
+        provider: 'claude',
         name: 'claude',
         local_prefix: '/claude/',
         upstream: 'https://api.anthropic.com',
@@ -683,7 +648,7 @@ it('keeps pending shared Claude out of the generic credentials form', () => {
       },
     ],
   });
-  expect(root.querySelector('.provider-status')).toHaveTextContent('Shared Claude sign-in needed');
+  expect(root.querySelector('.provider-status')).toHaveTextContent('Sign-in needed');
   expect(root.querySelector('.provider-status')).not.toHaveTextContent('ready');
   choose(root, 'Claude Code');
   expect(

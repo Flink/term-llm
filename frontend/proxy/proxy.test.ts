@@ -1,7 +1,9 @@
+import { withSingletonProviders } from './test-fixtures';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fireEvent,
   getByLabelText,
+  queryByLabelText,
   getByRole,
   queryByRole,
   waitFor,
@@ -9,14 +11,17 @@ import {
 import {
   ProxyAPIError,
   ProxyClient,
-  type ProxyRoute,
+  type ProxyAdminRoute,
   type ProxyState,
 } from '../src/api/proxy-client';
 import { mountProxy } from './app';
 import { callerCurl } from './security';
 import { localPath, outcomeLabel } from './requests';
 
-const route: ProxyRoute = {
+const route: ProxyAdminRoute = {
+  serves: [],
+  profile: '',
+  provider: 'Example',
   name: 'Example',
   local_prefix: '/example/',
   upstream: 'https://example.com/api/',
@@ -27,6 +32,8 @@ const route: ProxyRoute = {
 };
 function state(overrides: Partial<ProxyState> = {}): ProxyState {
   return {
+    defaults: null,
+    providers: [],
     auth: 'token',
     mode: 'ui',
     revision: 7,
@@ -53,7 +60,7 @@ function setup(snapshot = state()) {
     csrf: 'preauth',
     origin: 'https://proxy.example',
   });
-  vi.spyOn(api, 'state').mockResolvedValue(snapshot);
+  vi.spyOn(api, 'state').mockResolvedValue(withSingletonProviders(snapshot));
   vi.spyOn(api, 'timeline').mockResolvedValue({
     timezone: 'UTC',
     range: '30d',
@@ -67,6 +74,16 @@ function setup(snapshot = state()) {
   const dispose = mountProxy(root, api);
   disposals.push(dispose);
   return { api, root, dispose };
+}
+async function openKeyDraft(root: HTMLElement) {
+  await click(root, 'Add provider');
+  await click(root, 'Custom endpoint');
+  fireEvent.input(getByLabelText(root, 'Name'), { target: { value: 'openai' } });
+  fireEvent.input(getByLabelText(root, 'Upstream base URL'), {
+    target: { value: 'https://api.openai.com/v1' },
+  });
+  await click(root, 'Add substitution');
+  fireEvent.input(getByLabelText(root, 'Header name'), { target: { value: 'Authorization' } });
 }
 async function click(root: HTMLElement, name: string) {
   fireEvent.click(await waitFor(() => getByRole(root, 'button', { name })));
@@ -272,7 +289,7 @@ describe('proxy transport', () => {
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
     const api = new ProxyClient(fetcher);
     await api.state();
-    await api.config(7, [route]);
+    await api.config(state({ revision: 7 }), [route]);
     expect(fetcher.mock.calls[1]).toEqual([
       '/_proxy/api/config',
       expect.objectContaining({
@@ -281,7 +298,42 @@ describe('proxy transport', () => {
         cache: 'no-store',
         redirect: 'error',
         headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
-        body: JSON.stringify({ revision: 7, routes: [route] }),
+        body: JSON.stringify({
+          revision: 7,
+          routes: [{ ...route, serves: undefined }],
+          providers: {},
+          defaults: null,
+        }),
+      }),
+    ]);
+  });
+  it('round-trips stored providers and defaults without sending display-only route fields', async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => new Response('{"revision":8}'));
+    const api = new ProxyClient(fetcher);
+    const exa = { ...route, name: 'exa', provider: 'exa', profile: 'exa', serves: ['search: exa'] };
+    const snapshot = state({
+      routes: [exa],
+      defaults: { search: 'exa' },
+      providers: [
+        { id: 'exa', label: 'Exa', family: 'search', routes: ['exa'], status: 'green', reason: '' },
+      ],
+    });
+    await api.config(snapshot, [{ ...exa, enabled: false }]);
+    const config = JSON.parse(String(fetcher.mock.calls[0][1]?.body));
+    expect(config).toEqual({
+      revision: 7,
+      providers: { exa: { label: 'Exa' } },
+      defaults: { search: 'exa' },
+      routes: [{ ...exa, serves: undefined, enabled: false }],
+    });
+    await api.deleteProvider(snapshot.revision, 'exa');
+    expect(fetcher.mock.calls[1]).toEqual([
+      '/_proxy/api/providers/exa',
+      expect.objectContaining({
+        method: 'DELETE',
+        body: JSON.stringify({ revision: 7 }),
       }),
     ]);
   });
@@ -312,106 +364,71 @@ describe('proxy transport', () => {
       .fn<typeof fetch>()
       .mockResolvedValue(new Response('leaked-secret', { status: 409 }));
     const api = new ProxyClient(fetcher);
-    await expect(api.secret('key', 'https://example.com', 'credential')).rejects.toThrow(
-      'Conflict',
-    );
+    await expect(api.secret('key', 'credential')).rejects.toThrow('Conflict');
     await expect(api.deleteSecret('key')).rejects.not.toThrow('leaked-secret');
   });
 });
 
 const presets: NonNullable<ProxyState['presets']> = [
   {
+    family: 'inference',
     id: 'openai',
     label: 'OpenAI API',
     upstream: 'https://api.openai.com/v1',
     auth: { header: 'Authorization', prefix: 'Bearer ' },
   },
   {
+    family: 'inference',
     id: 'anthropic',
     label: 'Anthropic API',
     upstream: 'https://api.anthropic.com',
     auth: { header: 'x-api-key', prefix: '' },
   },
   {
+    family: 'inference',
     id: 'ollama',
     label: 'Ollama',
     upstream: 'http://127.0.0.1:11434',
     auth: { header: '', prefix: '' },
   },
-  { id: 'vllm', label: 'vLLM', upstream: '', auth: { header: 'Authorization', prefix: 'Bearer ' } },
+  {
+    family: 'inference',
+    id: 'vllm',
+    label: 'vLLM',
+    upstream: '',
+    auth: { header: 'Authorization', prefix: 'Bearer ' },
+  },
 ];
 
 describe('provider presets', () => {
   it.each(['openai', 'anthropic'])(
-    'fills editable %s defaults and saves through the existing config API',
+    'creates editable %s presets atomically with an existing key',
     async (id) => {
       const preset = presets.find((p) => p.id === id)!;
       const { root, api } = setup(
-        state({
-          presets,
-          secrets: [
-            { name: 'provider-key', origin: new URL(preset.upstream).origin, source: 'stored' },
-          ],
-        }),
+        state({ presets, secrets: [{ name: 'provider-key', routes: null, source: 'stored' }] }),
       );
-      const save = vi.spyOn(api, 'config').mockResolvedValue();
+      const save = vi.spyOn(api, 'createProvider').mockResolvedValue({ revision: 8 });
       await click(root, 'Add provider');
       await click(root, preset.label.replace(/ API$/, ''));
-      expect(getByLabelText(root, 'Name')).toHaveValue(id);
-      expect(getByLabelText(root, 'Local prefix')).toHaveValue(`/${id}/`);
+      expect(getByLabelText(root, 'Provider name')).toHaveValue(id);
       expect(getByLabelText(root, 'Upstream base URL')).toHaveValue(preset.upstream);
-      expect(getByLabelText(root, 'Local client authentication header')).toHaveValue(
-        preset.auth.header,
-      );
-      expect(getByLabelText(root, 'Local client authentication prefix')).toHaveValue(
-        preset.auth.prefix,
-      );
-      expect(getByLabelText(root, 'Header name')).toHaveValue(preset.auth.header);
-      expect(getByLabelText(root, 'Secret prefix')).toHaveValue(preset.auth.prefix);
-      expect(save).not.toHaveBeenCalled();
+      fireEvent.change(getByLabelText(root, 'Credential source'), {
+        target: { value: 'existing' },
+      });
       fireEvent.change(getByLabelText(root, 'Secret name'), { target: { value: 'provider-key' } });
-      fireEvent.input(getByLabelText(root, 'Name'), { target: { value: `${id}-mine` } });
-      await click(root, 'Save route');
+      fireEvent.input(getByLabelText(root, 'Provider name'), { target: { value: `${id}-mine` } });
+      await click(root, 'Create provider');
       await waitFor(() =>
-        expect(save).toHaveBeenCalledWith(7, [
-          expect.objectContaining({
-            name: `${id}-mine`,
-            caller_auth: preset.auth,
-            set_headers: {
-              [preset.auth.header]: { secret: 'provider-key', prefix: preset.auth.prefix },
-            },
-          }),
-        ]),
+        expect(save).toHaveBeenCalledWith(7, {
+          name: `${id}-mine`,
+          label: preset.label,
+          preset: id,
+          secret: 'provider-key',
+        }),
       );
     },
   );
-  it('does not bind a secret from a different origin when defaults are changed', async () => {
-    const { root } = setup(
-      state({
-        presets,
-        secrets: [{ name: 'wrong-key', origin: 'https://other.test', source: 'stored' }],
-      }),
-    );
-    await click(root, 'Add provider');
-    await click(root, 'OpenAI');
-    expect((getByLabelText(root, 'Secret name') as HTMLSelectElement).options).toHaveLength(1);
-    expect(root.textContent).toContain('Choose or add an API key for this provider.');
-  });
-  it('avoids colliding names and overlapping prefixes without changing saved routes', async () => {
-    const { root } = setup(
-      state({
-        presets,
-        routes: [
-          { ...route, name: 'openai', local_prefix: '/openai/' },
-          { ...route, name: 'other', local_prefix: '/openai-2/nested/' },
-        ],
-      }),
-    );
-    await click(root, 'Add provider');
-    await click(root, 'OpenAI');
-    expect(getByLabelText(root, 'Name')).toHaveValue('openai-3');
-    expect(getByLabelText(root, 'Local prefix')).toHaveValue('/openai-3/');
-  });
   it('lets you cancel an unsaved draft and choose a different preset', async () => {
     const { root, api } = setup(state({ presets }));
     const save = vi.spyOn(api, 'config');
@@ -421,7 +438,7 @@ describe('provider presets', () => {
     await click(root, 'Cancel');
     await click(root, 'Add provider');
     await click(root, 'Anthropic');
-    expect(getByLabelText(root, 'Name')).toHaveValue('anthropic');
+    expect(getByLabelText(root, 'Provider name')).toHaveValue('anthropic');
     expect(save).not.toHaveBeenCalled();
   });
   it('does not offer presets when editing an existing route', async () => {
@@ -433,22 +450,12 @@ describe('provider presets', () => {
       'Editable API-key defaults',
     );
   });
-  it('keeps local HTTP acknowledgement explicit and vLLM URL operator supplied', async () => {
-    const { root, api } = setup(state({ presets }));
-    const save = vi.spyOn(api, 'config');
-    await click(root, 'Add provider');
-    await click(root, 'Ollama');
-    expect(getByLabelText(root, 'Upstream base URL')).toHaveValue('http://127.0.0.1:11434');
-    expect(
-      getByLabelText(root, 'Allow insecure HTTP upstream (credentials may travel unencrypted)'),
-    ).not.toBeChecked();
-    expect(root.querySelector('.header-substitution')).toBeNull();
-    await click(root, 'Save route');
-    expect(save).not.toHaveBeenCalled();
-    await click(root, 'Cancel');
+  it('requires an upstream for vLLM and offers keyless setup', async () => {
+    const { root } = setup(state({ presets }));
     await click(root, 'Add provider');
     await click(root, 'vLLM');
-    expect(getByLabelText(root, 'Upstream base URL')).toHaveValue('');
+    expect(getByLabelText(root, 'Upstream base URL')).toBeRequired();
+    expect(getByLabelText(root, 'Credential source')).toHaveValue('');
   });
 });
 
@@ -465,9 +472,12 @@ describe('proxy admin DOM', () => {
     });
     await click(root, 'Save route');
     await waitFor(() =>
-      expect(save).toHaveBeenCalledWith(7, [
-        expect.objectContaining({ name: 'Example', upstream: 'https://example.com/api/' }),
-      ]),
+      expect(save).toHaveBeenCalledWith(
+        expect.objectContaining({ revision: 7 }),
+        [expect.objectContaining({ name: 'Example', upstream: 'https://example.com/api/' })],
+        expect.any(Object),
+        undefined,
+      ),
     );
   });
   it('file mode exposes reload/export, not route or secret writes', async () => {
@@ -475,7 +485,7 @@ describe('proxy admin DOM', () => {
       state({
         mode: 'file',
         routes: [route],
-        secrets: [{ name: 'key', origin: 'https://example.com', source: 'file' }],
+        secrets: [{ name: 'key', routes: null, source: 'file' }],
       }),
     );
     const reload = vi.spyOn(api, 'reload').mockResolvedValue();
@@ -489,7 +499,7 @@ describe('proxy admin DOM', () => {
     expect(root.textContent).toContain('Edit that file and use Reload file');
     await click(root, 'Secrets');
     expect(queryByRole(root, 'button', { name: 'Replace key' })).toBeNull();
-    expect(root.textContent).toContain('https://example.com');
+    expect(root.textContent).toContain('file · not used by any route');
   });
   it('returns to sign-in on 401 without persisting the administrator token', async () => {
     const { root, api } = setup();
@@ -532,34 +542,22 @@ describe('proxy admin DOM', () => {
     await click(root, 'I saved it — dismiss');
     expect(root.textContent).not.toContain('once-only');
   });
-  it('summarizes route authority and status without disclosing credential values', async () => {
+  it('renders untrusted provider labels as text without markup', async () => {
     const { root } = setup(
       state({
-        routes: [
+        routes: [route],
+        providers: [
           {
-            ...route,
-            enabled: false,
-            upstream: 'http://example.com/api/',
-            set_headers: { 'X-Api-Key': { secret: 'upstream-key' } },
+            id: route.provider,
+            label: '<img src=x onerror=alert(1)>',
+            family: 'inference',
+            status: 'green',
+            reason: '',
+            routes: [route.name],
           },
         ],
       }),
     );
-    await waitFor(() => expect(root.textContent).toContain('upstream-key → X-Api-Key'));
-    const line = root.querySelector<HTMLElement>('[data-focus="route:Example"]')!;
-    expect(line.tagName).toBe('LI');
-    expect(line).toHaveClass('provider-route-line');
-    expect(line).toBeVisible();
-    expect(line).toHaveTextContent('HTTP · unencrypted');
-    expect(line).toHaveTextContent('Disabled');
-    await openManage(root, 'Example');
-    expect(root.textContent).toContain('No clients approved yet.');
-    expect(getByRole(root, 'button', { name: 'Add provider' }).classList.contains('primary')).toBe(
-      true,
-    );
-  });
-  it('renders untrusted names as text, never markup', async () => {
-    const { root } = setup(state({ routes: [{ ...route, name: '<img src=x onerror=alert(1)>' }] }));
     await waitFor(() => expect(root.textContent).toContain('<img src=x'));
     expect(root.querySelector('img')).toBeNull();
   });
@@ -617,7 +615,7 @@ describe('proxy configuration and credential operations', () => {
   it.each(['pay_as_you_go', 'plan', 'local', 'unspecified'] as const)(
     'edits billing to %s without dropping hidden route security policy',
     async (billing) => {
-      const original: ProxyRoute = {
+      const original: ProxyAdminRoute = {
         ...route,
         account: 'trusted',
         websocket: true,
@@ -636,7 +634,9 @@ describe('proxy configuration and credential operations', () => {
       });
       await click(root, 'Save route');
       await waitFor(() =>
-        expect(config).toHaveBeenCalledWith(7, [expect.objectContaining({ ...original, billing })]),
+        expect(config).toHaveBeenCalledWith(expect.objectContaining({ revision: 7 }), [
+          expect.objectContaining({ ...original, billing }),
+        ]),
       );
       expect(confirm).not.toHaveBeenCalled();
     },
@@ -653,7 +653,12 @@ describe('proxy configuration and credential operations', () => {
     });
     await click(root, 'Save route');
     await waitFor(() =>
-      expect(config).toHaveBeenCalledWith(7, [expect.objectContaining({ billing: 'unspecified' })]),
+      expect(config).toHaveBeenCalledWith(
+        expect.objectContaining({ revision: 7 }),
+        [expect.objectContaining({ billing: 'unspecified' })],
+        expect.any(Object),
+        undefined,
+      ),
     );
   });
 
@@ -682,18 +687,24 @@ describe('proxy configuration and credential operations', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     await openManage(root, 'Example');
     await click(root, 'Disable Example');
-    await waitFor(() => expect(config).toHaveBeenCalledWith(7, [{ ...route, enabled: false }]));
+    await waitFor(() =>
+      expect(config).toHaveBeenCalledWith(expect.objectContaining({ revision: 7 }), [
+        { ...route, enabled: false },
+      ]),
+    );
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     await openManage(root, 'Example');
     await click(root, 'Edit Example');
     await click(root, 'Delete route Example');
-    await waitFor(() => expect(config).toHaveBeenLastCalledWith(7, []));
+    await waitFor(() =>
+      expect(config).toHaveBeenLastCalledWith(expect.objectContaining({ revision: 7 }), []),
+    );
   });
-  it('supports structured secret headers with canonical default-port origin matching', async () => {
+  it('supports structured secret headers independent of upstream origin', async () => {
     const { root, api } = setup(
       state({
         routes: [route],
-        secrets: [{ name: 'key', origin: 'https://example.com:443', source: 'stored' }],
+        secrets: [{ name: 'key', routes: null, source: 'stored' }],
       }),
     );
     const config = vi.spyOn(api, 'config').mockResolvedValue();
@@ -707,60 +718,32 @@ describe('proxy configuration and credential operations', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     await click(root, 'Save route');
     await waitFor(() =>
-      expect(config).toHaveBeenCalledWith(7, [
+      expect(config).toHaveBeenCalledWith(expect.objectContaining({ revision: 7 }), [
         expect.objectContaining({
           set_headers: { Authorization: { secret: 'key', prefix: 'Bearer ' } },
         }),
       ]),
     );
   });
-  it('refuses a secret substitution for a different upstream origin', async () => {
-    const { root, api } = setup(
-      state({
-        routes: [route],
-        secrets: [{ name: 'key', origin: 'https://other.example', source: 'stored' }],
-      }),
-    );
-    const config = vi.spyOn(api, 'config').mockResolvedValue();
-    await openManage(root, 'Example');
-    await click(root, 'Edit Example');
-    await click(root, 'Add substitution');
-    fireEvent.input(getByLabelText(root, 'Header name'), { target: { value: 'Authorization' } });
-    fireEvent.change(getByLabelText(root, 'Source'), { target: { value: 'secret' } });
-    expect(
-      (getByLabelText(root, 'Secret name') as HTMLSelectElement).querySelector('option[value=key]'),
-    ).toBeNull();
-    fireEvent.submit(getByLabelText(root, 'Secret name').closest('form')!);
-    await waitFor(() =>
-      expect(root.textContent).toContain('Select a secret bound to this exact upstream origin.'),
-    );
-    expect(config).not.toHaveBeenCalled();
-  });
   it('writes a secret once and disables deletion while referenced', async () => {
     const { root, api } = setup(
       state({
         routes: [{ ...route, set_headers: { Authorization: { secret: 'key' } } }],
-        secrets: [{ name: 'key', origin: 'https://example.com:443', source: 'stored' }],
+        secrets: [{ name: 'key', routes: ['Example'], source: 'stored' }],
       }),
     );
     const secret = vi.spyOn(api, 'secret').mockResolvedValue();
     await click(root, 'Secrets');
     expect(getByRole(root, 'button', { name: 'Delete secret key' })).toBeDisabled();
     await click(root, 'Replace key');
-    expect(getByLabelText(root, /Bound origin/)).toHaveAttribute('readonly');
+    expect(queryByLabelText(root, /Bound origin|Use route origin/)).toBeNull();
+    expect(root).toHaveTextContent('stored · used by Example');
     fireEvent.input(getByLabelText(root, /New secret value/), {
       target: { value: 'opaque-credential-123' },
     });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     await click(root, 'Replace secret');
-    await waitFor(() =>
-      expect(secret).toHaveBeenCalledWith(
-        'key',
-        'https://example.com',
-        'opaque-credential-123',
-        true,
-      ),
-    );
+    await waitFor(() => expect(secret).toHaveBeenCalledWith('key', 'opaque-credential-123', true));
     expect(root.textContent).not.toContain('opaque-credential-123');
   });
   it('keeps configuration transfer on Admin, not Routes, with no nested disclosures', async () => {
@@ -954,24 +937,28 @@ describe('acceptance refinements', () => {
         }),
       );
     const api = new ProxyClient(fetcher);
-    await expect(api.config(7, [])).rejects.toThrow('<b>Prefixes overlap</b>');
-    await expect(api.config(7, [])).rejects.toMatchObject({ message: 'x'.repeat(512) });
-    await expect(api.config(7, [])).rejects.toThrow('Invalid input');
-    await expect(api.config(7, [])).rejects.toThrow('Proxy request failed (500)');
-    await expect(api.config(7, [])).rejects.toThrow('Conflict');
-    await expect(api.config(7, [])).rejects.toThrow('Conflict');
+    await expect(api.config(state({ revision: 7 }), [])).rejects.toThrow('<b>Prefixes overlap</b>');
+    await expect(api.config(state({ revision: 7 }), [])).rejects.toMatchObject({
+      message: 'x'.repeat(512),
+    });
+    await expect(api.config(state({ revision: 7 }), [])).rejects.toThrow('Invalid input');
+    await expect(api.config(state({ revision: 7 }), [])).rejects.toThrow(
+      'Proxy request failed (500)',
+    );
+    await expect(api.config(state({ revision: 7 }), [])).rejects.toThrow('Conflict');
+    await expect(api.config(state({ revision: 7 }), [])).rejects.toThrow('Conflict');
   });
   it('sends explicit replacement intent and state revisions for caller grant writes', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response('{}'));
     const api = new ProxyClient(fetcher);
-    await api.secret('key', 'https://example.com', 'first');
-    await api.secret('key', 'https://example.com', 'second', true);
+    await api.secret('key', 'first');
+    await api.secret('key', 'second', true);
     await api.createCaller('Client', ['Example'], 7);
     await api.updateCaller('c1', [], 7);
     const bodies = fetcher.mock.calls.map(([, options]) => JSON.parse(String(options?.body)));
     expect(bodies).toEqual([
-      { name: 'key', origin: 'https://example.com', value: 'first', replace: false },
-      { name: 'key', origin: 'https://example.com', value: 'second', replace: true },
+      { name: 'key', value: 'first' },
+      { name: 'key', value: 'second', replace: true },
       { name: 'Client', grants: ['Example'], revision: 7 },
       { id: 'c1', grants: [], revision: 7 },
     ]);
@@ -1084,30 +1071,21 @@ describe('acceptance refinements', () => {
     await click(root, 'Cancel');
     expect(document.activeElement).toBe(getByRole(root, 'button', { name: 'Add provider' }));
   });
-  it('filters secrets by normalized origin and prefills the missing-secret flow', async () => {
+  it('prefills a name-only secret dialog', async () => {
     const { root } = setup(state({ routes: [route] }));
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     await openManage(root, 'Example');
     await click(root, 'Edit Example');
     await click(root, 'Add substitution');
-    expect(root.textContent).toContain('No secret is bound to https://example.com yet.');
     await click(root, 'Add API key');
-    await waitFor(() =>
-      expect((getByLabelText(root, 'Bound origin') as HTMLInputElement).value).toBe(
-        'https://example.com',
-      ),
-    );
     const dialog = getByRole(root, 'dialog', { name: 'Add API key' });
-    expect(document.activeElement).toBe(getByLabelText(dialog, 'New secret value'));
-    expect(getByLabelText(dialog, 'Bound origin')).toHaveAttribute('readonly');
-    expect(root.querySelector('.route-form')).not.toBeNull();
+    expect(getByLabelText(dialog, 'New secret value')).toHaveFocus();
+    expect(queryByLabelText(dialog, 'Bound origin')).toBeNull();
   });
   it('stores a key in place, preserves all route fields and saves at the new revision', async () => {
     const { root, api } = setup(state({ presets }));
     const write = vi.spyOn(api, 'secret').mockResolvedValue();
     const save = vi.spyOn(api, 'config').mockResolvedValue();
-    await click(root, 'Add provider');
-    await click(root, 'OpenAI');
+    await openKeyDraft(root);
     fireEvent.input(getByLabelText(root, 'Name'), { target: { value: 'my-openai' } });
     fireEvent.input(getByLabelText(root, 'Local prefix'), {
       target: { value: '/my-custom-prefix/' },
@@ -1124,19 +1102,14 @@ describe('acceptance refinements', () => {
       state({
         presets,
         revision: 8,
-        secrets: [{ name: 'my-openai-key', origin: 'https://api.openai.com', source: 'stored' }],
+        secrets: [{ name: 'my-openai-key', routes: null, source: 'stored' }],
       }),
     );
     await click(dialog, 'Store secret');
     await waitFor(() => expect(root.querySelector('dialog')).toBeNull());
-    expect(write).toHaveBeenCalledWith(
-      'my-openai-key',
-      'https://api.openai.com',
-      'private-api-key',
-      false,
-    );
+    expect(write).toHaveBeenCalledWith('my-openai-key', 'private-api-key', false);
     expect(root.querySelector('.route-form')).toBe(routeForm);
-    expect(getByRole(root, 'heading', { name: 'Set up OpenAI API' })).toBeVisible();
+    expect(getByRole(root, 'heading', { name: 'Custom endpoint' })).toBeVisible();
     expect(getByLabelText(root, 'Name')).toHaveValue('my-openai');
     expect(getByLabelText(root, 'Local prefix')).toHaveValue('/my-custom-prefix/');
     expect(getByLabelText(root, 'Secret name')).toHaveValue('my-openai-key');
@@ -1144,17 +1117,19 @@ describe('acceptance refinements', () => {
     expect(save).not.toHaveBeenCalled();
     await click(root, 'Save route');
     await waitFor(() =>
-      expect(save).toHaveBeenCalledWith(8, [
-        expect.objectContaining({ name: 'my-openai', local_prefix: '/my-custom-prefix/' }),
-      ]),
+      expect(save).toHaveBeenCalledWith(
+        expect.objectContaining({ revision: 8 }),
+        [expect.objectContaining({ name: 'my-openai', local_prefix: '/my-custom-prefix/' })],
+        expect.any(Object),
+        undefined,
+      ),
     );
     expect(root.textContent).not.toContain('private-api-key');
   });
   it('updates shared secret state without re-rendering the route', async () => {
     const { root, api } = setup(state({ presets }));
     vi.spyOn(api, 'secret').mockResolvedValue();
-    await click(root, 'Add provider');
-    await click(root, 'OpenAI');
+    await openKeyDraft(root);
     await click(root, 'Add API key');
     const dialog = getByRole(root, 'dialog', { name: 'Add API key' });
     fireEvent.input(getByLabelText(dialog, 'New secret value'), {
@@ -1164,7 +1139,7 @@ describe('acceptance refinements', () => {
       state({
         presets,
         revision: 8,
-        secrets: [{ name: 'openai-key', origin: 'https://api.openai.com', source: 'stored' }],
+        secrets: [{ name: 'openai-key', routes: null, source: 'stored' }],
       }),
     );
     await click(dialog, 'Store secret');
@@ -1176,8 +1151,7 @@ describe('acceptance refinements', () => {
   it('cancels the key dialog without losing the route or storing the key', async () => {
     const { root, api } = setup(state({ presets }));
     const write = vi.spyOn(api, 'secret');
-    await click(root, 'Add provider');
-    await click(root, 'OpenAI');
+    await openKeyDraft(root);
     await click(root, 'Add API key');
     const dialog = getByRole(root, 'dialog', { name: 'Add API key' });
     const key = getByLabelText(dialog, 'New secret value') as HTMLInputElement;
@@ -1194,8 +1168,7 @@ describe('acceptance refinements', () => {
       new ProxyAPIError(409, 'Secret name already exists.'),
     );
     const save = vi.spyOn(api, 'config');
-    await click(root, 'Add provider');
-    await click(root, 'OpenAI');
+    await openKeyDraft(root);
     await click(root, 'Add API key');
     const dialog = getByRole(root, 'dialog', { name: 'Add API key' });
     fireEvent.input(getByLabelText(dialog, 'New secret value'), {
@@ -1217,8 +1190,7 @@ describe('acceptance refinements', () => {
     const save = vi
       .spyOn(api, 'config')
       .mockRejectedValue(new ProxyAPIError(409, 'Configuration changed; refresh before saving.'));
-    await click(root, 'Add provider');
-    await click(root, 'OpenAI');
+    await openKeyDraft(root);
     await click(root, 'Add API key');
     const dialog = getByRole(root, 'dialog', { name: 'Add API key' });
     fireEvent.input(getByLabelText(dialog, 'New secret value'), {
@@ -1229,7 +1201,7 @@ describe('acceptance refinements', () => {
         presets,
         revision: 9,
         routes: [route],
-        secrets: [{ name: 'openai-key', origin: 'https://api.openai.com', source: 'stored' }],
+        secrets: [{ name: 'openai-key', routes: null, source: 'stored' }],
       }),
     );
     await click(dialog, 'Store secret');
@@ -1237,15 +1209,19 @@ describe('acceptance refinements', () => {
     expect(root.textContent).toContain('Routes changed elsewhere');
     await click(root, 'Save route');
     await waitFor(() =>
-      expect(save).toHaveBeenCalledWith(7, [expect.objectContaining({ name: 'openai' })]),
+      expect(save).toHaveBeenCalledWith(
+        expect.objectContaining({ revision: 7 }),
+        [expect.objectContaining({ name: 'openai' })],
+        expect.any(Object),
+        undefined,
+      ),
     );
     expect(getByLabelText(root, 'Name')).toHaveValue('openai');
   });
   it('returns to sign-in when authentication is lost during the key-state reload', async () => {
     const { root, api } = setup(state({ presets }));
     vi.spyOn(api, 'secret').mockResolvedValue();
-    await click(root, 'Add provider');
-    await click(root, 'OpenAI');
+    await openKeyDraft(root);
     await click(root, 'Add API key');
     const dialog = getByRole(root, 'dialog', { name: 'Add API key' });
     fireEvent.input(getByLabelText(dialog, 'New secret value'), {
@@ -1260,8 +1236,7 @@ describe('acceptance refinements', () => {
   it('reports a committed key separately when metadata refresh fails', async () => {
     const { root, api } = setup(state({ presets }));
     vi.spyOn(api, 'secret').mockResolvedValue();
-    await click(root, 'Add provider');
-    await click(root, 'OpenAI');
+    await openKeyDraft(root);
     await click(root, 'Add API key');
     const dialog = getByRole(root, 'dialog', { name: 'Add API key' });
     fireEvent.input(getByLabelText(dialog, 'New secret value'), {
@@ -1275,15 +1250,12 @@ describe('acceptance refinements', () => {
   });
   it('refuses accidental duplicate secret creation before any write', async () => {
     const { root, api } = setup(
-      state({ secrets: [{ name: 'key', origin: 'https://example.com', source: 'stored' }] }),
+      state({ secrets: [{ name: 'key', routes: null, source: 'stored' }] }),
     );
     const write = vi.spyOn(api, 'secret').mockResolvedValue();
     await click(root, 'Secrets');
     await click(root, 'Add secret');
     fireEvent.input(getByLabelText(root, 'Secret name'), { target: { value: 'key' } });
-    fireEvent.input(getByLabelText(root, 'Bound origin'), {
-      target: { value: 'https://example.com' },
-    });
     fireEvent.input(getByLabelText(root, 'New secret value'), { target: { value: 'not-sent' } });
     await click(root, 'Store secret');
     await waitFor(() => expect(root.textContent).toContain('Use its Replace action'));
@@ -1453,6 +1425,7 @@ describe('route pagination', () => {
     Array.from({ length: count }, (_, i) => ({
       ...route,
       name: `route-${String(i + 1).padStart(2, '0')}`,
+      provider: `route-${String(i + 1).padStart(2, '0')}`,
       local_prefix: `/r${i + 1}/`,
     }));
 
@@ -1465,7 +1438,7 @@ describe('route pagination', () => {
   it('paginates providers at 10 per page with Previous, Next, and ellipsis page buttons', async () => {
     const { root } = setup(state({ routes: makeRoutes(85) }));
     await waitFor(() => expect(root.querySelectorAll('.route-card')).toHaveLength(10));
-    const nav = getByRole(root, 'navigation', { name: 'Provider pagination' });
+    const nav = getByRole(root, 'navigation', { name: 'Inference provider pagination' });
     expect(nav).not.toBeNull();
     expect(nav.textContent).toContain('Showing 1–10 of 85 providers');
     expect(nav.querySelectorAll('.route-pagination-ellipsis')).toHaveLength(1);
@@ -1473,7 +1446,7 @@ describe('route pagination', () => {
 
     await click(root, 'Next');
     expect(nav.textContent).toContain('Showing 11–20 of 85 providers');
-    expect(root.querySelector('.route-card h2')?.textContent).toBe('route-11');
+    expect(root.querySelector('.route-card h3')?.textContent).toBe('route-11');
 
     await click(root, 'Page 9');
     expect(nav.textContent).toContain('Showing 81–85 of 85 providers');

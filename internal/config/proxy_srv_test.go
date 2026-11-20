@@ -44,7 +44,7 @@ func TestLoadProxySRVBindings(t *testing.T) {
 providers:
   claude-bin:
     proxy:
-      url: srv://`+nativeRecord+`/team/claude-code/
+      url: srv://`+nativeRecord+`/team/claude-bin/
       token: test-native-client-token
 `)
 	cfg, err := Load()
@@ -52,23 +52,23 @@ providers:
 		t.Fatal(err)
 	}
 	const globalRoot = "https://srv-global.example.test:8443/gateway%20one"
-	const nativeRoot = "https://srv-native.example.test/team/claude-code"
-	if cfg.Proxy.URL != globalRoot || cfg.Image.OpenAI.BaseURL != globalRoot+"/openai" {
+	const nativeRoot = "https://srv-native.example.test/team/claude-bin"
+	if cfg.Proxy.URL != globalRoot || cfg.Image.OpenAI.BaseURL != unavailableProxyEndpoint(globalRoot, "openai") {
 		t.Fatalf("expected resolved global and image roots, got %q and %q", cfg.Proxy.URL, cfg.Image.OpenAI.BaseURL)
 	}
 	openAI := cfg.Providers["openai"]
-	if openAI.BaseURL != globalRoot+"/openai" || openAI.ProxyBinding != openAI.BaseURL {
+	if openAI.BaseURL != unavailableProxyEndpoint(globalRoot, "openai") || openAI.ProxyBinding != openAI.BaseURL {
 		t.Fatalf("expected OpenAI to be bound under the discovered root, got %q (%q)", openAI.BaseURL, openAI.ProxyBinding)
 	}
 	native := cfg.Providers["claude-bin"]
-	if native.Proxy == nil || native.Proxy.URL != "srv://"+nativeRecord+"/team/claude-code/" || native.ProxyBinding != nativeRoot || native.Env["TERM_LLM_CLAUDE_PROXY_ROOT"] != nativeRoot {
+	if native.Proxy == nil || native.Proxy.URL != "srv://"+nativeRecord+"/team/claude-bin/" || native.ProxyBinding != nativeRoot || native.Env["TERM_LLM_CLAUDE_PROXY_ROOT"] != nativeRoot {
 		t.Fatal("native provider did not retain the SRV reference and use the discovered route")
 	}
 	for _, want := range []proxyclient.Binding{
 		{Root: openAI.BaseURL, Token: "test-global-client-token"},
-		{Root: nativeRoot, Kind: "claude-code", Token: "test-native-client-token"},
+		{Root: nativeRoot, Kind: "claude-bin", Token: "test-native-client-token"},
 	} {
-		if got, ok := proxyclient.Lookup(want.Root + "/operation"); !ok || got != want {
+		if got, ok := proxyclient.Lookup(want.Root + "/operation"); !ok || got.Root != want.Root || got.Kind != want.Kind || got.Token != want.Token {
 			t.Errorf("missing scoped binding under %s", want.Root)
 		}
 	}
@@ -97,8 +97,8 @@ func TestUnboundProxySRVRetainsSource(t *testing.T) {
 	const raw = "srv://_proxy._tcp.household.example.test"
 	enabled := false
 	cfg := &Config{
-		Proxy:     ProxyConfig{URL: raw, Token: "test-global-client-token", Providers: []string{"disabled-alias"}},
-		Providers: map[string]ProviderConfig{"disabled-alias": {Type: ProviderTypeOpenAI, Enabled: &enabled}},
+		Proxy:     ProxyConfig{URL: raw, Token: "test-global-client-token", Providers: []string{"anthropic"}},
+		Providers: map[string]ProviderConfig{"anthropic": {Type: ProviderTypeAnthropic, Enabled: &enabled}},
 	}
 	if err := cfg.materializeProxy(nil); err != nil || cfg.Proxy.URL != raw || cfg.Proxy.materialized {
 		t.Fatalf("unbound proxy must retain the source URL, got %q, %v", cfg.Proxy.URL, err)

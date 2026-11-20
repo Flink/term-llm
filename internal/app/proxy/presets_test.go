@@ -67,13 +67,13 @@ func TestRoutePresetsProjectProfiles(t *testing.T) {
 		if p.PathSuffix != "" && !strings.Contains(preset.Note, p.PathSuffix) {
 			t.Errorf("%s note omits its endpoint suffix", p.ID)
 		}
-		if p.Account == "claude-code" && (!strings.Contains(preset.Note, "Set up Claude") || strings.Contains(preset.Note, "choose it below")) {
+		if p.Account == "claude-bin" && (!strings.Contains(preset.Note, "Set up Claude") || strings.Contains(preset.Note, "choose it below")) {
 			t.Errorf("Claude must use its simple setup, not account plumbing: %q", preset.Note)
 		}
 		if p.Account == "agy-bin" && (!strings.Contains(preset.Note, "Personal subscriptions only") || !strings.Contains(preset.Note, "proxy run agy -- acp --login") || strings.Contains(preset.Note, "choose it below")) {
 			t.Errorf("Antigravity must use its personal native setup, not account plumbing: %q", preset.Note)
 		}
-		if p.Account != "" && p.Account != "claude-code" && p.Account != "agy-bin" && !strings.Contains(preset.Note, "trusted "+p.Account+" account") {
+		if p.Account != "" && p.Account != "claude-bin" && p.Account != "agy-bin" && !strings.Contains(preset.Note, "trusted "+p.Account+" account") {
 			t.Errorf("%s note omits its account requirement", p.ID)
 		}
 	}
@@ -140,12 +140,12 @@ func TestRoutePresetsCompileAndForwardNativeCredentials(t *testing.T) {
 				// Custody routes carry no static secret; the account integration is
 				// exercised by the account tests, so only the route shape is checked.
 				r.Account = "account"
-				if _, err := compile(Config{Routes: []Route{r}}, 1, materials); err != nil || len(r.SetHeaders) != 0 {
+				if _, err := compile(fixtureProviders(Config{Routes: []Route{r}}), 1, materials); err != nil || len(r.SetHeaders) != 0 {
 					t.Fatalf("account preset does not compile without a static secret: %v", err)
 				}
 				return
 			}
-			if _, err := compile(Config{Routes: []Route{r}}, 1, materials); err != nil {
+			if _, err := compile(fixtureProviders(Config{Routes: []Route{r}}), 1, materials); err != nil {
 				t.Fatal(err)
 			}
 			const suffix = "chat/completions"
@@ -219,19 +219,27 @@ func TestRoutePresetGroupsAndCompanions(t *testing.T) {
 	byID := map[string]routePreset{}
 	for _, p := range routePresets {
 		byID[p.ID] = p
-		switch p.Group {
-		case "plan", "api_key", "self_hosted", "media":
+		switch p.Family {
+		case "inference", "search", "media", "embeddings":
 		default:
-			t.Errorf("%s has invalid group %q", p.ID, p.Group)
+			t.Errorf("%s has invalid group %q", p.ID, p.Family)
 		}
 	}
-	want := map[string]string{"claude-code": "plan", "chatgpt": "plan", "opencode-go": "plan", "anthropic": "api_key", "bedrock": "api_key", "ollama": "self_hosted", "vllm": "self_hosted", "openai-compatible": "self_hosted", "elevenlabs": "media", "voyage": "media", "chatgpt-openai": "plan", "gemini-live": "api_key", "grok-bin": "plan"}
+	want := map[string]string{
+		"claude-bin": "inference", "chatgpt": "inference", "opencode-go": "inference", "anthropic": "inference", "bedrock": "inference",
+		"ollama": "inference", "vllm": "inference", "openai-compatible": "inference", "elevenlabs": "media",
+		"jina": "embeddings", "jina-reader": "embeddings", "voyage": "embeddings", "mistral": "inference",
+		"chatgpt-openai": "inference", "gemini-live": "inference", "grok-bin": "inference", "exa": "search", "exa-mcp": "search", "brave": "search",
+	}
 	for id, group := range want {
-		if byID[id].Group != group {
-			t.Errorf("%s group = %q, want %q", id, byID[id].Group, group)
+		if byID[id].Family != group {
+			t.Errorf("%s group = %q, want %q", id, byID[id].Family, group)
 		}
 	}
-	companions := map[string][]string{"chatgpt": {"chatgpt-backend", "chatgpt-openai"}, "gemini": {"gemini-live"}, "grok": {"grok-bin"}}
+	companions := map[string][]string{
+		"chatgpt": {"chatgpt-backend", "chatgpt-openai"}, "gemini": {"gemini-live"}, "grok": {"grok-bin"},
+		"exa": {"exa-mcp"}, "jina": {"jina-reader"},
+	}
 	for _, p := range routePresets {
 		if got := strings.Join(p.Companions, ","); got != strings.Join(companions[p.ID], ",") {
 			t.Errorf("%s companions = %q", p.ID, got)

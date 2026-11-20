@@ -1,13 +1,16 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { fireEvent, getByLabelText, getByRole, waitFor } from '@testing-library/preact';
-import { ProxyClient, type ProxyRoute, type ProxyState } from '../src/api/proxy-client';
+import { ProxyClient, type ProxyAdminRoute, type ProxyState } from '../src/api/proxy-client';
 import type { UIContext } from './dom';
 import { providerAccess } from './provider-access';
 import { providerConfigSection, providerConfigSummary } from './provider-config';
 import type { ProviderGroup } from './provider-groups';
 import { routeForm } from './route-form';
 
-const deepseekRoute: ProxyRoute = {
+const deepseekRoute: ProxyAdminRoute = {
+  serves: [],
+  profile: '',
+  provider: 'cdck_deepseek',
   name: 'cdck_deepseek',
   local_prefix: '/cdck_deepseek/',
   upstream: 'https://snorlax1b.dub2.discourse.cloud:34567/v1',
@@ -20,12 +23,16 @@ const deepseekRoute: ProxyRoute = {
 
 function baseState(overrides: Partial<ProxyState> = {}): ProxyState {
   return {
+    defaults: null,
     auth: 'token',
     mode: 'ui',
     revision: 4,
     routes: [deepseekRoute],
     providers: [
       {
+        family: 'inference',
+        status: 'green',
+        reason: '',
         id: 'cdck_deepseek',
         label: 'cdck_deepseek',
         routes: ['cdck_deepseek'],
@@ -93,6 +100,9 @@ it('cleans pasted YAML and saves provider client config without dropping grants'
   });
   const { context, refresh } = uiContext();
   const group: ProviderGroup = {
+    family: 'inference',
+    status: 'green',
+    reason: '',
     id: 'cdck_deepseek',
     label: 'cdck_deepseek',
     routes: [deepseekRoute],
@@ -161,8 +171,9 @@ it('imports pasted term-llm YAML in routeForm and submits provider_config_yaml a
   fireEvent.click(getByRole(form, 'button', { name: 'Save route' }));
   await waitFor(() => expect(configSpy).toHaveBeenCalledTimes(1));
   expect(configSpy).toHaveBeenCalledWith(
-    4,
+    emptyState,
     expect.arrayContaining([expect.objectContaining({ name: 'cdck_deepseek' })]),
+    { cdck_deepseek: { label: 'cdck_deepseek' } },
     { cdck_deepseek: 'type: vllm\nmodel: deepseek-ai/DeepSeek-V4-Flash' },
   );
 });
@@ -183,6 +194,9 @@ it('shows term-llm discovery snippet and vision_via hint when creating a client 
   });
   const { context } = uiContext();
   const group: ProviderGroup = {
+    family: 'inference',
+    status: 'green',
+    reason: '',
     id: 'cdck_deepseek',
     label: 'cdck_deepseek',
     routes: [deepseekRoute],

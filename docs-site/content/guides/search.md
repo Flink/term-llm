@@ -132,6 +132,14 @@ Available fetch providers:
 
 `search.provider` and `search.fetch_provider` are independent. For example, `provider: exa_mcp` with `fetch_provider: jina` gives Exa MCP search results but keeps Jina for reading individual pages.
 
+### Use a credential proxy
+
+To use search or fetch without storing vendor keys on this machine, add and
+approve a [search or fetch provider on the credential proxy](/guides/credential-proxy/#search-and-fetch-presets).
+Use its provider name in `proxy.providers`, for example `providers: [exa, jina]`
+under `proxy:`. This binds Exa REST, Exa MCP and Jina Reader when granted.
+Your explicit search and fetch selectors still win over proxy defaults.
+
 ### URL checks and proxies
 
 Before fetching, `read_url` validates the target and each redirect, rejecting local and private-network destinations. Direct redirect-check connections are pinned to the validated IP addresses while retaining the URL's hostname for HTTP and TLS.

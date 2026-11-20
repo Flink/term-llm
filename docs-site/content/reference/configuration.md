@@ -1094,7 +1094,9 @@ search:
     cx: ${GOOGLE_SEARCH_CX}
 ```
 
-Defaults are `provider: exa_mcp` and `fetch_provider: jina`: external search uses Exa's remote MCP server, while `read_url` uses Jina Reader. Set `fetch_provider: exa_mcp` to fetch pages through Exa MCP as well, or `fetch_provider: none` to omit the external `read_url` tool.
+The built-in defaults are `provider: exa_mcp` and `fetch_provider: jina`: external search uses Exa's remote MCP server, while `read_url` uses Jina Reader. Set `fetch_provider: exa_mcp` to fetch pages through Exa MCP as well, or `fetch_provider: none` to omit the external `read_url` tool.
+
+When [bound through a credential proxy](/guides/credential-proxy/#search-and-fetch-presets), Exa REST, Brave, Tavily, Perplexity, Parallel, You.com and Keenable use the discovered route and client token for `search.<provider>.base_url` and `search.<provider>.api_key`. Exa MCP uses `search.exa_mcp.url` (the full `/mcp` endpoint) and `search.exa_mcp.api_key`. Jina Reader uses `search.jina.base_url` and sends the scoped token on the Reader request; it has no separate search API-key setting. List `exa` to select both Exa routes and `jina` to select both Jina routes. Explicit `search.provider` and `search.fetch_provider` values override [proxy defaults](/guides/credential-proxy/#client-defaults).
 
 See the [Search guide](/guides/search/) for detailed search configuration.
 
@@ -1163,7 +1165,7 @@ providers:
     # thinking_summaries: false
     # Optional: keep subscription credentials on a credential proxy
     # proxy:
-    #   url: https://proxy.example.test/claude-code/
+    #   url: https://proxy.example.test/claude-bin/
     #   token: file:///run/secrets/claude-proxy-token
 ```
 
@@ -1183,6 +1185,24 @@ regardless of `env` values, so do not set a vendor token alongside it.
 
 This is passed only to the provider subprocess. It does not mutate your parent shell environment.
 
+## Credential proxy client config
+
+```yaml
+proxy:
+  url: https://proxy.example.test
+  token: file:///run/secrets/proxy-client-token
+  providers: [claude-bin, chatgpt, exa]
+```
+
+`proxy.url` is the proxy root, not a provider route. List exact provider names
+from the proxy, not family names or display labels. `providers: [chatgpt]` opts
+in only ChatGPT; `providers: []` opts out of top-level proxy binding. To use
+proxy-all mode, omit `providers`; set `direct: [exa]` in that same `proxy:` block
+to keep both Exa backends direct, using local credentials if configured. Do not
+combine a nonempty `direct` list with an explicit `providers` list. See the
+[credential proxy guide](/guides/credential-proxy/#using-term-llm-as-a-client)
+for discovery, client defaults and keyless fallback.
+
 ## Claude Code through a credential proxy
 
 `providers.claude-bin.proxy` opts native Claude Code into a credential proxy while
@@ -1192,17 +1212,18 @@ leaving ordinary `claude` and your regular `~/.claude` settings untouched:
 providers:
   claude-bin:
     proxy:
-      url: https://proxy.example.test/claude-code/
+      url: https://proxy.example.test/claude-bin/
       token: file:///run/secrets/claude-proxy-token
 ```
 
-`url` and `token` come from **Routes → Claude Code → Set up Claude**; use its route
-root, not the bare proxy origin. `token` is a scoped client token granted that route; it can be a literal or a
-resolved credential reference such as `file://`, `op://`, `$()`, or `${VAR}`. Keep it
-private. This block redirects only `claude-bin`. It can coexist with a top-level
-`proxy:` block with an explicit `proxy.providers` list that excludes `claude-bin`.
-Use the exact route URL and client token you used to sign in through the launcher;
-granting a different client access does not transfer that sign-in.
+`url` and `token` come from the worker launcher under
+**Providers → Claude Code → Manage → Add device**. Use the route root, not
+the bare proxy origin. `token` is scoped to that client and must be granted the
+route. It can be a literal or a credential reference such as `file://`, `op://`,
+`$()`, or `${VAR}`. Keep it private. This block redirects only `claude-bin`. It
+can coexist with a top-level `proxy:` block with an explicit `proxy.providers`
+list that excludes `claude-bin`. Workers use the operator's shared subscription;
+they do not sign in themselves.
 
 Launch native Claude through the same binding:
 
@@ -1213,11 +1234,12 @@ term-llm proxy run claude -- --resume
 
 The child gets a private, term-owned `CLAUDE_CONFIG_DIR`; your normal Claude profile
 stays untouched. The proxy CA is trusted only for that process via
-`NODE_EXTRA_CA_CERTS`, never through the operating-system trust store. Native Claude
-signs in normally; the proxy intercepts token exchange on `platform.claude.com` and
-API traffic on `api.anthropic.com`, keeps the real access and refresh tokens, and
-returns opaque placeholders to the worker. Supply both `--url` and `--token` for
-a one-run binding; arguments after `--` go to Claude. See the
+`NODE_EXTRA_CA_CERTS`, never through the operating-system trust store. When the
+operator signs in, the proxy intercepts token exchange on `platform.claude.com`
+and keeps the real access and refresh tokens. It forwards authorized API traffic
+to `api.anthropic.com` and gives workers opaque placeholders instead of vendor
+credentials. Supply both `--url` and `--token` for a one-run binding; arguments
+after `--` go to Claude. See the
 [credential proxy guide](/guides/credential-proxy/#run-native-claude-code-through-the-proxy)
 for one-click setup and clearing.
 

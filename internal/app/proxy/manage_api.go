@@ -287,6 +287,8 @@ type manageRuleInfo struct {
 }
 
 type manageRouteInfo struct {
+	Provider     string           `json:"provider"`
+	Profile      string           `json:"profile"`
 	Name         string           `json:"name"`
 	LocalPrefix  string           `json:"local_prefix"`
 	Enabled      bool             `json:"enabled"`
@@ -304,7 +306,7 @@ func (s *Service) projectManageRoutes(ctx context.Context) ([]manageRouteInfo, e
 	out := make([]manageRouteInfo, 0, len(s.snap.routes))
 	for _, route := range s.snap.routes {
 		entry := manageRouteInfo{
-			Name: route.Name, LocalPrefix: route.LocalPrefix, Enabled: route.Enabled, WebSocket: route.WebSocket,
+			Name: route.Name, Provider: route.Provider, Profile: route.Profile, LocalPrefix: route.LocalPrefix, Enabled: route.Enabled, WebSocket: route.WebSocket,
 			AccountState: accountStates[route.Account],
 			CallerAuth:   manageAuthInfo(route.CallerAuth), Rules: make([]manageRuleInfo, 0, len(route.rules)),
 		}

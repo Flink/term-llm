@@ -11,13 +11,8 @@ import {
 } from './client-list';
 import type { ProxyCaller, ProxyClient, ProxyRoute, ProxyState } from '../src/api/proxy-client';
 import { providerApproval, providerGroups } from './provider-groups';
-import {
-  authLabel,
-  joinLocalPrefix,
-  routeRules,
-  routeSecretNames,
-  routeUpstreams,
-} from './route-rules';
+import { slugPattern } from './provider-name';
+import { authLabel, joinLocalPrefix, routeRules } from './route-rules';
 import {
   actions,
   button,
@@ -29,8 +24,6 @@ import {
   field,
   input,
   keyedCard,
-  requireOrigin,
-  select,
   shellQuote,
   submit,
   type UIContext,
@@ -41,8 +34,7 @@ export function secretForm(
   api: ProxyClient,
   context: UIContext,
   options: {
-    existing?: { name: string; origin: string };
-    origin?: string;
+    existing?: { name: string };
     name?: string;
     stored?: (name: string) => Promise<void>;
     cancel: () => void;
@@ -52,46 +44,16 @@ export function secretForm(
   const name = input(existing?.name ?? options.name);
   name.required = true;
   name.readOnly = !!existing;
-  name.pattern = '[A-Za-z0-9][A-Za-z0-9_-]{0,63}';
-  const origin = input(existing?.origin ?? options.origin ?? '', 'url');
-  origin.required = true;
-  origin.readOnly = !!existing || !!options.stored;
+  name.pattern = slugPattern;
+  name.maxLength = 64;
   const value = input('', 'password');
   value.required = true;
   value.autofocus = !!options.name;
   const form = el(
     'form',
     field('Secret name', name),
-    field(
-      'Bound origin',
-      origin,
-      'For example https://api.example.com. A stored secret cannot change origin.',
-    ),
     field('New secret value', value, 'Write-only: replace it any time, never view it.'),
   );
-  if (!existing && !options.stored && state.routes.length) {
-    const origins = [
-      ...new Set(
-        state.routes.flatMap((route) =>
-          routeUpstreams(route).flatMap((upstream) => {
-            try {
-              return [new URL(upstream).origin];
-            } catch {
-              return [];
-            }
-          }),
-        ),
-      ),
-    ];
-    const suggested = select([
-      ['', 'Choose a route origin'],
-      ...origins.map((url) => [url, url] as [string, string]),
-    ]);
-    suggested.addEventListener('change', () => {
-      if (suggested.value) origin.value = suggested.value;
-    });
-    form.append(field('Use route origin (optional)', suggested));
-  }
   submit(
     form,
     context,
@@ -100,7 +62,6 @@ export function secretForm(
         throw new Error(
           'A secret with this name already exists. Use its Replace action to rotate it explicitly.',
         );
-      const boundOrigin = requireOrigin(origin.value);
       if (
         existing &&
         !window.confirm(
@@ -110,7 +71,7 @@ export function secretForm(
         return;
       const credential = value.value;
       value.value = '';
-      await api.secret(name.value.trim(), boundOrigin, credential, !!existing);
+      await api.secret(name.value.trim(), credential, !!existing);
       if (options.stored) await options.stored(name.value.trim());
       else {
         await context.refresh(`secret:${name.value.trim()}`);
@@ -137,13 +98,13 @@ export function secretsView(state: ProxyState, api: ProxyClient, context: UICont
       'Secrets',
       el(
         'p',
-        'Write-only credentials, bound to an exact scheme, host and port. File-sourced secrets are read-only.',
+        'Write-only credentials referenced by name. Routes can share a secret. File-sourced secrets are read-only.',
       ),
     ),
   );
   view.firstElementChild?.classList.add('page-intro');
   const editor = el('div');
-  function edit(existing?: { name: string; origin: string }) {
+  function edit(existing?: { name: string }) {
     const form = secretForm(state, api, context, {
       existing,
       cancel: () => {
@@ -162,13 +123,13 @@ export function secretsView(state: ProxyState, api: ProxyClient, context: UICont
     editor,
   );
   for (const secret of state.secrets) {
-    const used = state.routes.some((route) => routeSecretNames(route).includes(secret.name));
+    const used = !!secret.routes?.length;
     const row = keyedCard(
       `secret:${secret.name}`,
       secret.name,
       el(
         'p',
-        `${secret.origin || 'Operator-managed origin'} · ${secret.source}${used ? ' · in use' : ''}`,
+        `${secret.source} · ${used ? `used by ${secret.routes!.join(', ')}` : 'not used by any route'}`,
       ),
     );
     if (secret.source === 'stored') {

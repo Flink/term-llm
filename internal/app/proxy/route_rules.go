@@ -94,7 +94,7 @@ func compileDestination(r *Route, secrets map[string]material, discovery *upstre
 	if !validHeader(r.CallerAuth.Header) || !httpguts.ValidHeaderFieldValue(r.CallerAuth.Prefix) {
 		return activeRoute{}, fmt.Errorf("invalid local authentication header")
 	}
-	headers, err := compileHeaders(*r, origin, secrets)
+	headers, err := compileHeaders(*r, secrets)
 	if err != nil {
 		return activeRoute{}, err
 	}

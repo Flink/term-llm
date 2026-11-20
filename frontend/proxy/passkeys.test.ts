@@ -31,6 +31,8 @@ const status: ProxyAuthStatus = {
   origin: 'https://proxy.example',
 };
 const snapshot: ProxyState = {
+  defaults: null,
+  providers: [],
   auth: 'passkey',
   mode: 'ui',
   revision: 1,

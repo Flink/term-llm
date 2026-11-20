@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/term-llm/term-llm/internal/providerhttp"
+	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 // ParallelSearcher implements Searcher using the Parallel Search API.
@@ -90,7 +91,7 @@ func (p *ParallelSearcher) Search(ctx context.Context, query string, maxResults 
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("x-api-key", p.apiKey)
 
-	resp, err := p.client.Do(req)
+	resp, err := proxyclient.Do(p.client, req)
 	if err != nil {
 		return nil, fmt.Errorf("execute request: %w", err)
 	}

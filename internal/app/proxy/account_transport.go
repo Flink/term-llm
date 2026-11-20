@@ -231,21 +231,20 @@ func accountPolicyAllows(a accountRecord, r Route, method, p string) bool {
 	if len(r.Allow) == 0 {
 		return true
 	}
-	for _, rule := range r.Allow {
-		m, prefix, _ := strings.Cut(rule, " ")
-		if m == method && strings.HasPrefix(p, prefix) {
+	for _, entry := range r.Allow {
+		if allowEntryMatches(entry, method, p) {
 			return true
 		}
 	}
 	return false
 }
 func (s *Service) routePolicyAllows(r activeRoute, method, p string) bool {
-	if policyAllows(r.Route, method, p) {
-		return true
+	if r.Account != "" {
+		// The account transport handles unavailable accounts. A known Bedrock
+		// account must pass its model-path check even if a route entry matches.
+		if a, err := s.store.account(r.Account); err == nil && a.Kind == "aws-sigv4" {
+			return accountPolicyAllows(a, r.Route, method, p)
+		}
 	}
-	if r.Account == "" {
-		return false
-	}
-	a, err := s.store.account(r.Account)
-	return err == nil && a.Kind == "aws-sigv4" && accountPolicyAllows(a, r.Route, method, p)
+	return policyAllows(r.Route, method, p)
 }

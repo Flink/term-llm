@@ -100,13 +100,16 @@ func TestChatGPTSetupProvisionsRouteAndAccountOnly(t *testing.T) {
 	}
 	bearer := Auth{Header: "Authorization", Prefix: "Bearer "}
 	want := []Route{
-		{Name: "chatgpt", Provider: "chatgpt", LocalPrefix: "/chatgpt/", Account: "chatgpt", Enabled: true, Upstream: "https://chatgpt.com/backend-api/codex", CallerAuth: bearer, Usage: "auto", Billing: "plan", WebSocket: true},
+		{Name: "chatgpt", Provider: "chatgpt", Profile: "chatgpt", LocalPrefix: "/chatgpt/", Account: "chatgpt", Enabled: true, Upstream: "https://chatgpt.com/backend-api/codex", CallerAuth: bearer, Usage: "auto", Billing: "plan", WebSocket: true},
 		// Clients bind dictation, usage, embeddings and live by these fixed names.
-		{Name: "chatgpt-backend", Provider: "chatgpt", LocalPrefix: "/chatgpt-backend/", Account: "chatgpt", Enabled: true, Upstream: "https://chatgpt.com/backend-api", CallerAuth: bearer, Billing: "plan"},
-		{Name: "chatgpt-openai", Provider: "chatgpt", LocalPrefix: "/chatgpt-openai/", Account: "chatgpt", Enabled: true, Upstream: "https://api.openai.com/v1", CallerAuth: bearer, Billing: "unspecified", WebSocket: true},
+		{Name: "chatgpt-backend", Provider: "chatgpt", Profile: "chatgpt-backend", LocalPrefix: "/chatgpt-backend/", Account: "chatgpt", Enabled: true, Upstream: "https://chatgpt.com/backend-api", CallerAuth: bearer, Billing: "plan"},
+		{Name: "chatgpt-openai", Provider: "chatgpt", Profile: "chatgpt-openai", LocalPrefix: "/chatgpt-openai/", Account: "chatgpt", Enabled: true, Upstream: "https://api.openai.com/v1", CallerAuth: bearer, Billing: "unspecified", WebSocket: true},
 	}
 	if got := restarted.snap.config.Routes; !reflect.DeepEqual(got, want) {
 		t.Fatalf("persisted route = %+v", got)
+	}
+	if p := restarted.snap.config.Providers["chatgpt"]; p.Label != "ChatGPT plan" {
+		t.Fatalf("first ChatGPT setup did not persist the canonical provider: %+v", p)
 	}
 	if a, err := restarted.store.account("chatgpt"); err != nil || a.Kind != "chatgpt" || a.State != "ready" || a.Generation != 1 || a.credentials.AccessToken != "fixture-access-token" {
 		t.Fatal("account not durably activated with the route")
@@ -116,9 +119,9 @@ func TestChatGPTSetupProvisionsRouteAndAccountOnly(t *testing.T) {
 	}
 }
 
-// A companion name already in use is left alone; the sign-in still succeeds
-// and the main route is created beside the operator's route.
-func TestChatGPTSetupSkipsTakenCompanionRoutes(t *testing.T) {
+// A named duplicate uses its own companion prefixes and cannot adopt
+// existing routes just because they use the built-in companion name.
+func TestChatGPTSetupUsesDistinctCompanions(t *testing.T) {
 	s := testService(t)
 	result := fakeChatGPTSetup(s)
 	admin, csrf := loginAdmin(t, s)
@@ -132,7 +135,7 @@ func TestChatGPTSetupSkipsTakenCompanionRoutes(t *testing.T) {
 	for _, r := range s.snap.config.Routes {
 		names = append(names, r.Name+"@"+r.Account)
 	}
-	if want := []string{"chatgpt-backend@", "work@work", "chatgpt-openai@work"}; !reflect.DeepEqual(names, want) {
+	if want := []string{"chatgpt-backend@", "work@work", "work-backend@work", "work-openai@work"}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("routes = %v, want %v", names, want)
 	}
 }
@@ -261,7 +264,7 @@ func TestChatGPTSetupReconnectPreservesFileAndGrants(t *testing.T) {
 		t.Fatal("sign out should retain only an identity digest for a later reconnect")
 	}
 	s.opts.ConfigFile = filepath.Join(t.TempDir(), "proxy.yaml")
-	file := []byte("routes:\n- name: custom\n  local_prefix: /custom/\n  upstream: https://chatgpt.com/backend-api\n  account: subscription\n  allow: [GET /wham/usage]\n")
+	file := []byte("providers: {custom: {label: Custom}}\nroutes:\n- name: custom\n  provider: custom\n  local_prefix: /custom/\n  upstream: https://chatgpt.com/backend-api\n  account: subscription\n  allow: [GET /wham/usage]\n")
 	if err := os.WriteFile(s.opts.ConfigFile, file, 0600); err != nil {
 		t.Fatal(err)
 	}

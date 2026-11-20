@@ -85,7 +85,7 @@ func metadataServer(t *testing.T) *httptest.Server {
 		json.NewEncoder(w).Encode(map[string]any{
 			"protocol_version": 2, "token_mode": "vault",
 			"hosts":           []string{"api.anthropic.com", "platform.claude.com"},
-			"certificate_pem": string(caPEM), "proxy_url": "http://" + r.Host, "route": "claude-code",
+			"certificate_pem": string(caPEM), "proxy_url": "http://" + r.Host, "route": "claude-bin",
 		})
 	}))
 	t.Cleanup(server.Close)
@@ -131,7 +131,7 @@ func isolateLauncher(t *testing.T) (home, cache, work string) {
 func TestRunPreparesProcessEnvironmentForwardsArgumentsAndLeavesHomeClaudeUntouched(t *testing.T) {
 	home, cache, work := isolateLauncher(t)
 	server := metadataServer(t)
-	root := server.URL + "/team/claude-code"
+	root := server.URL + "/team/claude-bin"
 	argsPath, envPath := filepath.Join(work, "args"), filepath.Join(work, "env")
 	command := fakeClaude(t, work, `printf '%s\n' "$@" > "$ARGS_FILE"
 env > "$ENV_FILE"
@@ -199,7 +199,7 @@ exit 0
 		t.Fatal("competing proxy environment reached the native client")
 	}
 	proxy, err := url.Parse(values["HTTPS_PROXY"])
-	if err != nil || proxy.User == nil || proxy.User.Username() != "claude-code" || proxy.Scheme+"://"+proxy.Host != server.URL || proxy.Path != "" {
+	if err != nil || proxy.User == nil || proxy.User.Username() != "claude-bin" || proxy.Scheme+"://"+proxy.Host != server.URL || proxy.Path != "" {
 		t.Fatal("Claude HTTPS proxy does not point at the scoped proxy origin")
 	}
 	password, _ := proxy.User.Password()
@@ -234,7 +234,7 @@ func TestResolveConfiguredConnectionUsesMaterializedProviderProxy(t *testing.T) 
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	root := "https://provider-local.example.test/claude-code"
+	root := "https://provider-local.example.test/claude-bin"
 	configYAML := "providers:\n  claude-bin:\n    proxy:\n      url: " + root + "\n      token: " + testToken + "\n"
 	if err := os.WriteFile(path, []byte(configYAML), 0o600); err != nil {
 		t.Fatal(err)
@@ -252,7 +252,7 @@ func TestResolveConfiguredConnectionUsesMaterializedProviderProxy(t *testing.T) 
 func TestRunPropagatesChildExitCodeAndCancellation(t *testing.T) {
 	_, _, work := isolateLauncher(t)
 	server := metadataServer(t)
-	root := server.URL + "/claude-code"
+	root := server.URL + "/claude-bin"
 	command := fakeClaude(t, work, "exit 7\n")
 	err := Run(context.Background(), Options{URL: root, Token: testToken, Command: command, Out: &bytes.Buffer{}, Err: &bytes.Buffer{}, Env: []string{"PATH=" + os.Getenv("PATH")}})
 	var exitErr *ChildExitError
@@ -323,7 +323,7 @@ func TestRunClaudePreparedCommandCleanupOffline(t *testing.T) {
 func TestRunRequiresExplicitPairOrConfiguredBindingWithoutFallback(t *testing.T) {
 	_, _, work := isolateLauncher(t)
 	server := metadataServer(t)
-	root := server.URL + "/claude-code"
+	root := server.URL + "/claude-bin"
 	marker := filepath.Join(work, "executed")
 	command := fakeClaude(t, work, "printf ran > \"$EXEC_MARKER\"\nexit 0\n")
 	for _, opts := range []Options{
@@ -345,10 +345,10 @@ func TestRunRequiresExplicitPairOrConfiguredBindingWithoutFallback(t *testing.T)
 func TestRunResolvesConfiguredBindingAndTokenReference(t *testing.T) {
 	_, _, work := isolateLauncher(t)
 	server := metadataServer(t)
-	root := server.URL + "/claude-code"
+	root := server.URL + "/claude-bin"
 	argsPath := filepath.Join(work, "args")
 	command := fakeClaude(t, work, "printf '%s\\n' \"$HTTPS_PROXY\" > \"$ARGS_FILE\"\nexit 0\n")
-	if err := proxyclient.Register([]proxyclient.Binding{{Root: root, Kind: "claude-code", Token: testToken}}); err != nil {
+	if err := proxyclient.Register([]proxyclient.Binding{{Root: root, Kind: "claude-bin", Token: testToken}}); err != nil {
 		t.Fatal(err)
 	}
 	load := func() (*config.Config, error) {
@@ -398,8 +398,8 @@ func TestRunConfiguredInvalidBindingFailsBeforeExec(t *testing.T) {
 	marker := filepath.Join(work, "executed")
 	command := fakeClaude(t, work, "printf ran > \"$EXEC_MARKER\"\nexit 0\n")
 	for _, binding := range []proxyclient.Binding{
-		{Root: "https://invalid-kind.example.test/claude-code", Kind: "chatgpt", Token: testToken},
-		{Root: "https://invalid-token.example.test/claude-code", Kind: "claude-code", Token: "sk-ant-vendor-secret"},
+		{Root: "https://invalid-kind.example.test/claude-bin", Kind: "chatgpt", Token: testToken},
+		{Root: "https://invalid-token.example.test/claude-bin", Kind: "claude-bin", Token: "sk-ant-vendor-secret"},
 	} {
 		if err := proxyclient.Register([]proxyclient.Binding{binding}); err != nil {
 			t.Fatal(err)

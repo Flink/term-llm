@@ -5,7 +5,7 @@ import {
   type ProxyState,
 } from '../src/api/proxy-client';
 import { actions, button, confirmAction, el, field, submit, type UIContext } from './dom';
-import { writableProviderID, type ProviderGroup } from './provider-groups';
+import type { ProviderGroup } from './provider-groups';
 
 export function providerConfigSummary(config?: ProxyProviderClientConfig): string {
   if (!config) return 'None configured.';
@@ -28,14 +28,14 @@ export function providerConfigSection(
   readonly: boolean,
 ): HTMLElement {
   const focusKey = `route:${group.routes[0].name}`;
-  const providerID = writableProviderID(group, state);
+  const providerID = group.id;
   const summary = el('p', providerConfigSummary(group.config));
   summary.className = 'provider-config-summary';
   const section = el('div');
   section.className = 'provider-config provider-section';
 
   if (readonly) {
-    section.append(el('h3', 'Client config (term-llm)'), summary);
+    section.append(el('h4', 'Client config (term-llm)'), summary);
     if (group.config_yaml) {
       section.append(el('pre', el('code', group.config_yaml)));
     }
@@ -63,7 +63,7 @@ export function providerConfigSection(
     `${group.config ? 'Edit' : 'Add'} client config for ${group.label}`,
   );
 
-  const header = el('div', el('div', el('h3', 'Client config (term-llm)'), summary), toggle);
+  const header = el('div', el('div', el('h4', 'Client config (term-llm)'), summary), toggle);
   header.className = 'provider-section-header';
   section.append(header);
 
@@ -103,7 +103,7 @@ export function providerConfigSection(
     field(
       'Provider YAML',
       textarea,
-      'Served by GET /_proxy/client/v1/providers to approved clients. Paste a local term-llm block and use Clean pasted YAML to strip api_key, base_url and enabled.',
+      'Served by GET /_proxy/client/v2/providers to approved clients. Paste a local term-llm block and use Clean pasted YAML to strip api_key, base_url and enabled.',
     ),
     notice,
   );

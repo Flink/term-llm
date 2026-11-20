@@ -6,6 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
+
+	"github.com/term-llm/term-llm/internal/providerspec"
+	"github.com/term-llm/term-llm/internal/proxyprofile"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,17 +36,42 @@ func testService(t *testing.T) *Service {
 	t.Cleanup(func() { s.Close() })
 	return s
 }
-func boundMaterial(t testing.TB, upstream, value string) material {
+func boundMaterial(t testing.TB, _ string, value string) material {
 	t.Helper()
-	origin, err := Origin(upstream)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return material{Origin: origin, Value: value}
+	return material{Value: value}
 }
+
+// fixtureProviders fills the persisted model for unrelated transport tests. Tests
+// of structural rejection call the real compiler without this fixture helper.
+func fixtureProviders(c Config) Config {
+	c.Routes = slices.Clone(c.Routes)
+	provs := make(map[string]Provider)
+	maps.Copy(provs, c.Providers)
+	for i := range c.Routes {
+		r := &c.Routes[i]
+		if r.Provider == "" {
+			r.Provider = r.Name
+		}
+		if r.Profile == "" {
+			if _, builtin := providerspec.Lookup(r.Name); builtin {
+				if p, ok := proxyprofile.ByID(r.Name); ok {
+					r.Profile = p.ID
+				}
+			}
+		}
+		if _, ok := provs[r.Provider]; !ok {
+			provs[r.Provider] = Provider{Label: r.Provider}
+		}
+	}
+	c.Providers = provs
+	return c
+}
+
+func canonicalTestProfile(id string) string { return proxyprofile.CanonicalParent(id) }
+
 func configure(t *testing.T, s *Service, c Config, secrets map[string]material) {
 	t.Helper()
-	snap, err := compile(c, s.snap.revision+1, secrets)
+	snap, err := compile(fixtureProviders(c), s.snap.revision+1, secrets)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,9 +131,7 @@ func TestTwoUnrelatedUpstreamsOpaqueSemantics(t *testing.T) {
 	r1 := route("one", "/local-a/", one.URL+"/alpha/", "X-Caller-Key", "one")
 	r2 := route("two", "/local-b/", two.URL+"/different/base/", "X-Caller-Key", "two")
 	r2.SetHeaders = map[string]HeaderRule{"X-Other-Auth": {Secret: "two", Prefix: "Token "}}
-	o1, _ := Origin(one.URL)
-	o2, _ := Origin(two.URL)
-	configure(t, s, Config{Routes: []Route{r1, r2}}, map[string]material{"one": {o1, "one"}, "two": {o2, "two"}})
+	configure(t, s, Config{Routes: []Route{r1, r2}}, map[string]material{"one": {Value: "one"}, "two": {Value: "two"}})
 	token := caller(t, s, "one", "two")
 	for _, prefix := range []string{"/local-a/", "/local-b/"} {
 		req := httptest.NewRequest("POST", prefix+"opaque%2Fid?q=a%2Fb&invalid=%zz&x=1;x=2", bytes.NewReader([]byte{0, 1, 255, 42}))
@@ -160,13 +188,13 @@ func TestRouteValidation(t *testing.T) {
 		{"header", func(r *Route) { r.SetHeaders = map[string]HeaderRule{"Host": {Secret: "key"}} }}, {"duplicate", func(r *Route) {
 			r.SetHeaders = map[string]HeaderRule{"X-Key": {Secret: "key"}, "x-key": {Secret: "key"}}
 		}},
-		{"missing", func(r *Route) { r.SetHeaders = map[string]HeaderRule{"X-Key": {Secret: "missing"}} }}, {"bound origin", func(r *Route) { r.Upstream = "https://other.test/" }},
+		{"missing", func(r *Route) { r.SetHeaders = map[string]HeaderRule{"X-Key": {Secret: "missing"}} }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := base
 			tt.change(&r)
-			if _, err := compile(Config{Routes: []Route{r}}, 1, map[string]material{"key": {Origin: "https://example.test:443", Value: "secret"}}); err == nil {
+			if _, err := compile(fixtureProviders(Config{Routes: []Route{r}}), 1, map[string]material{"key": {Value: "secret"}}); err == nil {
 				t.Fatal("accepted invalid route")
 			}
 		})
@@ -217,6 +245,16 @@ func TestAuthGrantsAndOriginChanges(t *testing.T) {
 	}
 }
 func adminRequest(s *Service, method, path string, body any, cookie *http.Cookie, csrf string) *httptest.ResponseRecorder {
+	if path == "config" {
+		if fields, ok := body.(map[string]any); ok {
+			if routes, ok := fields["routes"].([]Route); ok && fields["providers"] == nil {
+				c := fixtureProviders(Config{Routes: routes})
+				fields = maps.Clone(fields)
+				fields["routes"], fields["providers"] = c.Routes, c.Providers
+				body = fields
+			}
+		}
+	}
 	data, _ := json.Marshal(body)
 	req := httptest.NewRequest(method, "http://localhost/_proxy/api/"+path, bytes.NewReader(data))
 	req.Header.Set("Origin", "http://localhost")
@@ -253,11 +291,11 @@ func TestAdminSecurityAndWriteOnlySecrets(t *testing.T) {
 	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode {
 		t.Fatal("cookie security")
 	}
-	rr := adminRequest(s, "PUT", "secrets", map[string]string{"name": "key", "origin": "https://example.test/", "value": "server-held-sensitive"}, cookie, "")
+	rr := adminRequest(s, "PUT", "secrets", map[string]string{"name": "key", "value": "server-held-sensitive"}, cookie, "")
 	if rr.Code != 403 {
 		t.Fatal("CSRF not required")
 	}
-	rr = adminRequest(s, "PUT", "secrets", map[string]string{"name": "key", "origin": "https://example.test/", "value": "server-held-sensitive"}, cookie, csrf)
+	rr = adminRequest(s, "PUT", "secrets", map[string]string{"name": "key", "value": "server-held-sensitive"}, cookie, csrf)
 	if rr.Code != 200 {
 		t.Fatal(rr.Body.String())
 	}
@@ -276,8 +314,8 @@ func TestAdminSecurityAndWriteOnlySecrets(t *testing.T) {
 		t.Fatal("deleted referenced secret")
 	}
 	rr = adminRequest(s, "PUT", "secrets", map[string]any{"name": "key", "origin": "https://attacker.test/", "value": "new", "replace": true}, cookie, csrf)
-	if rr.Code != 409 {
-		t.Fatal("rebound secret")
+	if rr.Code != 400 {
+		t.Fatal("accepted removed origin field")
 	}
 	rr = adminRequest(s, "PUT", "config", map[string]any{"revision": rev, "routes": []Route{r}}, cookie, csrf)
 	if rr.Code != 409 {
@@ -326,13 +364,13 @@ func TestUnknownPaginationRetentionAndPersistence(t *testing.T) {
 }
 func TestFileModeAdminAliasAndReload(t *testing.T) {
 	s := testService(t)
-	ref := Config{Secrets: map[string]SecretRef{"bad": {File: s.opts.AdminTokenFile, Origin: "https://example.test"}}}
+	ref := Config{Secrets: map[string]SecretRef{"bad": {File: s.opts.AdminTokenFile}}}
 	if _, err := resolveSecrets(ref, nil, s.opts.AdminTokenFile, true); err == nil {
 		t.Fatal("admin file readable as upstream secret")
 	}
 	alias := filepath.Join(t.TempDir(), "alias")
 	if err := os.Link(s.opts.AdminTokenFile, alias); err == nil {
-		ref.Secrets["bad"] = SecretRef{File: alias, Origin: "https://example.test"}
+		ref.Secrets["bad"] = SecretRef{File: alias}
 		if _, err := resolveSecrets(ref, nil, s.opts.AdminTokenFile, true); err == nil {
 			t.Fatal("admin hardlink readable")
 		}

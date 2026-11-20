@@ -195,7 +195,6 @@ func TestRouteRulesValidation(t *testing.T) {
 		{"escaped", func(r *Route) { r.Rules[1].PathPrefix = "/%6dessages/" }},
 		{"traversal", func(r *Route) { r.Rules[1].PathPrefix = "/messages/../" }},
 		{"invalid allow", func(r *Route) { r.Rules[1].Allow = []string{"GET /../"} }},
-		{"wrong origin", func(r *Route) { r.Rules[2].Upstream = "https://attacker.test/base" }},
 		{"missing secret", func(r *Route) { r.Rules[2].SetHeaders = map[string]HeaderRule{"X-Key": {Secret: "absent"}} }},
 		{"unsafe header", func(r *Route) { r.Rules[2].CallerAuth.Header = "Cookie" }},
 		{"unsafe upstream", func(r *Route) { r.Rules[2].Upstream = "https://opencode.ai/a/../" }},
@@ -204,7 +203,7 @@ func TestRouteRulesValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := rulesRoute(t, "https://opencode.ai")
 			tc.change(&r)
-			if _, err := compile(Config{Routes: []Route{r}}, 1, map[string]material{"key": boundMaterial(t, "https://opencode.ai", "vendor")}); err == nil {
+			if _, err := compile(fixtureProviders(Config{Routes: []Route{r}}), 1, map[string]material{"key": boundMaterial(t, "https://opencode.ai", "vendor")}); err == nil {
 				t.Fatal("invalid rules accepted")
 			}
 		})
@@ -286,8 +285,9 @@ func TestRouteRulesSecretDeletionAndLegacyPreservation(t *testing.T) {
 	}
 	for _, id := range []string{"opencode-go", "opencode-go-messages", "opencode-go-gemini"} {
 		legacy := Route{Name: id, LocalPrefix: "/" + id + "/", Upstream: "https://opencode.ai/custom/unchanged", Enabled: true, CallerAuth: Auth{Header: "X-Custom", Prefix: "Native "}}
-		snap, err := compile(Config{Routes: []Route{legacy}}, 1, nil)
-		if err != nil || len(snap.routes) != 1 || len(snap.routes[0].rules) != 0 || !reflect.DeepEqual(snap.config.Routes[0], legacy) {
+		fixture := fixtureProviders(Config{Routes: []Route{legacy}})
+		snap, err := compile(fixture, 1, nil)
+		if err != nil || len(snap.routes) != 1 || len(snap.routes[0].rules) != 0 || !reflect.DeepEqual(snap.config.Routes[0], fixture.Routes[0]) {
 			t.Fatalf("legacy %s reinterpreted: %+v %v", id, snap, err)
 		}
 	}
@@ -304,7 +304,7 @@ func TestRouteRulesConfigRoundTrip(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(config.Routes[0], r) {
 		t.Fatalf("rules schema roundtrip: %s: %v", data, err)
 	}
-	if _, err := compile(config, 1, map[string]material{"key": boundMaterial(t, "https://opencode.ai", "vendor")}); err != nil {
+	if _, err := compile(fixtureProviders(config), 1, map[string]material{"key": boundMaterial(t, "https://opencode.ai", "vendor")}); err != nil {
 		t.Fatal(err)
 	}
 }

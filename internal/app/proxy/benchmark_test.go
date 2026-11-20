@@ -43,7 +43,7 @@ func BenchmarkForward(b *testing.B) {
 			}
 			defer s.Close()
 			r := route("fixture", "/fixture/", up.URL, "X-Local", "fixture-key")
-			snap, err := compile(Config{Routes: []Route{r}}, s.snap.revision+1, map[string]material{"fixture-key": boundMaterial(b, up.URL, "benchmark-secret")})
+			snap, err := compile(fixtureProviders(Config{Routes: []Route{r}}), s.snap.revision+1, map[string]material{"fixture-key": boundMaterial(b, up.URL, "benchmark-secret")})
 			if err != nil {
 				b.Fatal(err)
 			}

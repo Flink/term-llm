@@ -48,7 +48,7 @@ func nativeSetupPost(t *testing.T, s *Service, endpoint string, cookie *http.Coo
 func claudeSetupAccount(t *testing.T, s *Service, name, kind string) accountRecord {
 	t.Helper()
 	a := accountRecord{AccountInfo: AccountInfo{Name: name, Kind: kind, State: "ready", Generation: 1, Updated: time.Now().UnixMilli()}, credentials: accountCredentials{AccessToken: "synthetic-" + name}}
-	if kind == "claude-code" || kind == "agy-bin" {
+	if kind == "claude-bin" || kind == "agy-bin" {
 		a = newNativeAccount(name, kind)
 	}
 	if err := s.store.replaceAccount(context.Background(), a, 0); err != nil {
@@ -58,7 +58,7 @@ func claudeSetupAccount(t *testing.T, s *Service, name, kind string) accountReco
 }
 
 func claudeSetupRoute(name, account string) Route {
-	return Route{Name: name, Account: account, Enabled: true, LocalPrefix: "/" + name + "/", Upstream: "https://api.anthropic.com", CallerAuth: Auth{Header: "Authorization", Prefix: "Bearer "}, Billing: "plan", Usage: "auto"}
+	return Route{Name: name, Provider: name, Profile: "claude-bin", Account: account, Enabled: true, LocalPrefix: "/" + name + "/", Upstream: "https://api.anthropic.com", CallerAuth: Auth{Header: "Authorization", Prefix: "Bearer "}, Billing: "plan", Usage: "auto"}
 }
 
 func TestClaudeSetupDefaultsToCreateAndConnectReusesRoute(t *testing.T) {
@@ -77,7 +77,7 @@ func TestClaudeSetupDefaultsToCreateAndConnectReusesRoute(t *testing.T) {
 		t.Fatalf("not canonical defaults: %+v preset=%+v", route, preset)
 	}
 	a, err := s.store.account(route.Account)
-	if err != nil || a.Kind != "claude-code" || !a.claudeShared() || a.State != "needs_login" || len(a.claudeSharedCipher) != 0 {
+	if err != nil || a.Kind != "claude-bin" || !a.claudeShared() || a.State != "needs_login" || len(a.claudeSharedCipher) != 0 {
 		t.Fatalf("not a native slot: %+v err=%v", a, err)
 	}
 	second := nativeSetupPost(t, s, "claude/setup", cookie, csrf, "connect", route.Name)
@@ -119,7 +119,7 @@ func TestClaudeSetupDefaultsToCreateAndConnectReusesRoute(t *testing.T) {
 
 func TestClaudeSetupConnectKeepsCustomizations(t *testing.T) {
 	s := testService(t)
-	claudeSetupAccount(t, s, "my-slot", "claude-code")
+	claudeSetupAccount(t, s, "my-slot", "claude-bin")
 	r := claudeSetupRoute("custom-claude", "my-slot")
 	r.Upstream += "/"
 	r.Billing, r.Usage, r.Redirects = "unspecified", "off", "refuse"
@@ -167,20 +167,20 @@ func TestClaudeSetupDeviceTargetsSelectedRoute(t *testing.T) {
 
 func TestClaudeSetupAvoidsRouteAndAccountCollisions(t *testing.T) {
 	s := testService(t)
-	claudeSetupAccount(t, s, "claude-code", "chatgpt")
-	other := Route{Name: "claude-code", Account: "claude-code", LocalPrefix: "/claude-code/", Upstream: "https://chatgpt.com/backend-api/codex", Enabled: true}
-	prefixCollision := Route{Name: "different-name", LocalPrefix: "/claude-code-2/", Upstream: "https://example.test", Enabled: true}
+	claudeSetupAccount(t, s, "claude-bin", "chatgpt")
+	other := Route{Name: "claude-bin", Account: "claude-bin", LocalPrefix: "/claude-bin/", Upstream: "https://chatgpt.com/backend-api/codex", Enabled: true}
+	prefixCollision := Route{Name: "different-name", LocalPrefix: "/claude-bin-2/", Upstream: "https://example.test", Enabled: true}
 	configure(t, s, Config{Routes: []Route{other, prefixCollision}}, nil)
-	before, err := s.store.account("claude-code")
+	before, err := s.store.account("claude-bin")
 	if err != nil {
 		t.Fatal(err)
 	}
 	cookie, csrf := loginAdmin(t, s)
 	out := claudeSetupPost(t, s, cookie, csrf)
-	if len(s.snap.routes) != 3 || out.URL != "http://localhost/claude-code-3/" || !reflect.DeepEqual(s.snap.config.Routes[:2], []Route{otherWithDefaultAuth(other), otherWithDefaultAuth(prefixCollision)}) {
+	if len(s.snap.routes) != 3 || out.URL != "http://localhost/claude-bin-3/" || !reflect.DeepEqual(s.snap.config.Routes[:2], fixtureProviders(Config{Routes: []Route{otherWithDefaultAuth(other), otherWithDefaultAuth(prefixCollision)}}).Routes) {
 		t.Fatalf("collisions overwritten: %+v reply=%+v", s.snap.config.Routes, out)
 	}
-	after, err := s.store.account("claude-code")
+	after, err := s.store.account("claude-bin")
 	if err != nil || !reflect.DeepEqual(before, after) {
 		t.Fatalf("non-Claude account adopted: %+v %v", after, err)
 	}
@@ -199,11 +199,11 @@ func otherWithDefaultAuth(r Route) Route {
 func TestClaudeSetupPreservesMoneySecretsAndBootstrapRefs(t *testing.T) {
 	s := testService(t)
 	claudeSetupAccount(t, s, "other-account", "chatgpt")
-	secret := material{Origin: "https://example.test:443", Value: "synthetic-secret"}
-	if _, err := s.store.db.Exec("INSERT INTO secrets VALUES(?,?,?)", "stored", secret.Origin, secret.Value); err != nil {
+	secret := material{Value: "synthetic-secret"}
+	if _, err := s.store.db.Exec("INSERT INTO secrets (name,value) VALUES(?,?)", "stored", secret.Value); err != nil {
 		t.Fatal(err)
 	}
-	refs := map[string]SecretRef{"stored": {Stored: "stored", Origin: secret.Origin}}
+	refs := map[string]SecretRef{"stored": {Stored: "stored"}}
 	bootstrap := map[string]AccountRef{"other-account": {Kind: "chatgpt", File: filepath.Join(t.TempDir(), "not-read")}}
 	configure(t, s, Config{Routes: []Route{}, Secrets: refs, Accounts: bootstrap}, map[string]material{"stored": secret})
 	money := MoneySettings{Timezone: "Australia/Sydney", Budget: &MoneyBudget{Currency: "AUD", LimitMicros: 12300000}, Rates: []MoneyRate{testMoneyRate()}}

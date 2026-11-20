@@ -170,16 +170,21 @@ func fetchChatGPTProviderUsage(ctx context.Context) (*Report, error) {
 }
 
 func fetchChatGPTProviderUsageWithRoot(ctx context.Context, apiRoot string) (*Report, error) {
-	base, err := providerhttp.EnvBaseURL("CHATGPT_USAGE_BASE_URL", "https://chatgpt.com/backend-api")
-	if err != nil {
-		return nil, err
-	}
+	var base string
 	if b, ok := proxyclient.Lookup(apiRoot); ok && b.Kind == "chatgpt" {
+		// The sibling belongs to the selected provider, not necessarily the
+		// route named chatgpt-backend or a neighboring URL path.
 		sibling, ok := proxyclient.Related(apiRoot, "chatgpt-backend")
 		if !ok {
 			return nil, fmt.Errorf("ChatGPT account usage needs an explicit chatgpt-backend proxy grant")
 		}
 		base = sibling.Root
+	} else {
+		var err error
+		base, err = providerhttp.EnvBaseURL("CHATGPT_USAGE_BASE_URL", "https://chatgpt.com/backend-api")
+		if err != nil {
+			return nil, err
+		}
 	}
 	creds, err := credentials.GetChatGPTCredentialsForEndpoint(base)
 	if err != nil {

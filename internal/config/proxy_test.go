@@ -23,7 +23,13 @@ func TestProxyMaterializationSkipsLocalSecretsAndUsesAllValidBindings(t *testing
 				continue
 			}
 			f, ok := proxyStringFieldValue(&cfg, b.Root)
-			if !ok || !strings.HasPrefix(f, cfg.Proxy.URL+"/") {
+			if !ok {
+				t.Errorf("unknown binding root %s", b.Root)
+			}
+			if _, ok := proxyStringFieldValue(&cfg, b.Key); b.Key != "" && !ok {
+				t.Errorf("unknown credential binding %s", b.Key)
+			}
+			if p.ID != "exa-mcp" && p.ID != "youcom" && p.ID != "keenable" && p.ID != "jina-reader" && !strings.HasPrefix(f, cfg.Proxy.URL+"/") {
 				t.Errorf("unbound %s=%q", b.Root, f)
 			}
 		}
@@ -58,7 +64,7 @@ func TestProxyExplicitRootsCannotSilentlyBypassCustody(t *testing.T) {
 	if err := cfg.materializeProxy(file); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Providers["openai"].APIKey != cfg.Proxy.Token || cfg.Providers["openai"].BaseURL != cfg.Proxy.URL+"/openai" || cfg.Providers["openai"].ProxyBinding == "" {
+	if cfg.Providers["openai"].APIKey != cfg.Proxy.Token || cfg.Providers["openai"].BaseURL != unavailableProxyEndpoint(cfg.Proxy.URL, "openai") || cfg.Providers["openai"].ProxyBinding == "" {
 		t.Fatal("explicit base URL silently bypassed proxy custody")
 	}
 	if cfg.Providers["gemini"].APIKey != "gemini-local" || cfg.Providers["gemini"].ProxyBinding != "" {
@@ -116,7 +122,7 @@ func TestProxyCustomAndAncillaryRootsRequireExplicitDirectException(t *testing.T
 	if err := cfg.materializeProxy(nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.Providers["household"]; got.BaseURL != cfg.Proxy.URL+"/household" || got.APIKey != cfg.Proxy.Token || got.ProxyBinding == "" {
+	if got := cfg.Providers["household"]; got.BaseURL != unavailableProxyEndpoint(cfg.Proxy.URL, "openai-compatible") || got.APIKey != cfg.Proxy.Token || got.ProxyBinding == "" {
 		t.Fatalf("custom root escaped custody: %+v", got)
 	}
 	if !strings.HasPrefix(cfg.Image.OpenAI.BaseURL, cfg.Proxy.URL+"/") {
@@ -165,7 +171,7 @@ func TestProxyOpenCodeGoUsesConsolidatedProviderNamespaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"opencode-go", "household", "work"} {
-		root := cfg.Proxy.URL + "/" + name
+		root := unavailableProxyEndpoint(cfg.Proxy.URL, "opencode-go")
 		pc := cfg.Providers[name]
 		if pc.BaseURL != root || pc.ProxyBinding != root || pc.APIKey != cfg.Proxy.Token || pc.ResolvedAPIKey != cfg.Proxy.Token {
 			t.Fatalf("%s did not use its consolidated root and scoped credential", name)
@@ -177,7 +183,7 @@ func TestProxyOpenCodeGoUsesConsolidatedProviderNamespaces(t *testing.T) {
 			}
 		}
 		for _, protocol := range []string{"messages", "gemini"} {
-			if binding, ok := proxyclient.Related(root, name+"/"+protocol); !ok || binding.Root != root+"/"+protocol {
+			if binding, ok := proxyclient.Related(root, "opencode-go-"+protocol); !ok || binding.Root != root+"/"+protocol {
 				t.Errorf("%s cannot resolve its own %s namespace", name, protocol)
 			}
 			if _, ok := proxyclient.Lookup(root + "-" + protocol); ok {
@@ -235,7 +241,7 @@ func TestProxyOpenCodeGoNamedDirectExceptionIsIsolated(t *testing.T) {
 		}
 	}
 	for _, suffix := range []string{"", "/messages", "/gemini"} {
-		root := cfg.Proxy.URL + "/opencode-go" + suffix
+		root := unavailableProxyEndpoint(cfg.Proxy.URL, "opencode-go") + suffix
 		if binding, ok := proxyclient.Lookup(root); !ok || binding.Root != root {
 			t.Errorf("named direct exception disabled the default provider root %s", suffix)
 		}

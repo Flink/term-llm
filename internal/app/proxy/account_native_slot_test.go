@@ -12,14 +12,14 @@ func TestClaudeNativeSlotCredentials(t *testing.T) {
 		credentials accountCredentials
 		valid       bool
 	}{
-		{"native slot", "claude-code", accountCredentials{Mode: claudeSharedMode}, true},
-		{"per-caller mode removed", "claude-code", accountCredentials{Mode: "vault"}, false},
-		{"missing mode", "claude-code", accountCredentials{}, false},
-		{"setup token removed", "claude-code", accountCredentials{Mode: "token_only", AccessToken: "synthetic"}, false},
-		{"shared rotating login removed", "claude-code", accountCredentials{Mode: "rotating", AccessToken: "synthetic", RefreshToken: "synthetic-refresh", ExpiresAt: 2000000000}, false},
-		{"slot cannot import token", "claude-code", accountCredentials{Mode: claudeSharedMode, AccessToken: "synthetic"}, false},
-		{"slot cannot import refresh", "claude-code", accountCredentials{Mode: claudeSharedMode, RefreshToken: "synthetic"}, false},
-		{"slot cannot import scopes", "claude-code", accountCredentials{Mode: claudeSharedMode, Scopes: []string{"user:inference"}}, false},
+		{"native slot", "claude-bin", accountCredentials{Mode: claudeSharedMode}, true},
+		{"per-caller mode removed", "claude-bin", accountCredentials{Mode: "vault"}, false},
+		{"missing mode", "claude-bin", accountCredentials{}, false},
+		{"setup token removed", "claude-bin", accountCredentials{Mode: "token_only", AccessToken: "synthetic"}, false},
+		{"shared rotating login removed", "claude-bin", accountCredentials{Mode: "rotating", AccessToken: "synthetic", RefreshToken: "synthetic-refresh", ExpiresAt: 2000000000}, false},
+		{"slot cannot import token", "claude-bin", accountCredentials{Mode: claudeSharedMode, AccessToken: "synthetic"}, false},
+		{"slot cannot import refresh", "claude-bin", accountCredentials{Mode: claudeSharedMode, RefreshToken: "synthetic"}, false},
+		{"slot cannot import scopes", "claude-bin", accountCredentials{Mode: claudeSharedMode, Scopes: []string{"user:inference"}}, false},
 		{"other providers cannot use slot", "chatgpt", accountCredentials{Mode: claudeSharedMode}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -34,7 +34,7 @@ func TestClaudeNativeSlotCredentials(t *testing.T) {
 func TestClaudeNativeSlotAdminRequiresNoProviderSecrets(t *testing.T) {
 	s := testService(t)
 	cookie, csrf := loginAdmin(t, s)
-	rr := adminRequest(s, "POST", "accounts", accountInput{Name: "native", Kind: "claude-code", Credentials: accountCredentials{Mode: claudeSharedMode}}, cookie, csrf)
+	rr := adminRequest(s, "POST", "accounts", accountInput{Name: "native", Kind: "claude-bin", Credentials: accountCredentials{Mode: claudeSharedMode}}, cookie, csrf)
 	if rr.Code != 201 {
 		t.Fatalf("create: %d %s", rr.Code, rr.Body.String())
 	}

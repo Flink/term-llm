@@ -12,7 +12,7 @@ import {
   ProxyClient,
   type ProxyAccount,
   type ProxyCaller,
-  type ProxyRoute,
+  type ProxyAdminRoute,
   type ProxyRouteRule,
   type ProxyState,
 } from '../src/api/proxy-client';
@@ -21,7 +21,10 @@ import { providerAccess } from './provider-access';
 import type { ProviderGroup } from './provider-groups';
 
 const auth = { header: 'Authorization', prefix: 'Bearer ' };
-const route = (name: string, upstream: string): ProxyRoute => ({
+const route = (name: string, upstream: string): ProxyAdminRoute => ({
+  serves: [],
+  profile: '',
+  provider: name,
   name,
   local_prefix: `/${name}/`,
   upstream,
@@ -33,27 +36,27 @@ const route = (name: string, upstream: string): ProxyRoute => ({
 });
 
 const openaiRoute = route('openai', 'https://api.openai.com/v1');
-const chatgptRoute: ProxyRoute = {
+const chatgptRoute: ProxyAdminRoute = {
   ...route('chatgpt', 'https://chatgpt.com/backend-api/codex'),
   account: 'subscription',
 };
-const chatgptBackendRoute: ProxyRoute = {
+const chatgptBackendRoute: ProxyAdminRoute = {
   ...route('chatgpt-backend', 'https://chatgpt.com/backend-api'),
   account: 'subscription',
 };
-const chatgptMediaRoute: ProxyRoute = {
+const chatgptMediaRoute: ProxyAdminRoute = {
   ...route('chatgpt-openai', 'https://api.openai.com/v1'),
   account: 'subscription',
 };
 const claudeAccount: ProxyAccount = {
   name: 'claude-slot',
-  kind: 'claude-code',
+  kind: 'claude-bin',
   state: 'ready',
   auth_mode: 'shared_vault',
   generation: 1,
   updated: 1,
 };
-const claudeRoute: ProxyRoute = {
+const claudeRoute: ProxyAdminRoute = {
   ...route('claude', 'https://api.anthropic.com'),
   account: claudeAccount.name,
 };
@@ -71,23 +74,32 @@ const rules: ProxyRouteRule[] = [
     set_headers: {},
   },
 ];
-const unifiedRoute: ProxyRoute = {
+const unifiedRoute: ProxyAdminRoute = {
   ...route('opencode', ''),
   caller_auth: { header: '', prefix: '' },
   rules,
 };
 
 const openaiGroup: ProviderGroup = {
+  family: 'inference',
+  status: 'green',
+  reason: '',
   id: 'openai',
   label: 'OpenAI API',
   routes: [openaiRoute],
 };
 const chatgptGroup: ProviderGroup = {
+  family: 'inference',
+  status: 'green',
+  reason: '',
   id: 'chatgpt',
   label: 'ChatGPT plan',
   routes: [chatgptRoute, chatgptBackendRoute, chatgptMediaRoute],
 };
 const claudeGroup: ProviderGroup = {
+  family: 'inference',
+  status: 'green',
+  reason: '',
   id: 'claude',
   label: 'Claude Code',
   routes: [claudeRoute],
@@ -108,6 +120,8 @@ function caller(overrides: Partial<ProxyCaller> = {}): ProxyCaller {
 
 function snapshot(group: ProviderGroup, overrides: Partial<ProxyState> = {}): ProxyState {
   return {
+    defaults: null,
+    providers: [],
     auth: 'token',
     mode: 'ui',
     revision: 7,
@@ -307,7 +321,7 @@ it('creates a provider-scoped client, shows the token once, and guards dismissal
   expect(protectToken.mock.calls).toEqual([[true, true], [true]]);
   // The secret is never repeated in guidance text, markup, or browser storage.
   expect(root.textContent).not.toContain('sk-tlp-once-only');
-  expect(root.querySelector('pre')).toHaveTextContent('$TOKEN');
+  expect(root.querySelector('pre:not(:has(code))')).toHaveTextContent('$TOKEN');
   expect(root).toHaveTextContent(`Base URL: ${location.origin}/openai/`);
   expect(root).toHaveTextContent('set TOKEN in your shell to this client token');
   expect(root).toHaveTextContent('Do not set a global HTTP_PROXY or HTTPS_PROXY');
@@ -345,10 +359,17 @@ it('creates one provider-scoped client whose details cover every route in the gr
 });
 
 async function issueProviderToken(
-  selected: ProxyRoute,
+  selected: ProxyAdminRoute,
   label = selected.name,
 ): Promise<HTMLElement> {
-  const group: ProviderGroup = { id: selected.name, label, routes: [selected] };
+  const group: ProviderGroup = {
+    family: 'inference',
+    status: 'green',
+    reason: '',
+    id: selected.name,
+    label,
+    routes: [selected],
+  };
   const { root, createProviderCaller } = fixture(group);
   createProviderCaller.mockResolvedValue({
     token: 'sk-tlp-route-scoped',
@@ -373,7 +394,7 @@ it.each([
     );
     expect(root).toHaveTextContent('Other providers stay direct.');
     expect(root).toHaveTextContent(`Base URL: ${location.origin}${selected.local_prefix}`);
-    expect(root.querySelector('pre')).toHaveTextContent('$TOKEN');
+    expect(root.querySelector('pre:not(:has(code))')).toHaveTextContent('$TOKEN');
     expect(root.textContent).not.toContain('sk-tlp-route-scoped');
     expect(root).toHaveTextContent(`Access is limited to the current routes for ${label}.`);
   },
@@ -383,18 +404,22 @@ it.each([
   { ...chatgptRoute, name: 'family', local_prefix: '/family/' },
   { ...chatgptRoute, local_prefix: '/custom/' },
   { ...chatgptRoute, upstream: 'https://custom.example/codex' },
-])(
-  'keeps generic guidance for noncanonical $name ($local_prefix → $upstream)',
-  async (selected) => {
-    const root = await issueProviderToken(selected);
-    expect(queryByRole(root, 'heading', { name: 'term-llm client configuration' })).toBeNull();
-    expect(root).toHaveTextContent(`Base URL: ${location.origin}${selected.local_prefix}`);
-    expect(root.querySelector('pre')).toHaveTextContent('$TOKEN');
-  },
-);
+])('uses stored IDs even for noncanonical $name ($local_prefix → $upstream)', async (selected) => {
+  const root = await issueProviderToken(selected);
+  expect(root.querySelector('pre code')).toHaveTextContent(`providers: [${selected.name}]`);
+  expect(root).toHaveTextContent(`Base URL: ${location.origin}${selected.local_prefix}`);
+  expect(root.querySelector('pre:not(:has(code))')).toHaveTextContent('$TOKEN');
+});
 
 it('shows every subpath header and one shared token for a unified route', async () => {
-  const group: ProviderGroup = { id: 'opencode', label: 'opencode', routes: [unifiedRoute] };
+  const group: ProviderGroup = {
+    family: 'inference',
+    status: 'green',
+    reason: '',
+    id: 'opencode',
+    label: 'opencode',
+    routes: [unifiedRoute],
+  };
   const { root, createProviderCaller } = fixture(group);
   createProviderCaller.mockResolvedValue({
     token: 'sk-tlp-unified',
@@ -406,8 +431,10 @@ it('shows every subpath header and one shared token for a unified route', async 
   expect(createProviderCaller).toHaveBeenCalledExactlyOnceWith('Phone', ['opencode'], 7);
   expect(root).toHaveTextContent('/opencode/messages/ · client x-api-key');
   expect(root).toHaveTextContent('one client token and one grant cover every subpath');
-  expect(root.querySelector('pre')).toHaveTextContent(`${location.origin}/opencode/`);
-  expect(root.querySelector('pre')).toHaveTextContent('$TOKEN');
+  expect(root.querySelector('pre:not(:has(code))')).toHaveTextContent(
+    `${location.origin}/opencode/`,
+  );
+  expect(root.querySelector('pre:not(:has(code))')).toHaveTextContent('$TOKEN');
 });
 
 it('points native Claude providers at the device launcher instead of a generic client form', () => {
@@ -422,7 +449,7 @@ it('points native Claude providers at the device launcher instead of a generic c
   expect(queryByLabelText(root, 'Client name')).toBeNull();
   expect(queryByRole(root, 'button', { name: 'Create client' })).toBeNull();
   expect(queryByLabelText(root, 'Client')).toBeNull();
-  expect(root.querySelector('pre')).toBeNull();
+  expect(root.querySelector('pre:not(:has(code))')).toBeNull();
   expect(root).not.toHaveTextContent(`Base URL: ${location.origin}`);
   // Existing devices stay visible and revocable without touching other approvals.
   expect(getByRole(root, 'button', { name: /Remove Mac’s access to Claude Code/ })).toBeVisible();
@@ -434,7 +461,7 @@ it('explains file-managed providers without offering generic connection details'
   expect(root).toHaveTextContent(
     'Routes are file-managed. Approvals are editable, but a configuration reload may drop incompatible grants.',
   );
-  expect(root.querySelector('pre')).toBeNull();
+  expect(root.querySelector('pre:not(:has(code))')).toBeNull();
 });
 
 it('warns that removing shared Claude access leaves the subscription and other clients intact', async () => {

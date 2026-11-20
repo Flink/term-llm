@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/term-llm/term-llm/internal/providerhttp"
+	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 // PerplexitySearcher implements Searcher using the Perplexity Search API.
@@ -74,7 +75,7 @@ func (p *PerplexitySearcher) Search(ctx context.Context, query string, maxResult
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 
-	resp, err := p.client.Do(req)
+	resp, err := proxyclient.Do(p.client, req)
 	if err != nil {
 		return nil, err
 	}

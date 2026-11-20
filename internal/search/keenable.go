@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/term-llm/term-llm/internal/providerhttp"
+	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 const (
@@ -92,7 +93,7 @@ func (k *KeenableSearcher) Search(ctx context.Context, query string, maxResults 
 		req.Header.Set("X-Keenable-Title", keenableAppTitle)
 	}
 
-	resp, err := k.client.Do(req)
+	resp, err := proxyclient.Do(k.client, req)
 	if err != nil {
 		return nil, err
 	}

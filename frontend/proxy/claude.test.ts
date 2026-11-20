@@ -1,3 +1,4 @@
+import { withSingletonProviders } from './test-fixtures';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import {
   fireEvent,
@@ -12,13 +13,12 @@ import {
   ProxyAPIError,
   ProxyClient,
   type ProxyAccount,
-  type ProxyRoute,
+  type ProxyAdminRoute,
   type ProxyPreset,
   type ProxyState,
 } from '../src/api/proxy-client';
 import type { PasskeyPlatform } from '../src/hub/platform/passkeys';
 import { mountProxy } from './app';
-import { routeSummary } from './route-summary';
 import { providerOnboarding, providerRouteAction, clearNativeSetup } from './provider-onboarding';
 import type { UIContext } from './dom';
 import {
@@ -31,13 +31,16 @@ import {
 
 const account: ProxyAccount = {
   name: 'native-slot',
-  kind: 'claude-code',
+  kind: 'claude-bin',
   auth_mode: 'shared_vault',
   state: 'needs_login',
   generation: 1,
   updated: 1,
 };
-const route: ProxyRoute = {
+const route: ProxyAdminRoute = {
+  serves: [],
+  profile: '',
+  provider: 'my-manual-connection',
   name: 'my-manual-connection',
   account: account.name,
   local_prefix: '/native/',
@@ -48,8 +51,11 @@ const route: ProxyRoute = {
   set_headers: {},
   billing: 'plan',
 };
-const other: ProxyRoute = {
+const other: ProxyAdminRoute = {
   ...route,
+  provider: 'openai',
+  profile: 'openai',
+  serves: [],
   name: 'openai',
   account: undefined,
   local_prefix: '/openai/',
@@ -57,33 +63,46 @@ const other: ProxyRoute = {
   billing: 'pay_as_you_go',
 };
 const agyAccount: ProxyAccount = { ...account, name: 'personal-slot', kind: 'agy-bin' };
-const agyRoute: ProxyRoute = {
+const agyRoute: ProxyAdminRoute = {
   ...route,
+  provider: 'personal-route',
+  profile: '',
+  serves: [],
   name: 'personal-route',
   local_prefix: '/agy-bin/',
   upstream: 'https://daily-cloudcode-pa.googleapis.com',
   account: agyAccount.name,
 };
 const agyPreset: ProxyPreset = {
+  family: 'inference',
   id: 'agy-bin',
   label: 'Antigravity personal subscription',
   account_kind: 'agy-bin',
-  group: 'plan',
+
   upstream: agyRoute.upstream,
   auth: agyRoute.caller_auth,
 };
-const presets = [
+const presets: ProxyPreset[] = [
   {
-    id: 'claude-code',
+    family: 'inference',
+    id: 'claude-bin',
     label: 'Claude Code plan',
-    account_kind: 'claude-code' as const,
+    account_kind: 'claude-bin' as const,
     upstream: route.upstream,
     auth: route.caller_auth,
   },
-  { id: 'openai', label: 'OpenAI API', upstream: other.upstream, auth: other.caller_auth },
+  {
+    family: 'inference',
+    id: 'openai',
+    label: 'OpenAI API',
+    upstream: other.upstream,
+    auth: other.caller_auth,
+  },
 ];
 function snapshot(overrides: Partial<ProxyState> = {}): ProxyState {
   return {
+    defaults: null,
+    providers: [],
     auth: 'token',
     mode: 'ui',
     revision: 7,
@@ -122,7 +141,7 @@ function setup(initial = snapshot()) {
   let serial = 0;
   const api = new ProxyClient(vi.fn());
   vi.spyOn(api, 'authStatus').mockResolvedValue({ auth: initial.auth, csrf: 'csrf' } as never);
-  vi.spyOn(api, 'state').mockImplementation(async () => current);
+  vi.spyOn(api, 'state').mockImplementation(async () => withSingletonProviders(current));
   vi.spyOn(api, 'beginAssertion').mockResolvedValue({
     publicKey: { challenge: 'fixture' },
   } as never);
@@ -139,7 +158,7 @@ function setup(initial = snapshot()) {
   vi.spyOn(api, 'clearNative').mockImplementation(async () => {
     current = {
       ...current,
-      accounts: (current.accounts ?? []).filter((a) => a.kind !== 'claude-code'),
+      accounts: (current.accounts ?? []).filter((a) => a.kind !== 'claude-bin'),
       routes: current.routes.filter((r) => routeNativeProvider(r, current) !== claudeProvider),
       revision: current.revision + 1,
     };
@@ -231,7 +250,7 @@ it.each([
   const view = providerRouteAction(route, state, api, context)!;
   expect(view).toHaveTextContent('must be migrated to a shared subscription');
   expect(view.querySelector('summary, button')).toBeNull();
-  expect(routeSummary(route, state).status).toBe('Shared subscription migration needed');
+
   expect(api.setupNative).not.toHaveBeenCalled();
 });
 
@@ -240,6 +259,16 @@ function sharedSnapshot(state: string, enabled = true): ProxyState {
     ...configured,
     accounts: [{ ...account, auth_mode: 'shared_vault', state }],
     routes: [{ ...route, enabled }],
+    providers: [
+      {
+        id: route.provider,
+        label: 'Claude Code',
+        family: 'inference',
+        routes: [route.name],
+        status: state === 'ready' ? 'green' : 'red',
+        reason: state === 'ready' ? '' : 'Sign-in needed',
+      },
+    ],
   });
 }
 
@@ -267,7 +296,7 @@ it('offers only shared Claude setup and presents an operator-only launcher', asy
 
   vi.mocked(api.state).mockResolvedValueOnce(sharedSnapshot('needs_login'));
   await click(root, 'I saved it — dismiss');
-  await waitFor(() => expect(root).toHaveTextContent('Shared Claude sign-in needed'));
+  await waitFor(() => expect(root).toHaveTextContent('Sign-in needed'));
   const summary = getByText(root, 'Manage', { selector: 'summary' });
   fireEvent.click(summary);
   expect(getByRole(root, 'button', { name: 'Get operator sign-in launcher' })).toBeVisible();
@@ -276,22 +305,22 @@ it('offers only shared Claude setup and presents an operator-only launcher', asy
 
   vi.mocked(api.state).mockResolvedValueOnce(sharedSnapshot('ready'));
   await click(root, 'Refresh state');
-  await waitFor(() => expect(root).toHaveTextContent('Shared Claude subscription ready'));
+  await waitFor(() => expect(getByRole(root, 'img', { name: 'Status: green' })).toBeVisible());
   expect(getByRole(root, 'button', { name: 'Add device' })).toBeInTheDocument();
 });
 
 it.each([
-  ['needs_login', 'Shared Claude sign-in needed', 'Get operator sign-in launcher'],
-  ['refreshing', 'Shared Claude sign-in refreshing', 'Reconnect'],
-  ['ready', 'Shared Claude subscription ready', 'Reconnect'],
+  ['needs_login', 'Get operator sign-in launcher'],
+  ['refreshing', 'Reconnect'],
+  ['ready', 'Reconnect'],
 ])(
   'uses shared account state %s to show operator and worker actions directly',
-  (state, status, operatorLabel) => {
+  (state, operatorLabel) => {
     const snapshot = sharedSnapshot(state);
     const { api, context } = providerFixture(snapshot);
     const action = providerRouteAction(route, snapshot, api, context)!;
     document.body.append(action);
-    expect(routeSummary(route, snapshot).status).toBe(status);
+
     expect(action.querySelector('details')).toBeNull();
     expect(getByRole(action, 'button', { name: operatorLabel })).toBeInTheDocument();
     expect(queryByRole(action, 'button', { name: 'Add device' }) !== null).toBe(state === 'ready');
@@ -429,9 +458,23 @@ it('safely quotes native command arguments and literal YAML, without API-key exa
   expect(routeNativeProvider({ ...other, name: 'claude' }, snapshot(configured))).toBeUndefined();
 });
 
-const clientProviders = [
-  { id: 'claude-plan', label: 'Claude Code', routes: [route.name] },
-  { id: 'openai-api', label: 'OpenAI API', routes: [other.name] },
+const clientProviders: ProxyState['providers'] = [
+  {
+    family: 'inference',
+    status: 'green',
+    reason: '',
+    id: 'claude-plan',
+    label: 'Claude Code',
+    routes: [route.name],
+  },
+  {
+    family: 'inference',
+    status: 'green',
+    reason: '',
+    id: 'openai-api',
+    label: 'OpenAI API',
+    routes: [other.name],
+  },
 ];
 
 it('uses a native Claude launcher and curl examples for mixed provider approvals', async () => {
@@ -494,7 +537,17 @@ it.each(
           },
         ],
         routes: [{ ...route, enabled: state !== 'disabled' }, other],
-        providers: [{ id: 'native', label, routes: [route.name] }, clientProviders[1]],
+        providers: [
+          {
+            family: 'inference',
+            status: 'green',
+            reason: '',
+            id: 'native',
+            label,
+            routes: [route.name],
+          },
+          clientProviders[1],
+        ],
         callers: [caller],
       }),
     );
@@ -540,7 +593,7 @@ it('describes removing a shared grant without signing the subscription out', asy
   const manage = await waitFor(() => getByText(root, 'Manage', { selector: 'summary' }));
   fireEvent.click(manage);
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-  await click(root, `Remove ${caller.name}’s access to ${route.name}`);
+  await click(root, `Remove ${caller.name}’s access to Claude Code`);
   expect(confirm).toHaveBeenCalledWith(
     expect.stringContaining('The shared Claude sign-in and other clients’ access are unchanged.'),
   );
@@ -569,7 +622,7 @@ it('signs in and adds workers to the same shared Antigravity route without sendi
   const { api, context, refresh } = providerFixture(state);
   const pending = providerRouteAction(agyRoute, state, api, context)!;
   document.body.append(pending);
-  expect(routeSummary(agyRoute, state).status).toBe('Shared Antigravity sign-in needed');
+
   expect(pending.querySelector('details')).toBeNull();
   expect(queryByRole(pending, 'button', { name: 'Add device' })).toBeNull();
   await click(pending, 'Get operator sign-in launcher');
@@ -583,7 +636,7 @@ it('signs in and adds workers to the same shared Antigravity route without sendi
   pending.remove();
 
   const ready = { ...state, accounts: [account, { ...shared, state: 'ready' }], revision: 8 };
-  expect(routeSummary(agyRoute, ready).status).toBe('Shared Antigravity subscription ready');
+
   const view = providerRouteAction(agyRoute, ready, api, context)!;
   document.body.append(view);
   await click(view, 'Add device');

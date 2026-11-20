@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/term-llm/term-llm/internal/llm/core"
+	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 const (
@@ -134,7 +135,7 @@ func (t *ReadURLTool) Execute(ctx context.Context, args json.RawMessage) (core.T
 		return core.ToolOutput{}, fmt.Errorf("create request: %w", err)
 	}
 
-	resp, err := t.client.Do(req)
+	resp, err := proxyclient.Do(t.client, req)
 	if err != nil {
 		return core.TextOutput(fmt.Sprintf("Error fetching URL: %v", err)), nil
 	}

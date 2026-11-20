@@ -136,22 +136,6 @@ export function confirmAction(
   node.className = 'danger';
   return node;
 }
-export function requireOrigin(value: string): string {
-  const url = new URL(value);
-  if (
-    !['https:', 'http:'].includes(url.protocol) ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
-    url.pathname !== '/'
-  )
-    throw new Error(
-      'Use an origin only, such as https://api.example.com, without a path or credentials.',
-    );
-  return url.origin;
-}
-
 export function dateTime(value: string | number | undefined, empty = 'Never'): string {
   if (!value) return empty;
   const date = new Date(value);
@@ -167,11 +151,4 @@ export function keyedCard(key: string, title: string, ...children: Child[]): HTM
 }
 export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
-}
-export function sameOrigin(a: string, b: string): boolean {
-  try {
-    return new URL(a).origin === new URL(b).origin;
-  } catch {
-    return false;
-  }
 }

@@ -1,42 +1,15 @@
 import type { ProxyPreset, ProxyRoute, ProxyState } from '../src/api/proxy-client';
 import { button, card, el } from './dom';
-import { nativeProvider } from './native';
-import { routeRules } from './route-rules';
+import { providerFamilies } from './provider-groups';
 
-const featured = ['claude-code', 'chatgpt'];
+const featured = ['claude-bin', 'chatgpt'];
 
 export function presetLabel(preset: ProxyPreset): string {
-  return preset.id === 'claude-code' ? 'Claude Code' : preset.label;
+  return preset.id === 'claude-bin' ? 'Claude Code' : preset.label;
 }
 
-function sameEndpoint(a: string, b: string): boolean {
-  return !!a && !!b && a.replace(/\/$/, '') === b.replace(/\/$/, '');
-}
-
-// The catalog supplies presentation, not route authority. Match by saved
-// destination and account kind instead of assuming names identify providers.
 export function matchRoutePreset(route: ProxyRoute, state: ProxyState): ProxyPreset | undefined {
-  const presets = state.presets ?? [];
-  const rules = routeRules(route);
-  const kind = state.accounts?.find((account) => account.name === route.account)?.kind;
-  if (nativeProvider(kind)) return presets.find((preset) => preset.account_kind === kind);
-  const matches = presets.filter((preset) => {
-    if (kind ? preset.account_kind !== kind : !!preset.account_kind !== !!route.account)
-      return false;
-    if (!rules.length)
-      return !preset.rules?.length && sameEndpoint(route.upstream, preset.upstream);
-    return (
-      preset.rules?.length === rules.length &&
-      rules.every((rule) =>
-        preset.rules?.some(
-          (candidate) =>
-            candidate.path_prefix === rule.path_prefix &&
-            sameEndpoint(candidate.upstream, rule.upstream),
-        ),
-      )
-    );
-  });
-  return matches.find((preset) => preset.id === route.name) ?? matches[0];
+  return state.presets?.find((preset) => preset.id === route.profile);
 }
 
 // Group headings already say "plan" or "API", so the picker drops the suffix.
@@ -44,15 +17,15 @@ export function pickerLabel(preset: ProxyPreset): string {
   return presetLabel(preset).replace(/ (plan|API)$/, '');
 }
 
-const groups: [NonNullable<ProxyPreset['group']>, string][] = [
-  ['plan', 'Subscriptions'],
-  ['self_hosted', 'Self-hosted'],
-  ['api_key', 'API keys'],
-  ['media', 'Speech, images & embeddings'],
-];
+function inferenceGroup(preset: ProxyPreset): string {
+  if (preset.billing === 'plan') return 'Subscriptions';
+  if (preset.billing === 'local' || ['vllm', 'openai-compatible'].includes(preset.id))
+    return 'Self-hosted';
+  return 'API keys';
+}
 
 const hints: Record<string, string> = {
-  'claude-code': 'Sign in once, then add devices',
+  'claude-bin': 'Sign in once, then add devices',
   'agy-bin': 'Sign in once on Linux, then add devices',
   chatgpt: 'Includes dictation, embeddings and live',
   grok: 'Includes Grok CLI',
@@ -68,7 +41,7 @@ const hints: Record<string, string> = {
 
 function presetHint(preset: ProxyPreset): string {
   if (hints[preset.id]) return hints[preset.id];
-  if (preset.group !== 'self_hosted') return '';
+  if (preset.family !== 'inference' || inferenceGroup(preset) !== 'Self-hosted') return '';
   return preset.upstream ? new URL(preset.upstream).host : 'Your server URL';
 }
 
@@ -104,40 +77,52 @@ export function routePresetPicker(
   search.className = 'route-picker-search';
   search.placeholder = 'Search providers';
   search.setAttribute('aria-label', 'Search providers');
-  const sections = groups.map(([group, title]) => {
-    const choices = offered
-      .filter((preset) => (preset.group ?? 'api_key') === group)
-      .map((preset) => {
-        const label = pickerLabel(preset);
-        const mark = el('span', marks[preset.id] ?? initials(label));
-        mark.className = 'route-preset-mark';
-        mark.setAttribute('aria-hidden', 'true');
-        const name = el('span', label);
-        name.className = 'route-preset-name';
-        const control = button('', () => choose(preset));
-        control.className = 'route-preset-choice';
-        control.setAttribute('aria-label', label);
-        control.append(mark, name);
-        const hint = presetHint(preset);
-        if (hint) control.append(el('small', hint));
-        rows.push({
-          node: control,
-          text: `${label} ${preset.label} ${preset.id} ${hint}`.toLowerCase(),
-        });
-        return control;
+  const subgroups: HTMLElement[] = [];
+  function choicesFor(candidates: ProxyPreset[], title?: string) {
+    const choices = candidates.map((preset) => {
+      const label = pickerLabel(preset);
+      const mark = el('span', marks[preset.id] ?? initials(label));
+      mark.className = 'route-preset-mark';
+      mark.setAttribute('aria-hidden', 'true');
+      const name = el('span', label);
+      name.className = 'route-preset-name';
+      const control = button('', () => choose(preset));
+      control.className = 'route-preset-choice';
+      control.setAttribute('aria-label', label);
+      control.append(mark, name);
+      const hint = presetHint(preset);
+      if (hint) control.append(el('small', hint));
+      rows.push({
+        node: control,
+        text: `${label} ${preset.label} ${preset.id} ${hint}`.toLowerCase(),
       });
+      return control;
+    });
     if (!choices.length) return undefined;
-    const heading = el('h3', title);
-    const section = el('div', heading, ...choices);
+    const section = el('div', ...(title ? [el('h4', title)] : []), ...choices);
     section.className = 'route-preset-group';
+    subgroups.push(section);
     return section;
+  }
+  const sections = providerFamilies.flatMap(([family, title]) => {
+    const candidates = offered.filter((preset) => preset.family === family);
+    if (!candidates.length) return [];
+    const groups =
+      family === 'inference'
+        ? ['Subscriptions', 'API keys', 'Self-hosted'].map((group) =>
+            choicesFor(
+              candidates.filter((preset) => inferenceGroup(preset) === group),
+              group,
+            ),
+          )
+        : [choicesFor(candidates)];
+    const heading = el('h3', title);
+    const section = el('section', heading, ...groups.filter((group) => !!group));
+    section.className = 'route-preset-family';
+    section.setAttribute('aria-label', title);
+    return [section];
   });
-  const [plans, selfHosted, apiKeys, media] = sections;
-  const columns = [
-    el('div', ...[plans, selfHosted].filter((node) => !!node)),
-    el('div', ...[apiKeys, media].filter((node) => !!node)),
-  ];
-  const grid = el('div', ...columns.filter((column) => column.childElementCount));
+  const grid = el('div', ...sections);
   grid.className = 'route-preset-groups';
   const empty = el('p', 'No matching providers. Use a custom endpoint instead.');
   empty.className = 'route-preset-empty';
@@ -145,8 +130,8 @@ export function routePresetPicker(
   search.addEventListener('input', () => {
     const query = search.value.trim().toLowerCase();
     for (const row of rows) row.node.hidden = !!query && !row.text.includes(query);
-    for (const section of sections)
-      if (section) section.hidden = !section.querySelector('.route-preset-choice:not([hidden])');
+    for (const section of [...sections, ...subgroups])
+      section.hidden = !section.querySelector('.route-preset-choice:not([hidden])');
     empty.hidden = rows.some((row) => !row.node.hidden);
   });
   search.addEventListener('keydown', (event) => {

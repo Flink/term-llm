@@ -172,7 +172,7 @@ it.each(['ready', 'needs_login', 'refreshing'])(
   (state) => {
     const { deps } = setup('token');
     deps.state.accounts = [
-      { ...account, name: 'claude', kind: 'claude-code', auth_mode: 'shared_vault', state },
+      { ...account, name: 'claude', kind: 'claude-bin', auth_mode: 'shared_vault', state },
     ];
     expect(unusedAccountsView(deps)).toBeUndefined();
   },

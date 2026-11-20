@@ -49,7 +49,7 @@ providers:
 		t.Fatal("runtime config retained local credentials or missed the launcher marker")
 	}
 	binding, ok := proxyclient.Lookup(root + "/v1/messages")
-	if !ok || binding.Root != root || binding.Kind != "claude-code" || binding.Token != token {
+	if !ok || binding.Root != root || binding.Kind != "claude-bin" || binding.Token != token {
 		t.Fatal("missing scoped native Claude binding")
 	}
 	if err := pc.ResolveForInference(); err != nil {
@@ -205,7 +205,7 @@ func TestProviderProxyUsesSeparateEnrolledClaudeBinding(t *testing.T) {
 providers:
   claude-bin:
     proxy:
-      url: `+root+`/claude-code/
+      url: `+root+`/claude-bin/
       token: `+enrolled+`
 `)
 	cfg, err := LoadWithoutCredentials()
@@ -213,9 +213,9 @@ providers:
 		t.Fatal(err)
 	}
 	for _, tc := range []struct{ provider, path, token, kind string }{
-		{"claude-bin", "/claude-code", enrolled, "claude-code"},
-		{"chatgpt", "/chatgpt", shared, "chatgpt"},
-		{"venice", "/venice", shared, ""},
+		{"claude-bin", "/claude-bin", enrolled, "claude-bin"},
+		{"chatgpt", "/_proxy/client/unavailable/chatgpt", shared, "chatgpt"},
+		{"venice", "/_proxy/client/unavailable/venice", shared, ""},
 	} {
 		endpoint := root + tc.path
 		pc := cfg.GetProviderConfig(tc.provider)
@@ -224,7 +224,7 @@ providers:
 			t.Errorf("wrong scoped binding for %s", tc.provider)
 		}
 	}
-	if cfg.GetProviderConfig("claude-bin").Env["TERM_LLM_CLAUDE_PROXY_ROOT"] != root+"/claude-code" {
+	if cfg.GetProviderConfig("claude-bin").Env["TERM_LLM_CLAUDE_PROXY_ROOT"] != root+"/claude-bin" {
 		t.Fatal("Claude child did not get its proxy root")
 	}
 }
@@ -232,9 +232,9 @@ providers:
 func TestProviderProxyMixedConfigFailsClosed(t *testing.T) {
 	stubEmptyProxyDiscovery(t)
 	for _, tc := range []struct{ name, localPath, selection, want string }{
-		{"double-selection", "/claude-code", "claude-bin", `remove "claude-bin" from proxy.providers`},
-		{"bad-selection", "/claude-code", "no-such-provider", "not a known provider"},
-		{"same-root", "/venice", "venice", "conflicting credential kinds or principals"},
+		{"double-selection", "/claude-bin", "claude-bin", `remove "claude-bin" from proxy.providers`},
+		{"bad-selection", "/claude-bin", "no-such-provider", "not a known provider"},
+		{"same-root", "/_proxy/client/unavailable/venice", "venice", "conflicting credential kinds or principals"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := "https://" + tc.name + ".mixed-proxy.example.test"
@@ -247,7 +247,7 @@ func TestProviderProxyMixedConfigFailsClosed(t *testing.T) {
 			if err := cfg.materializeProxy(nil); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("expected %q error, got %v", tc.want, err)
 			}
-			for _, path := range []string{tc.localPath, "/venice", "/claude-code"} {
+			for _, path := range []string{tc.localPath, "/venice", "/claude-bin"} {
 				if _, ok := proxyclient.Lookup(root + path); ok {
 					t.Fatalf("failed config registered %s", path)
 				}

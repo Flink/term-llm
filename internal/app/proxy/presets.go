@@ -1,6 +1,10 @@
 package proxy
 
-import "github.com/term-llm/term-llm/internal/proxyprofile"
+import (
+	"slices"
+
+	"github.com/term-llm/term-llm/internal/proxyprofile"
+)
 
 // routePreset only supplies editable creation-time defaults. Forwarding and
 // validation remain provider-independent; no credentials or client state live here.
@@ -19,8 +23,8 @@ type routePreset struct {
 	Usage       string            `json:"usage,omitempty"`
 	WebSocket   bool              `json:"websocket,omitempty"`
 	AccountKind string            `json:"account_kind,omitempty"`
-	// Group is the picker section: plan, api_key, self_hosted or media.
-	Group string `json:"group"`
+	Family      string            `json:"family"`
+	Allow       []string          `json:"allow,omitempty"`
 	// Companions are presets created beside this one so ancillary client
 	// features (dictation, embeddings, live, CLI) reach their fixed route names.
 	// A companion is never offered on its own in the picker.
@@ -28,22 +32,15 @@ type routePreset struct {
 }
 
 type routePresetRule struct {
-	PathPrefix string `json:"path_prefix"`
-	Upstream   string `json:"upstream"`
-	Auth       Auth   `json:"auth"`
+	PathPrefix string   `json:"path_prefix"`
+	Upstream   string   `json:"upstream"`
+	Auth       Auth     `json:"auth"`
+	Allow      []string `json:"allow,omitempty"`
 }
 
 // routePresets projects the native profiles, combining OpenCode Go's protocols
 // only for new creation. Existing single-upstream routes remain unchanged.
 var routePresets = presetsFromProfiles(proxyprofile.All())
-
-// presetCompanions names the sibling routes a term-llm client expects beside
-// each provider. Clients bind them by route name, so they stay separate routes.
-var presetCompanions = map[string][]string{
-	"chatgpt": {"chatgpt-backend", "chatgpt-openai"},
-	"gemini":  {"gemini-live"},
-	"grok":    {"grok-bin"},
-}
 
 // presetNotes holds operator guidance that the routing table does not carry.
 var presetNotes = map[string]string{
@@ -57,7 +54,7 @@ var presetNotes = map[string]string{
 	"chatgpt-openai":    "Only embeddings and realtime endpoints are forwarded. How OpenAI bills these for a ChatGPT login is not established, so billing stays unspecified.",
 	"grok":              "Only the responses, chat completions, models and billing endpoints are forwarded.",
 	"copilot":           "Only the responses, chat completions and models endpoints are forwarded.",
-	"claude-code":       "Use Set up Claude, then sign in normally with term-llm proxy run claude.",
+	"claude-bin":        "Use Set up Claude, then sign in normally with term-llm proxy run claude.",
 	"agy-bin":           "Personal subscriptions only. Use Antigravity setup, then sign in with term-llm proxy run agy -- acp --login on Linux. The device receives a scoped proxy token, not Google credentials.",
 	"bedrock":           "Enter https://bedrock-runtime.<region>.amazonaws.com for the region stored with the account. The proxy signs each request; only model invoke and converse calls are forwarded.",
 	"opencode-go":       "One key, one grant, three protocols: Chat Completions and Responses at /, Messages at /messages/, and Gemini at /gemini/. The client still sends its own x-opencode-client and x-opencode-session headers.",
@@ -69,6 +66,7 @@ var presetNotes = map[string]string{
 
 func presetsFromProfiles(profiles []proxyprofile.Profile) []routePreset {
 	out := make([]routePreset, 0, len(profiles))
+	index := make(map[string]int, len(profiles))
 	for _, p := range profiles {
 		// A gated profile has no verified credentialless path; offering it would
 		// claim an integration the proxy cannot deliver. An account kind without
@@ -76,7 +74,7 @@ func presetsFromProfiles(profiles []proxyprofile.Profile) []routePreset {
 		if p.Gate != "" || p.Account != "" && !accountKind(p.Account) || p.ID == "opencode-go-messages" || p.ID == "opencode-go-gemini" {
 			continue
 		}
-		preset := routePreset{ID: p.ID, Label: p.Label, Upstream: p.Upstream, Auth: Auth{Header: p.Header, Prefix: p.Prefix}, Note: presetNotes[p.ID], Billing: p.Billing, WebSocket: p.WebSocket, AccountKind: p.Account}
+		preset := routePreset{ID: p.ID, Label: p.Label, Upstream: p.Upstream, Auth: Auth{Header: p.Header, Prefix: p.Prefix}, Note: presetNotes[p.ID], Billing: p.Billing, WebSocket: p.WebSocket, AccountKind: p.Account, Family: p.Family, Allow: slices.Clone(p.Allow)}
 		if p.ID == "opencode-go" {
 			preset.Label, preset.Upstream, preset.Auth = "OpenCode Go", "", Auth{}
 			preset.Rules = []routePresetRule{
@@ -84,6 +82,12 @@ func presetsFromProfiles(profiles []proxyprofile.Profile) []routePreset {
 				{PathPrefix: "/messages/", Upstream: "https://opencode.ai/zen/go", Auth: Auth{Header: "x-api-key"}},
 				{PathPrefix: "/gemini/", Upstream: "https://opencode.ai/inference/go/v1", Auth: Auth{Header: "x-goog-api-key"}},
 			}
+		}
+		if len(preset.Rules) != 0 {
+			for i := range preset.Rules {
+				preset.Rules[i].Allow = slices.Clone(preset.Allow)
+			}
+			preset.Allow = nil
 		}
 		if p.Billing == "local" {
 			preset.Auth = Auth{} // Default bearer client authentication, no upstream key.
@@ -100,40 +104,49 @@ func presetsFromProfiles(profiles []proxyprofile.Profile) []routePreset {
 		if p.PathSuffix != "" {
 			preset.Note = joinNote(preset.Note, "Full-endpoint clients append "+p.PathSuffix+" to the route URL.")
 		}
-		preset.Group = presetGroup(p)
+		index[p.ID] = len(out)
 		out = append(out, preset)
 	}
-	offered := make(map[string]bool, len(out))
-	for _, preset := range out {
-		offered[preset.ID] = true
-	}
-	for i := range out {
-		for _, id := range presetCompanions[out[i].ID] {
-			if !offered[id] {
-				continue
-			}
-			out[i].Companions = append(out[i].Companions, id)
-			for j := range out {
-				if out[j].ID == id {
-					out[j].Group = out[i].Group
-				}
-			}
+	for _, p := range profiles {
+		parent, parentOffered := index[p.Parent]
+		_, childOffered := index[p.ID]
+		if parentOffered && childOffered {
+			out[parent].Companions = append(out[parent].Companions, p.ID)
 		}
 	}
 	return out
 }
 
-func presetGroup(p proxyprofile.Profile) string {
-	switch {
-	case p.Billing == "plan":
-		return "plan"
-	case p.Billing == "local" || p.Provider != "" && p.Upstream == "" && p.Account == "":
-		return "self_hosted"
-	case p.Provider == "":
-		return "media"
-	default:
-		return "api_key"
+func routePresetByID(id string) (routePreset, bool) {
+	for _, preset := range routePresets {
+		if preset.ID == id {
+			return preset, true
+		}
 	}
+	return routePreset{}, false
+}
+
+func providerPresetCompanions(p routePreset) []string {
+	return append([]string{p.ID}, p.Companions...)
+}
+
+func (p routePreset) newRoute(provider, name, secret string) Route {
+	r := Route{Name: name, Provider: provider, Profile: p.ID, Enabled: true,
+		LocalPrefix: "/" + name + "/", Upstream: p.Upstream, CallerAuth: p.Auth,
+		WebSocket: p.WebSocket, Allow: slices.Clone(p.Allow), Billing: p.Billing, Usage: p.Usage}
+	r.SetHeaders = presetHeaders(p.Auth, secret)
+	for _, child := range p.Rules {
+		r.Rules = append(r.Rules, RouteRule{PathPrefix: child.PathPrefix, Upstream: child.Upstream,
+			CallerAuth: child.Auth, SetHeaders: presetHeaders(child.Auth, secret), Allow: slices.Clone(child.Allow)})
+	}
+	return r
+}
+
+func presetHeaders(auth Auth, secret string) map[string]HeaderRule {
+	if secret == "" || auth.Header == "" {
+		return nil
+	}
+	return map[string]HeaderRule{auth.Header: {Secret: secret, Prefix: auth.Prefix}}
 }
 
 func joinNote(a, b string) string {

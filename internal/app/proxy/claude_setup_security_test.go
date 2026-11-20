@@ -136,7 +136,7 @@ func TestClaudeSetupRollback(t *testing.T) {
 			before := claudeSetupDBState(t, s, "configuration", "money_settings", "accounts", "secrets", "callers", "grants", "claude_shared_enrollment")
 			ctx, cancel := context.WithCancelCause(context.Background())
 			defer cancel(nil)
-			s.sockets.Store("test", &activeSocket{route: "synthetic", account: "claude-code", cancel: cancel})
+			s.sockets.Store("test", &activeSocket{route: "synthetic", account: "claude-bin", cancel: cancel})
 			defer s.sockets.Delete("test")
 			trigger := "CREATE TRIGGER setup_fault BEFORE INSERT ON grants BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END"
 			if method == "DELETE" {

@@ -75,7 +75,7 @@ func TestNoVendorAuthStillAuthenticatesToExplicitProxyRoot(t *testing.T) {
 }
 func TestRelatedRequiresSamePrincipalAndCredentialKind(t *testing.T) {
 	root := "https://related.example.test/mount/"
-	if err := Register([]Binding{{Root: root + "chatgpt", Kind: "chatgpt", Token: "first"}, {Root: root + "chatgpt-backend", Kind: "chatgpt", Token: "first"}, {Root: root + "other", Kind: "chatgpt", Token: "other"}}); err != nil {
+	if err := Register([]Binding{{Root: root + "chatgpt", Kind: "chatgpt", Token: "first", RelatedRoots: map[string]string{"chatgpt-backend": root + "chatgpt-backend", "other": root + "other", "unregistered": root + "not-there"}}, {Root: root + "chatgpt-backend", Kind: "chatgpt", Token: "first"}, {Root: root + "other", Kind: "chatgpt", Token: "other"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := Related(root+"chatgpt/responses", "chatgpt-backend"); !ok {

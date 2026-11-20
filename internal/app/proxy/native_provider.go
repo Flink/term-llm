@@ -22,7 +22,7 @@ type nativeProxyProvider struct {
 }
 
 var claudeProxyProvider = &nativeProxyProvider{
-	kind: "claude-code", label: "Claude", discovery: claudeForwardDiscovery,
+	kind: "claude-bin", label: "Claude", discovery: claudeForwardDiscovery,
 	caFile: claudeForwardCAFile, vaultDomain: "term-llm/claude-vault/v2\x00",
 	apiHost: claudeAPIHost, tokenURL: claudeTokenURL, clientID: claudeClientID,
 	accessPrefix: "sk-ant-oat01-tlv2-", refreshPrefix: "sk-ant-ort01-tlv2-",
