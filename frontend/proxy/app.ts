@@ -12,6 +12,7 @@ import { adminView } from './admin';
 import { callersView, secretsView } from './security';
 import { requestsView } from './requests';
 import { homeView } from './home';
+import { timelineQueryKeys } from './timeline-prefs';
 import { debugView } from './debug';
 
 type Tab = 'Home' | 'Routes' | 'Secrets' | 'Clients' | 'Requests' | 'Debug' | 'Passkeys' | 'Admin';
@@ -53,7 +54,11 @@ export function mountProxy(
   function writeTab(push = false) {
     const url = new URL(window.location.href);
     if (tab === 'Home') url.searchParams.delete('tab');
-    else url.searchParams.set('tab', tab.toLowerCase());
+    else {
+      url.searchParams.set('tab', tab.toLowerCase());
+      // Home restores its chart view from storage when navigated back to.
+      for (const key of timelineQueryKeys) url.searchParams.delete(key);
+    }
     if (push) historyIndex++;
     window.history[push ? 'pushState' : 'replaceState'](
       { ...window.history.state, proxyNavigationIndex: historyIndex },
@@ -361,7 +366,10 @@ export function mountProxy(
       tools.append(reload);
     }
     const views: Record<Tab, () => HTMLElement> = {
-      Home: () => homeView(snapshot, api, context),
+      Home: () =>
+        homeView(snapshot, api, context, () => {
+          currentURL = window.location.href;
+        }),
       Routes: () => routesView(snapshot, api, context),
       Secrets: () => secretsView(snapshot, api, context),
       Clients: () => callersView(snapshot, api, context),

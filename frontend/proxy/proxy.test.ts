@@ -130,7 +130,11 @@ describe('proxy navigation', () => {
     await click(root, 'Providers');
     expect(window.location.search).toBe('?tab=routes');
     await click(root, 'Home');
-    expect(window.location.search).toBe('');
+    expect(Object.fromEntries(new URLSearchParams(window.location.search))).toEqual({
+      range: '30d',
+      group: 'model',
+      metric: 'cost',
+    });
   });
 
   function activeTab(root: HTMLElement, name: string) {
@@ -267,7 +271,11 @@ describe('proxy navigation', () => {
     window.history.replaceState(null, '', `/_proxy/?tab=${tab}`);
     const { root } = setup();
     await waitFor(() => activeTab(root, 'Home'));
-    expect(window.location.search).toBe('');
+    expect(Object.fromEntries(new URLSearchParams(window.location.search))).toEqual({
+      range: '30d',
+      group: 'model',
+      metric: 'cost',
+    });
   });
   it('preserves the requested tab through sign in', async () => {
     window.history.replaceState(null, '', '/_proxy/?tab=secrets');

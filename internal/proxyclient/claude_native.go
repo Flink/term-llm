@@ -15,8 +15,9 @@ import (
 // for a proxy-bound native Claude installation. It contains only term-llm-owned
 // state: the public proxy CA, the forced claude.ai login setting, and Claude's
 // isolated session/login files. The "-v2" namespace prevents a profile created
-// by the retired setup-token launcher from being reused. The scoped token is
-// part of the directory name hash but is never written.
+// by the retired setup-token launcher from being reused. The scoped token
+// secret (without any caller tag) is hashed for the directory name but
+// never written.
 func ClaudeNativeStateDir(root, token string) (string, error) {
 	return claudeNativePolicy.stateDir("claude-proxy-v2", root, token)
 }
@@ -33,7 +34,7 @@ func (p nativePolicy) stateDir(namespace, root, token string) (string, error) {
 	if err != nil {
 		return "", errors.New("could not locate the private application cache directory")
 	}
-	sum := sha256.Sum256([]byte(canonical + "\x00" + token))
+	sum := sha256.Sum256([]byte(canonical + "\x00" + callerSecret(token)))
 	return filepath.Join(cache, "term-llm", namespace, hex.EncodeToString(sum[:16])), nil
 }
 

@@ -185,6 +185,7 @@ func (s *store) saveConfig(snap *snapshot, fileMode bool) error {
 }
 
 type Caller struct {
+	Tag        string   `json:"-"`
 	ID         string   `json:"id"`
 	Name       string   `json:"name"`
 	Created    int64    `json:"created"`
@@ -207,11 +208,6 @@ func (s *store) callers() ([]Caller, error) {
 func (s *store) createCaller(name string, grants []string, snap *snapshot) (Caller, string, error) {
 	return s.insertCaller(context.Background(), name, grants, snap, "", "")
 }
-func (s *store) authorize(token string, r activeRoute) (Caller, error) {
-	var c Caller
-	err := s.authorizeStmt.QueryRow(hashToken(token), r.Name, r.authority).Scan(&c.ID, &c.Name)
-	return c, err
-}
 
 type Record struct {
 	Usage                 *ObservedUsage `json:"usage,omitempty"`
@@ -224,6 +220,7 @@ type Record struct {
 	Ended                 int64          `json:"ended"`
 	CallerID              string         `json:"caller_id"`
 	CallerName            string         `json:"caller_name"`
+	Tag                   string         `json:"tag,omitempty"`
 	Route                 string         `json:"route"`
 	Revision              int64          `json:"revision"`
 	Method                string         `json:"method"`
@@ -243,6 +240,7 @@ type Record struct {
 
 func (s *store) start(ctx context.Context, r *Record) error {
 	r.Provider, r.App = boundedAttribution(r.Provider), boundedAttribution(r.App)
+	r.Tag = boundedAttribution(r.Tag)
 	billing := "unspecified"
 	if r.Money != nil {
 		billing = r.Money.Billing
@@ -257,6 +255,7 @@ func (s *store) start(ctx context.Context, r *Record) error {
 
 func (s *store) finish(r Record) error {
 	r.Provider, r.App = boundedAttribution(r.Provider), boundedAttribution(r.App)
+	r.Tag = boundedAttribution(r.Tag)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	b, err := json.Marshal(r)

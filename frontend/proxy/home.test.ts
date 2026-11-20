@@ -9,6 +9,7 @@ import {
 import type { MoneyTimeline, TimelineSeries } from '../src/api/proxy-timeline';
 import { homeView, moneyAmount, moneyLabel } from './home';
 import { timelineView } from './timeline';
+import type { TimelinePrefs } from './timeline-prefs';
 import type { UIContext } from './dom';
 
 function series(extra: Partial<TimelineSeries> = {}): TimelineSeries {
@@ -62,23 +63,32 @@ function context(): UIContext {
     protectToken: vi.fn(),
   };
 }
-function mount(initial = data(), load = vi.fn().mockResolvedValue(data())) {
-  const view = timelineView(initial, load);
+function mount(
+  initial = data(),
+  load = vi.fn().mockResolvedValue(data()),
+  prefs: TimelinePrefs = { metric: 'cost', range: initial.range, group: 'model' },
+) {
+  const view = timelineView(initial, load, prefs);
   document.body.append(view);
   return { view, load };
 }
 afterEach(() => {
   document.body.replaceChildren();
+  window.history.replaceState(null, '', window.location.pathname);
   vi.restoreAllMocks();
 });
 it('defaults to a time bar chart, cost and 30 days, with native top controls', () => {
   const { view } = mount();
-  expect(getByRole(view, 'combobox', { name: 'Metric' })).toHaveValue('cost');
-  expect(getByRole(view, 'combobox', { name: 'Range' })).toHaveValue('30d');
+  expect(getByRole(view, 'button', { name: 'Cost' })).toHaveAttribute('aria-pressed', 'true');
+  expect(getByRole(view, 'button', { name: 'Tokens' })).toHaveAttribute('aria-pressed', 'false');
+  expect(getByRole(view, 'button', { name: '30d' })).toHaveAttribute('aria-pressed', 'true');
+  expect(getByRole(view, 'button', { name: '7d' })).toHaveAttribute('aria-pressed', 'false');
+  expect(getByRole(view, 'button', { name: 'Today' })).toHaveAttribute('aria-pressed', 'false');
+  expect(getByRole(view, 'combobox', { name: 'Grouping' })).toHaveValue('model');
   expect(view.querySelectorAll('[data-bucket]')).toHaveLength(2);
   expect(view.querySelector('.timeline-total')).toHaveTextContent('≈ US$1.20');
   expect(view.querySelector('details')).toBeNull();
-  expect(view.querySelector('.timeline-legend')).toHaveTextContent('Australia/Sydney');
+  expect(view.querySelector('.timeline-footer')).toHaveTextContent('Australia/Sydney');
   expect(view.querySelector('table')).toBeNull();
 });
 it('shows a compact empty state with working controls instead of empty chart targets', async () => {
@@ -86,7 +96,7 @@ it('shows a compact empty state with working controls instead of empty chart tar
   expect(view.querySelector('.timeline-plot')).toHaveTextContent('No proxy activity');
   expect(view.querySelector('[data-bucket]')).toBeNull();
   expect(view.querySelector('.timeline-tooltip')).toBeEmptyDOMElement();
-  fireEvent.change(getByRole(view, 'combobox', { name: 'Range' }), { target: { value: '7d' } });
+  fireEvent.click(getByRole(view, 'button', { name: '7d' }));
   await waitFor(() => expect(view.querySelectorAll('[data-bucket]')).toHaveLength(2));
 });
 it('selects by pointer, tap and keyboard, showing amounts, clients and missing counts', () => {
@@ -94,19 +104,67 @@ it('selects by pointer, tap and keyboard, showing amounts, clients and missing c
   const bar = view.querySelector('[data-bucket="0"]')!;
   fireEvent.click(bar);
   expect(bar).toHaveAttribute('aria-pressed', 'true');
-  expect(view.querySelector('.timeline-tooltip')).toHaveTextContent(
-    'Kitchen Mac · ≥ US$1.20 · 2 requests with incomplete cost data',
+  const tooltip = view.querySelector('.timeline-tooltip');
+  expect(tooltip?.querySelector('.timeline-tooltip-row')).toHaveTextContent('Kitchen Mac');
+  expect(tooltip?.querySelector('.timeline-tooltip-row b')).toHaveTextContent('≥ US$1.20');
+  expect(tooltip?.querySelector('.timeline-tooltip-note')).toHaveTextContent(
+    '2 requests with incomplete cost data',
   );
   expect(view.querySelector('.timeline-total')).toHaveTextContent('≥ US$1.20');
   fireEvent.keyDown(bar, { key: 'ArrowRight' });
   expect(view.querySelector('[data-bucket="1"]')).toHaveFocus();
   expect(view.querySelector('.timeline-tooltip')).toHaveTextContent('No activity');
 });
+it('shows the interval’s top 20 by the active metric and currency without truncating its total', () => {
+  const rows = Array.from({ length: 22 }, (_, i) =>
+    series({
+      key: `model-${i}`,
+      label: `Model ${i}`,
+      costs: [
+        { currency: 'USD', micros: i * 1_000_000, estimated: false },
+        { currency: 'AUD', micros: (i === 7 ? 100 : i) * 1_000_000, estimated: false },
+      ],
+      tokens: 22 - i,
+    }),
+  );
+  const initial = data(rows);
+  initial.currencies = ['USD', 'AUD'];
+  initial.buckets[1]!.series = [
+    series({ ...rows[0]!, costs: [{ currency: 'USD', micros: 500_000_000, estimated: false }] }),
+  ];
+  const { view } = mount(initial);
+  const hover = (i: number) => fireEvent.pointerEnter(view.querySelector(`[data-bucket="${i}"]`)!);
+  const tip = view.querySelector<HTMLElement>('.timeline-tooltip')!;
+  const names = () =>
+    Array.from(tip.querySelectorAll('.timeline-tooltip-row span'), (el) => el.textContent);
+  hover(0);
+  expect(tip).toHaveTextContent('Top 20 of 22');
+  expect(names()).toEqual(
+    rows
+      .slice(2)
+      .reverse()
+      .map((row) => row.label),
+  );
+  expect(tip.querySelector('.timeline-tooltip-total')).toHaveTextContent('US$231.00');
+  const more = tip.querySelector('details')!;
+  expect(more.querySelector('summary')).toHaveTextContent('2 more contributors');
+  more.open = true;
+  fireEvent(more, new Event('toggle'));
+  expect(names().slice(20)).toEqual(['Model 1', 'Model 0']);
+  hover(1);
+  expect(names()).toEqual(['Model 0']);
+  expect(tip).not.toHaveTextContent('Top 20');
+  expect(tip.querySelector('summary')).toBeNull();
+  fireEvent.change(getByRole(view, 'combobox', { name: 'Currency' }), { target: { value: 'AUD' } });
+  hover(0);
+  expect(names()[0]).toBe('Model 7');
+  fireEvent.click(getByRole(view, 'button', { name: 'Tokens' }));
+  hover(0);
+  expect(names()).toEqual(rows.slice(0, 20).map((row) => row.label));
+});
 it('uses actual usage tokens without double counting cache/reasoning client-side', () => {
   const { view } = mount();
-  fireEvent.change(getByRole(view, 'combobox', { name: 'Metric' }), {
-    target: { value: 'tokens' },
-  });
+  fireEvent.click(getByRole(view, 'button', { name: 'Tokens' }));
   expect(view.querySelector('.timeline-total')).toHaveTextContent('1,500 tokens');
   fireEvent.click(view.querySelector('[data-bucket="0"]')!);
   expect(view.querySelector('.timeline-tooltip')).toHaveTextContent('1,500 tokens');
@@ -116,7 +174,7 @@ it('never fabricates zero for legacy missing tokens or unpriced/plan-only costs'
     data([series({ costs: [], tokens: undefined, unknown_cost: 1, unknown_tokens: 1, plan: 1 })]),
   );
   expect(view.querySelector('.timeline-total')).toHaveTextContent('Not measured');
-  expect(view.querySelector('.timeline-legend')).toHaveTextContent(
+  expect(view.querySelector('.timeline-footer')).toHaveTextContent(
     '1 request with incomplete cost data',
   );
   expect(view.querySelector('.timeline-plot svg circle')).toBeNull();
@@ -124,11 +182,9 @@ it('never fabricates zero for legacy missing tokens or unpriced/plan-only costs'
   expect(slot.querySelectorAll('rect')).toHaveLength(1); // Only the hit target, not a zero bar.
   fireEvent.focus(slot);
   expect(view.querySelector('.timeline-tooltip')).toHaveTextContent('Not measured');
-  fireEvent.change(getByRole(view, 'combobox', { name: 'Metric' }), {
-    target: { value: 'tokens' },
-  });
+  fireEvent.click(getByRole(view, 'button', { name: 'Tokens' }));
   expect(view.querySelector('.timeline-total')).toHaveTextContent('Not measured');
-  expect(view.querySelector('.timeline-legend')).toHaveTextContent(
+  expect(view.querySelector('.timeline-footer')).toHaveTextContent(
     '1 request with incomplete token data',
   );
   expect(view.textContent).not.toContain('0 tokens');
@@ -142,15 +198,13 @@ it('plots plan estimates by default and identifies the plan amount without calli
       }),
     ]),
   );
-  expect(getByRole(view, 'heading')).toHaveTextContent('Cost incl. plan estimates');
+  expect(getByRole(view, 'heading', { level: 2 })).toHaveTextContent('Cost incl. plan estimates');
   expect(view.querySelector('.timeline-total')).toHaveTextContent('≈ US$0.03');
   expect(view).toHaveTextContent('Plan estimates aren’t charges.');
   fireEvent.click(view.querySelector('[data-bucket="0"]')!);
   expect(view.querySelector('.timeline-tooltip')).toHaveTextContent('US$0.02 plan estimate');
-  fireEvent.change(getByRole(view, 'combobox', { name: 'Metric' }), {
-    target: { value: 'tokens' },
-  });
-  expect(getByRole(view, 'heading')).toHaveTextContent('Tokens');
+  fireEvent.click(getByRole(view, 'button', { name: 'Tokens' }));
+  expect(getByRole(view, 'heading', { level: 2 })).toHaveTextContent('Tokens');
   expect(view.querySelector('.timeline-tooltip')).not.toHaveTextContent('plan estimate');
   expect(view.querySelector('.timeline-heading small')).not.toBeVisible();
 });
@@ -170,18 +224,94 @@ it('separates currencies explicitly and never sums USD with AUD', () => {
   expect(view.querySelector('.timeline-total')).toHaveTextContent('A$7.00');
   expect(view.querySelector('.timeline-total')).not.toHaveTextContent('8.00');
 });
+it('compares the current metric with the previous range when a baseline is available', () => {
+  const initial = data([
+    series({ costs: [{ currency: 'USD', micros: 1200000, estimated: false }] }),
+  ]);
+  initial.previous = series({
+    costs: [{ currency: 'USD', micros: 1000000, estimated: false }],
+    tokens: 2000,
+  });
+  const { view } = mount(initial);
+  const badge = view.querySelector('.timeline-delta');
+  expect(badge).toBeVisible();
+  expect(badge).toHaveTextContent(/\+20%/);
+  fireEvent.click(getByRole(view, 'button', { name: 'Tokens' }));
+  expect(badge).toHaveTextContent(/-25%/);
+});
+it('omits the previous-period comparison for incomplete costs or a zero token baseline', () => {
+  const initial = data([
+    series({ costs: [{ currency: 'USD', micros: 1200000, estimated: false }], unknown_cost: 1 }),
+  ]);
+  initial.previous = series({
+    costs: [{ currency: 'USD', micros: 1000000, estimated: false }],
+    tokens: 0,
+  });
+  const { view } = mount(initial);
+  const badge = view.querySelector('.timeline-delta');
+  expect(badge).not.toBeVisible();
+  fireEvent.click(getByRole(view, 'button', { name: 'Tokens' }));
+  expect(badge).not.toBeVisible();
+});
+it('sorts grouped amounts over all buckets and keeps unknown costs distinct from measured zero', () => {
+  const initial = data([
+    series({
+      key: 'small',
+      label: 'Small',
+      costs: [
+        { currency: 'USD', micros: 1000000, estimated: false },
+        { currency: 'AUD', micros: 9000000, estimated: false },
+      ],
+    }),
+    series({ key: 'missing', label: 'Missing', costs: [], unknown_cost: 1 }),
+    series({
+      key: 'free',
+      label: 'Free',
+      costs: [{ currency: 'USD', micros: 0, estimated: false }],
+    }),
+    series({
+      key: 'large',
+      label: 'Large',
+      costs: [{ currency: 'USD', micros: 800000, estimated: false }],
+    }),
+  ]);
+  initial.currencies = ['USD', 'AUD'];
+  initial.buckets[1]!.series = [
+    series({
+      key: 'large',
+      label: 'Large',
+      costs: [{ currency: 'USD', micros: 2200000, estimated: false }],
+    }),
+  ];
+  const { view } = mount(initial);
+  const rows = () =>
+    [...view.querySelectorAll('.timeline-breakdown li')].map((row) => ({
+      name: row.querySelector('.timeline-breakdown-name')?.textContent,
+      amount: row.querySelector('b')?.textContent,
+      share: row.querySelector('.timeline-breakdown-share')?.textContent,
+    }));
+  expect(view.querySelector('.timeline-total')).toHaveTextContent('≥ US$4.00');
+  expect(rows()).toEqual([
+    { name: 'Large', amount: 'US$3.00', share: '75%' },
+    { name: 'Small', amount: 'US$1.00', share: '25%' },
+    { name: 'Free', amount: 'US$0.00', share: '0%' },
+    { name: 'Missing', amount: 'Not measured', share: '' },
+  ]);
+  fireEvent.change(getByRole(view, 'combobox', { name: 'Currency' }), { target: { value: 'AUD' } });
+  expect(view.querySelector('.timeline-total')).toHaveTextContent('A$9.00');
+  expect(rows()[0]).toEqual({ name: 'Small', amount: 'A$9.00', share: '100%' });
+  expect(view.querySelector('.timeline-breakdown')).not.toHaveTextContent('US$');
+});
 it('offers model grouping for both cost and token metrics', async () => {
-  const { view, load } = mount();
+  const { view, load } = mount(data(), undefined, { metric: 'cost', range: '30d', group: 'total' });
   fireEvent.change(getByRole(view, 'combobox', { name: 'Grouping' }), {
     target: { value: 'model' },
   });
   await waitFor(() => expect(load).toHaveBeenCalledWith('30d', 'model'));
-  expect(view.querySelector('.timeline-legend')).toHaveTextContent('Kitchen Mac');
-  fireEvent.change(getByRole(view, 'combobox', { name: 'Metric' }), {
-    target: { value: 'tokens' },
-  });
+  expect(view.querySelector('.timeline-breakdown')).toHaveTextContent('Kitchen Mac');
+  fireEvent.click(getByRole(view, 'button', { name: 'Tokens' }));
   expect(view.querySelector('.timeline-total')).toHaveTextContent('1,500 tokens');
-  expect(view.querySelector('.timeline-legend')).toHaveTextContent('Kitchen Mac');
+  expect(view.querySelector('.timeline-breakdown')).toHaveTextContent('Kitchen Mac');
 });
 it('formats tooltip and accessible bucket label in the returned local timezone', () => {
   const { view } = mount();
@@ -218,8 +348,8 @@ it('includes minutes and offset for hourly buckets while keeping axis ticks comp
 
 it('requests real range/group changes instead of reshaping month summaries', async () => {
   const { view, load } = mount();
-  fireEvent.change(getByRole(view, 'combobox', { name: 'Range' }), { target: { value: '7d' } });
-  await waitFor(() => expect(load).toHaveBeenCalledWith('7d', 'total'));
+  fireEvent.click(getByRole(view, 'button', { name: '7d' }));
+  await waitFor(() => expect(load).toHaveBeenCalledWith('7d', 'model'));
   fireEvent.change(getByRole(view, 'combobox', { name: 'Grouping' }), {
     target: { value: 'client' },
   });
@@ -227,27 +357,26 @@ it('requests real range/group changes instead of reshaping month summaries', asy
 });
 it('retains stable distinct colours when range/metric changes within the dashboard', async () => {
   const initial = data([series(), series({ key: 'b', label: 'Studio' })]);
-  const { view } = mount(initial, vi.fn().mockResolvedValue(initial));
-  fireEvent.change(getByRole(view, 'combobox', { name: 'Grouping' }), {
-    target: { value: 'client' },
-  });
+  const reversed = data([...initial.buckets[0]!.series].reverse());
+  const load = vi.fn().mockResolvedValue({ ...reversed, range: '7d' });
+  const { view } = mount(initial, load);
+  const colours = () =>
+    [...view.querySelectorAll<HTMLElement>('.timeline-breakdown li')].map((row) => [
+      row.querySelector('.timeline-breakdown-name')?.textContent,
+      row.querySelector<HTMLElement>('.timeline-swatch')?.style.backgroundColor,
+    ]);
+  const before = colours();
+  expect(new Set(before.map(([, colour]) => colour)).size).toBe(2);
+  fireEvent.click(getByRole(view, 'button', { name: '7d' }));
   await waitFor(() => expect(view).toHaveAttribute('aria-busy', 'false'));
-  const colours = [...view.querySelectorAll<HTMLElement>('.timeline-legend i')].map(
-    (n) => n.style.backgroundColor,
-  );
-  expect(new Set(colours).size).toBe(2);
-  fireEvent.change(getByRole(view, 'combobox', { name: 'Metric' }), {
-    target: { value: 'tokens' },
-  });
-  expect(
-    [...view.querySelectorAll<HTMLElement>('.timeline-legend i')].map(
-      (n) => n.style.backgroundColor,
-    ),
-  ).toEqual(colours);
+  expect(load).toHaveBeenCalledWith('7d', 'model');
+  expect(colours()).toEqual(before);
+  fireEvent.click(getByRole(view, 'button', { name: 'Tokens' }));
+  expect(colours()).toEqual(before);
 });
 it('hides stale data and exposes unavailable rather than a zero on fetch failure', async () => {
   const { view } = mount(data(), vi.fn().mockRejectedValue(new Error('offline')));
-  fireEvent.change(getByRole(view, 'combobox', { name: 'Range' }), { target: { value: '7d' } });
+  fireEvent.click(getByRole(view, 'button', { name: '7d' }));
   await waitFor(() =>
     expect(view.querySelector('.timeline-total')).toHaveTextContent('Unavailable'),
   );
@@ -265,14 +394,12 @@ it('ignores superseded timeline responses', async () => {
     )
     .mockResolvedValueOnce(data([series({ tokens: 4000 })]));
   const { view } = mount(data(), load);
-  fireEvent.change(getByRole(view, 'combobox', { name: 'Range' }), { target: { value: '7d' } });
-  fireEvent.change(getByRole(view, 'combobox', { name: 'Range' }), { target: { value: 'today' } });
+  fireEvent.click(getByRole(view, 'button', { name: '7d' }));
+  fireEvent.click(getByRole(view, 'button', { name: 'Today' }));
   await waitFor(() => expect(view).toHaveAttribute('aria-busy', 'false'));
   resolve(data([series({ tokens: 99999 })]));
   await Promise.resolve();
-  fireEvent.change(getByRole(view, 'combobox', { name: 'Metric' }), {
-    target: { value: 'tokens' },
-  });
+  fireEvent.click(getByRole(view, 'button', { name: 'Tokens' }));
   expect(view.querySelector('.timeline-total')).toHaveTextContent('4,000 tokens');
 });
 it('Home loads the authenticated timeline, with retry after failure', async () => {
@@ -284,9 +411,10 @@ it('Home loads the authenticated timeline, with retry after failure', async () =
   await waitFor(() => expect(view.textContent).toContain('Chart unavailable'));
   fireEvent.click(getByRole(view, 'button', { name: 'Retry' }));
   await waitFor(() => expect(view.querySelector('svg')).not.toBeNull());
+  expect(getByRole(view, 'combobox', { name: 'Grouping' })).toHaveValue('model');
   expect(api.timeline).toHaveBeenCalledWith(
     '30d',
-    'total',
+    'model',
     Intl.DateTimeFormat().resolvedOptions().timeZone || undefined,
   );
 });
@@ -334,28 +462,24 @@ it('keeps missing counts additive exactly once across grouped series', () => {
     data([series({ unknown_cost: 1 }), series({ key: 'other', label: 'Studio', unknown_cost: 0 })]),
   );
   const incomplete = '1 request with incomplete cost data';
-  expect(view.querySelector('.timeline-legend')).toHaveTextContent(incomplete);
+  expect(view.querySelector('.timeline-footer')).toHaveTextContent(incomplete);
   fireEvent.click(view.querySelector('[data-bucket="0"]')!);
   expect(view.querySelector('.timeline-tooltip')?.textContent?.split(incomplete)).toHaveLength(2);
 });
 it('does not restore stale data when metric changes after a failed range request', async () => {
   const { view } = mount(data(), vi.fn().mockRejectedValue(new Error('offline')));
-  fireEvent.change(getByRole(view, 'combobox', { name: 'Range' }), { target: { value: '7d' } });
+  fireEvent.click(getByRole(view, 'button', { name: '7d' }));
   await waitFor(() =>
     expect(view.querySelector('.timeline-total')).toHaveTextContent('Unavailable'),
   );
-  fireEvent.change(getByRole(view, 'combobox', { name: 'Metric' }), {
-    target: { value: 'tokens' },
-  });
+  fireEvent.click(getByRole(view, 'button', { name: 'Tokens' }));
   expect(view.querySelector('svg')).toBeNull();
 });
 it('refuses imprecise cross-bucket totals instead of rounding enormous token history', () => {
   const initial = data([series({ tokens: Number.MAX_SAFE_INTEGER })]);
   initial.buckets.push({ ...initial.buckets[0]!, series: [series({ tokens: 1 })] });
   const { view } = mount(initial);
-  fireEvent.change(getByRole(view, 'combobox', { name: 'Metric' }), {
-    target: { value: 'tokens' },
-  });
+  fireEvent.click(getByRole(view, 'button', { name: 'Tokens' }));
   expect(view.querySelector('.timeline-total')).toHaveTextContent('Amount unavailable');
   expect(view.querySelector('svg')).toBeNull();
 });
@@ -374,7 +498,7 @@ it('keeps grouping colour caches independent and all active legend colours disti
     .mockResolvedValueOnce(clientData);
   const { view } = mount(data(), load);
   const colours = () =>
-    [...view.querySelectorAll<HTMLElement>('.timeline-legend i')].map(
+    [...view.querySelectorAll<HTMLElement>('.timeline-breakdown .timeline-swatch')].map(
       (n) => n.style.backgroundColor,
     );
   fireEvent.change(getByRole(view, 'combobox', { name: 'Grouping' }), {

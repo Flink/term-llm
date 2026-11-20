@@ -25,6 +25,7 @@ import {
 
 import {
   cacheValue,
+  clientLabel,
   connectionOutcomes,
   countValue,
   dateLabel,
@@ -199,7 +200,7 @@ export function requestDetail(request: ProxyRequest, capture?: HTMLElement): HTM
           ? 'In progress'
           : (timestamp(request.ended)?.toString() ?? 'Not reported'),
       ],
-      ['Client', request.caller_name || 'Unknown client'],
+      ['Client', clientLabel(request)],
       ['Route', request.route],
       ['Method', request.method],
       ['Local path', localPath(request)],
@@ -524,7 +525,7 @@ export function requestsView(state: ProxyState, api: ProxyClient, context: UICon
         input.title += latest;
         output.title += latest;
       }
-      const callerName = request.caller_name || request.caller_id || 'Unknown client';
+      const callerName = clientLabel(request);
       const client = el('span', el('span', callerName), el('span', request.route));
       client.className = 'request-client';
       client.title = `Client: ${callerName} · Route: ${request.route}`;

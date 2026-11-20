@@ -1,4 +1,6 @@
 @import '../src/styles/base/typography.css';
+@import './timeline.css';
+@import './timeline-tokens.css';
 
 :root {
   --workspace: 1120px;
@@ -894,23 +896,19 @@ button.route-preset-custom {
 }
 
 .client-composer {
-  display: grid;
-  grid-template-columns: minmax(12rem, 1fr) minmax(0, 2fr) auto auto;
-  align-items: end;
-  gap: 0.5rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
   margin: 0.65rem 0;
-  padding: 0.75rem 0.85rem;
+  padding: 1rem 1.15rem;
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: 10px;
+  box-shadow: var(--shadow-card);
 }
 
 .client-composer[hidden] {
   display: none;
-}
-
-.client-composer > button {
-  justify-self: start;
 }
 
 .client-composer .field,
@@ -918,11 +916,27 @@ button.route-preset-custom {
   margin: 0;
 }
 
+.client-composer > .field {
+  max-width: 24rem;
+}
+
+.client-composer-providers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
 .client-composer-note {
-  grid-column: 1 / -1;
   margin: 0;
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.client-composer-actions {
+  margin: 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
 }
 
 .client-grant-fields {
@@ -931,36 +945,153 @@ button.route-preset-custom {
 }
 
 .client-grant-fields legend {
-  margin-bottom: 0.3rem;
+  margin-bottom: 0.4rem;
   padding: 0;
 }
 
 .grant-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: 0.45rem;
 }
 
 .check.grant-chip {
-  gap: 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
   margin: 0;
-  padding: 0.25rem 0.65rem;
+  padding: 0.35rem 0.75rem;
+  min-height: 2.1rem;
   background: var(--bg);
   border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  font-size: 0.82rem;
+  border-radius: 8px;
+  font-size: 0.825rem;
   font-weight: 500;
+  line-height: 1.3;
   cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.check.grant-chip:hover:not(:has(input:disabled)) {
+  background: var(--surface-2);
+  border-color: color-mix(in srgb, var(--text) 30%, var(--bg));
 }
 
 .check.grant-chip input {
   width: 0.95rem;
   height: 0.95rem;
+  margin: 0;
 }
 
 .check.grant-chip:has(input:checked) {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+
+.check.grant-chip:has(input:disabled) {
+  opacity: 0.6;
+  background: var(--surface-2);
+  cursor: not-allowed;
+}
+
+.client-token-panel {
+  padding: 1rem 1.15rem;
+}
+
+.client-token-lead,
+.client-token-note {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.client-token-lead {
+  margin: 0 0 0.65rem;
+}
+
+.token-copy-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.5rem;
+  margin: 0.65rem 0;
+}
+
+.token-copy-row .field {
+  flex: 1 1 18rem;
+  margin: 0;
+}
+
+.token-copy-row > button {
+  height: 2.15rem;
+  flex-shrink: 0;
+}
+
+.config-snippet {
+  margin: 0.85rem 0;
+  padding: 0.8rem 0.9rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.config-snippet-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 0.75rem;
+}
+
+.config-snippet-head :is(h3, h4) {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.config-snippet-head .actions {
+  margin: 0;
+}
+
+.config-snippet-head button {
+  min-height: 28px;
+  padding: 0.22rem 0.6rem;
+  font-size: 0.78rem;
+  background: var(--surface);
+}
+
+.config-snippet-hint {
+  margin: 0.4rem 0 0.55rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.config-snippet-hint code {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.config-snippet pre {
+  margin: 0;
+  background: var(--bg);
+  border-color: var(--border);
+  font-family: var(--font-mono);
+  line-height: 1.5;
+}
+
+.config-snippet-note {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.client-token-footer {
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
 }
 
 .client-list {
@@ -1132,7 +1263,6 @@ button.client-toggle:hover {
   font-size: 0.8rem;
 }
 
-.client-composer > button + button,
 .client-detail form > button + button {
   margin-left: 0;
 }
@@ -1156,8 +1286,8 @@ button.client-toggle:hover {
 }
 
 @media (width <= 40rem) {
-  .client-composer {
-    grid-template-columns: 1fr;
+  .client-composer > .field {
+    max-width: none;
   }
 
   .client-list-head {
@@ -1623,9 +1753,7 @@ form > button + button {
   grid-column: 1 / -1;
 }
 
-.request-details:empty,
-.timeline-legend:empty,
-.timeline-tooltip:empty {
+.request-details:empty {
   display: none;
 }
 
@@ -1869,8 +1997,14 @@ form > button + button {
   summary,
   .route-card .actions button,
   .route-cmd-bar > button,
-  .route-pagination-controls button {
+  .route-pagination-controls button,
+  .config-snippet-head button,
+  .token-copy-row > button {
     min-height: 44px;
+  }
+
+  .token-copy-row > button {
+    height: 44px;
   }
 
   input:not([type='checkbox']),
@@ -1893,7 +2027,8 @@ form > button + button {
     min-width: 44px;
   }
 
-  .check {
+  .check,
+  .check.grant-chip {
     min-height: 44px;
   }
 
@@ -1903,7 +2038,8 @@ form > button + button {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  button {
+  button,
+  .check.grant-chip {
     transition: none;
   }
 }
@@ -1961,175 +2097,11 @@ header .actions button {
   --warn: #a86815;
 }
 
-.timeline {
-  padding: 2rem 0 0;
-}
-
-.timeline-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.timeline-heading h2 {
-  color: var(--muted);
-  font-size: 0.9rem;
-  font-weight: 500;
-}
-
-.timeline-total {
-  font-size: 2rem;
-  line-height: 1.2;
-  font-weight: 600;
-  letter-spacing: -0.04em;
-}
-
-.timeline-controls {
-  display: flex;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-}
-
-.timeline-controls select {
-  width: auto;
-  min-height: 40px;
-  padding: 0.45rem 1.4rem 0.45rem 0.65rem;
-  background: var(--bg);
-  color: var(--text);
-}
-
-.timeline-plot {
-  margin-top: 2.5rem;
-}
-
-.timeline-plot svg {
-  display: block;
-  width: 100%;
-  overflow: visible;
-}
-
-.timeline-axis {
-  font-size: 11px;
-  fill: var(--muted);
-}
-
-.timeline-grid {
-  stroke: #e9edf2;
-  stroke-width: 1;
-}
-
-.timeline-hit {
-  fill: transparent;
-}
-
-.timeline-plot [role='button'] {
-  cursor: pointer;
-  outline: none;
-}
-
-.timeline-plot .selected .timeline-hit,
-.timeline-plot [role='button']:focus-visible .timeline-hit {
-  fill: #446bc112;
-  stroke: #446bc1;
-  stroke-width: 1;
-}
-
-.timeline-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem 1.2rem;
-  padding: 0.6rem 0 0.6rem 4.5rem;
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-.timeline-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.timeline-legend i {
-  width: 9px;
-  height: 9px;
-  border-radius: 2px;
-}
-
-.timeline-tooltip {
-  font-size: 0.8rem;
-  color: var(--muted);
-}
-
-.timeline-tooltip:not(:empty) {
-  min-height: 2.5rem;
-  margin: 0.25rem 0 0 4.5rem;
-}
-
-.timeline-tooltip strong {
-  color: var(--text);
-  font-weight: 550;
-}
-
-.timeline-tooltip > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem 1.2rem;
-  margin-top: 0.35rem;
-}
-
-.home-details {
-  margin-top: 0.75rem;
-  padding-top: 0.35rem;
-  border-top: 1px solid var(--border);
-  font-size: 0.85rem;
-}
-
-.home-details > details {
-  margin: 0;
-}
-
 .money-settings-fields {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
   align-items: start;
   column-gap: 0.75rem;
-}
-
-.timeline[aria-busy='true'] .timeline-plot {
-  opacity: 0.45;
-}
-
-@media (width <= 600px) {
-  .timeline {
-    padding-top: 1rem;
-  }
-
-  .timeline-heading {
-    flex-direction: column;
-  }
-
-  .timeline-controls {
-    align-self: flex-end;
-    gap: 0.3rem;
-  }
-
-  .timeline-controls select {
-    font-size: 0.8rem;
-  }
-
-  .timeline-plot {
-    margin-top: 1.25rem;
-  }
-
-  .timeline-legend {
-    padding-left: 0;
-  }
-
-  .timeline-tooltip:not(:empty) {
-    margin-left: 0;
-  }
 }
 
 .debug-preview {

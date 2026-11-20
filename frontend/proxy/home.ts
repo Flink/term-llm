@@ -8,6 +8,7 @@ import type {
 import { moneySettingsView } from './money-settings';
 import { button, card, disclosure, el, type UIContext } from './dom';
 import { timelineView } from './timeline';
+import { readTimelinePrefs, writeTimelinePrefs, type TimelinePrefs } from './timeline-prefs';
 
 // Format only. Classification, source selection, aggregation and budgets belong
 // to the backend; a missing amount must never be formatted as a zero.
@@ -143,8 +144,18 @@ function planEstimatesView(api: ProxyClient, context: UIContext): HTMLDetailsEle
   });
   return view;
 }
-export function homeView(state: ProxyState, api: ProxyClient, context: UIContext): HTMLElement {
+export function homeView(
+  state: ProxyState,
+  api: ProxyClient,
+  context: UIContext,
+  onURLChange?: () => void,
+): HTMLElement {
   const view = el('div', el('p', 'Loading chart…'));
+  function remember(prefs: TimelinePrefs) {
+    if (!view.isConnected) return;
+    writeTimelinePrefs(prefs);
+    onURLChange?.();
+  }
   async function load() {
     view.setAttribute('aria-busy', 'true');
     const ok = await context.run(async () => {
@@ -155,17 +166,18 @@ export function homeView(state: ProxyState, api: ProxyClient, context: UIContext
           return undefined;
         }
       })();
-      const timeline = await api.timeline('30d', 'total', browserTimezone);
+      const prefs = readTimelinePrefs();
+      remember(prefs);
+      const timeline = await api.timeline(prefs.range, prefs.group, browserTimezone);
       if (!view.isConnected) return;
-      const details = el(
-        'div',
-        planEstimatesView(api, context),
-        moneySettingsView(state, api, context),
-      );
-      details.className = 'home-details';
       view.replaceChildren(
-        timelineView(timeline, (range, group) => api.timeline(range, group, browserTimezone)),
-        details,
+        timelineView(
+          timeline,
+          (range, group) => api.timeline(range, group, browserTimezone),
+          prefs,
+          remember,
+          [planEstimatesView(api, context), moneySettingsView(state, api, context)],
+        ),
       );
     });
     if (!view.isConnected) return;

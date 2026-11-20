@@ -20,7 +20,7 @@ func (s *Service) agyNativeProfile(w http.ResponseWriter, r *http.Request, key [
 		http.Error(w, "unsupported Antigravity identity request", 403)
 		return
 	}
-	if !s.claudeForwardRequestSlot(w) {
+	if !s.requestSlot(w) {
 		return
 	}
 	defer func() { <-s.slots }()

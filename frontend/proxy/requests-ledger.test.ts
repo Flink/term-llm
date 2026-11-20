@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ProxyObservedUsage, ProxyRequest } from '../src/api/proxy-client';
 import {
   cacheValue,
+  clientLabel,
   countValue,
   dateLabel,
   dayKey,
@@ -318,6 +319,13 @@ describe('WebSocket connection status', () => {
 });
 
 describe('consecutive unmeasured HTTP error grouping', () => {
+  it('labels tagged clients and keeps the name and ID fallbacks', () => {
+    expect(clientLabel(request())).toBe('Client');
+    expect(clientLabel({ ...request(), tag: 'laptop' })).toBe('Client · laptop');
+    expect(clientLabel({ ...request(), caller_name: '', tag: 'laptop' })).toBe('caller · laptop');
+    expect(clientLabel({ ...request(), caller_name: '', caller_id: '' })).toBe('Unknown client');
+  });
+
   const error = (): ProxyRequest => ({ ...request(), status: 429, outcome: 'http_error' });
   it('groups only consecutive equal errors and never across a local day', () => {
     const first = error();
@@ -340,6 +348,7 @@ describe('consecutive unmeasured HTTP error grouping', () => {
     { caller_id: 'other' },
     { revision: 2 },
     { caller_name: 'Other' },
+    { tag: 'laptop' },
     { status: 500 },
     { outcome: 'incomplete' },
     { usage: { usage: { model: 'other' } } },

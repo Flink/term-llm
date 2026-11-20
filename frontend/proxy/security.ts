@@ -1,4 +1,5 @@
 import { nativeConnectionDetails, routeNativeProvider, routeAllowsClientApproval } from './native';
+import { termLLMConfigSection, tokenCopyRow } from './client-config-snippet';
 import {
   clientLabel,
   clientListHeader,
@@ -181,6 +182,7 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
   const name = input();
   name.required = true;
   name.maxLength = 80;
+  name.placeholder = 'e.g. laptop, workstation';
   // Block additions until every native route in a provider is shared and ready.
   const groups = providerGroups(state);
   const unavailable = new Map<string, string[]>();
@@ -199,21 +201,23 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
   );
   const form = el('form', field('Client name', name));
   if (groups.length) {
-    form.append(
-      providers.fields,
-      el(
-        'p',
-        'Approval covers every current route in a provider. A route added later is not granted automatically.',
-      ),
+    const approvalNote = el(
+      'p',
+      'Approval covers every current route in a provider. A route added later is not granted automatically.',
     );
-  }
-  if (unavailable.size)
-    form.append(
-      el(
+    approvalNote.className = 'client-composer-note';
+    const providerSection = el('div', providers.fields, approvalNote);
+    providerSection.className = 'client-composer-providers';
+    if (unavailable.size) {
+      const nativeNote = el(
         'p',
         'Native providers can be approved once their shared routes are enabled and signed in.',
-      ),
-    );
+      );
+      nativeNote.className = 'client-composer-note';
+      providerSection.append(nativeNote);
+    }
+    form.append(providerSection);
+  }
   form.className = 'client-composer';
   form.id = 'client-composer';
   const create = submit(
@@ -234,40 +238,11 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
         token.readOnly = true;
         token.className = 'caller-token';
         token.spellcheck = false;
-        const copy = button('Copy token', () => {
-          void context.run(async () => {
-            if (!navigator.clipboard) {
-              token.focus();
-              token.select();
-              context.announce('Clipboard unavailable. Copy the selected token manually.');
-              return;
-            }
-            try {
-              await navigator.clipboard.writeText(token.value);
-              copy.textContent = 'Copied ✓';
-              setTimeout(() => {
-                if (copy.isConnected) copy.textContent = 'Copy token';
-              }, 2000);
-              context.announce('Client token copied. Store it safely before dismissing.');
-            } catch {
-              token.focus();
-              token.select();
-              context.announce('Copy unavailable. Copy the selected token manually.');
-            }
-          }, copy);
-        });
-        copy.setAttribute('aria-label', 'Copy token');
-        const panel = keyedCard(
-          `caller:${result.caller.id}`,
-          'Copy this token now',
-          el('p', 'Shown once. Save it securely before dismissing. It cannot be retrieved later.'),
-          field('Client token', token),
-          copy,
-          el(
-            'p',
-            'Approval covers every current route in each approved provider. For curl examples, set TOKEN in your shell to this client token, not the administrator token.',
-          ),
+        const lead = el(
+          'p',
+          'Shown once. Save it securely before dismissing. It cannot be retrieved later.',
         );
+        lead.className = 'client-token-lead';
         // Show the routes the server actually approved, not the ticked provider
         // IDs, so the examples always match the new token's access.
         const granted = new Set(
@@ -277,6 +252,32 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
                 .filter((group) => selected.includes(group.id))
                 .flatMap((group) => group.routes.map((route) => route.name)),
         );
+        const approvedGroups = groups.filter(
+          (group) =>
+            group.routes.length > 0 && group.routes.some((route) => granted.has(route.name)),
+        );
+        const panel = keyedCard(
+          `caller:${result.caller.id}`,
+          'Copy this token now',
+          lead,
+          tokenCopyRow(token, context),
+        );
+        panel.classList.add('client-token-panel');
+        const configSnippet = termLLMConfigSection(location.origin, approvedGroups, context, {
+          heading: 'h3',
+          getToken: () => token.value,
+          onTokenFallback: () => {
+            token.focus();
+            token.select();
+          },
+        });
+        if (configSnippet) panel.append(configSnippet);
+        const routeNote = el(
+          'p',
+          'Approval covers every current route in each approved provider. For curl examples, set TOKEN in your shell to this client token, not the administrator token.',
+        );
+        routeNote.className = 'client-token-note';
+        panel.append(routeNote);
         for (const route of state.routes.filter((candidate) => granted.has(candidate.name))) {
           const provider = routeNativeProvider(route, state);
           if (provider) {
@@ -334,20 +335,21 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
               el('pre', callerCurl(route, location.origin)),
             );
         }
-        panel.append(
-          button('I saved it — dismiss', () => {
-            token.value = '';
-            panel.querySelectorAll('textarea').forEach((text) => {
-              text.value = '';
-            });
-            context.protectToken(false);
-            panel.remove();
-            void context.run(async () => {
-              await context.refresh(`caller:${result.caller.id}`);
-              context.announce('Client created. The one-time token has been dismissed.');
-            });
-          }),
-        );
+        const dismiss = button('I saved it — dismiss', () => {
+          token.value = '';
+          panel.querySelectorAll('textarea').forEach((text) => {
+            text.value = '';
+          });
+          context.protectToken(false);
+          panel.remove();
+          void context.run(async () => {
+            await context.refresh(`caller:${result.caller.id}`);
+            context.announce('Client created. The one-time token has been dismissed.');
+          });
+        });
+        const footer = actions(dismiss);
+        footer.classList.add('client-token-footer');
+        panel.append(footer);
         // Only token actions remain reachable until explicit dismissal/navigation.
         view.inert = false;
         view.replaceChildren(intro, panel);
@@ -364,7 +366,10 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
     'Create client',
   );
   if (!approvable && state.routes.length) create.disabled = true;
-  form.append(button('Cancel', () => setComposer(false, true)));
+  const cancel = button('Cancel', () => setComposer(false, true));
+  const composerFooter = actions(create, cancel);
+  composerFooter.classList.add('client-composer-actions');
+  form.append(composerFooter);
   if (!state.routes.length) {
     const note = el(
       'p',

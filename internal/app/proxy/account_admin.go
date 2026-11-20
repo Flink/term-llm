@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/term-llm/term-llm/internal/buildinfo"
@@ -147,31 +146,7 @@ func (s *Service) accountsAPI(w http.ResponseWriter, r *http.Request, sess sessi
 
 // whoami is caller-token-only and deliberately matched before the browser admin
 // handler. Browser cookies, CSRF grants and token issuer operations play no role.
-func (s *Service) whoami(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", 405)
-		return
-	}
-	select {
-	case s.slots <- struct{}{}:
-	default:
-		http.Error(w, "proxy concurrency limit", 503)
-		return
-	}
-	defer func() { <-s.slots }()
-	values := r.Header.Values("Authorization")
-	if len(values) != 1 || !strings.HasPrefix(values[0], "Bearer ") {
-		http.Error(w, "unauthorized", 401)
-		return
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var id, name string
-	if s.closing || s.store.db.QueryRow("SELECT id,name FROM callers WHERE hash=? AND revoked=0", hashToken(strings.TrimPrefix(values[0], "Bearer "))).Scan(&id, &name) != nil {
-		http.Error(w, "unauthorized", 401)
-		return
-	}
+func (s *Service) whoami(w http.ResponseWriter, caller Caller) {
 	type info struct {
 		Name         string `json:"name"`
 		LocalPrefix  string `json:"local_prefix"`
@@ -184,7 +159,7 @@ func (s *Service) whoami(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		var authority string
-		if s.store.db.QueryRow("SELECT authority FROM grants WHERE caller=? AND route=?", id, route.Name).Scan(&authority) != nil || authority != route.authority {
+		if s.store.db.QueryRow("SELECT authority FROM grants WHERE caller=? AND route=?", caller.ID, route.Name).Scan(&authority) != nil || authority != route.authority {
 			continue
 		}
 		entry := info{Name: route.Name, LocalPrefix: route.LocalPrefix, WebSocket: route.WebSocket}
@@ -197,5 +172,5 @@ func (s *Service) whoami(w http.ResponseWriter, r *http.Request) {
 		}
 		routes = append(routes, entry)
 	}
-	jsonReply(w, 200, map[string]any{"name": name, "routes": routes, "version": buildinfo.Version})
+	jsonReply(w, 200, map[string]any{"name": caller.Name, "routes": routes, "version": buildinfo.Version})
 }

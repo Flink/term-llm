@@ -24,7 +24,10 @@ const (
 )
 
 // cliProxyBinding is one resolved scoped route and its private state directory.
-type cliProxyBinding struct{ Root, Token, Kind, Dir string }
+type cliProxyBinding struct {
+	proxyclient.Binding
+	Dir string
+}
 
 // prepareCLIProxyEnvironment is applied to the final child environment of
 // every CLI launch, after provider and inherited values were merged. A marker
@@ -78,7 +81,7 @@ func resolveCLIProxyBinding(env []string, marker string, kind providerspec.Type,
 	if err != nil {
 		return nil, err
 	}
-	return &cliProxyBinding{Root: binding.Root, Token: binding.Token, Kind: binding.Kind, Dir: dir}, nil
+	return &cliProxyBinding{Binding: binding, Dir: dir}, nil
 }
 
 // siblingCLIProxyRoot returns an explicitly registered sibling route of the
@@ -86,7 +89,7 @@ func resolveCLIProxyBinding(env []string, marker string, kind providerspec.Type,
 func siblingCLIProxyRoot(binding *cliProxyBinding, suffix string) (string, bool) {
 	root := binding.Root + suffix
 	sibling, ok := proxyclient.Lookup(root)
-	if !ok || sibling.Token != binding.Token || sibling.Kind != binding.Kind || !proxyclient.SameRoot(sibling.Root, root) {
+	if !ok || !sibling.SamePrincipal(binding.Binding) || !proxyclient.SameRoot(sibling.Root, root) {
 		return "", false
 	}
 	return sibling.Root, true
@@ -99,7 +102,8 @@ func cliProxyStateDir(name, root, token string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("locate private %s proxy state: %w", name, err)
 	}
-	sum := sha256.Sum256([]byte(root + "\x00" + token))
+	secret, _ := proxyprofile.SplitCallerToken(token)
+	sum := sha256.Sum256([]byte(root + "\x00" + secret))
 	dir := filepath.Join(cache, "term-llm", name+"-proxy", hex.EncodeToString(sum[:16]))
 	if err := ensurePrivateCLIProxyDir(dir); err != nil {
 		return "", fmt.Errorf("%s proxy state: %w", name, err)

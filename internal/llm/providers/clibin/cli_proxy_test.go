@@ -215,6 +215,35 @@ func TestCursorProxyForcesAllRootsTokenAndPrivateCredentialNamespace(t *testing.
 	}
 }
 
+func TestCursorProxyTagKeepsPrivateConfigAndUpdatesToken(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("cursor-bin proxy mode fails closed off Linux")
+	}
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	root := "https://cursor-proxy-tag.example.test/cursor-bin"
+	secret := "sk-tlp-" + strings.Repeat("a", 64)
+	var configDir string
+	home := t.TempDir()
+	for _, token := range []string{secret, secret + ".laptop"} {
+		if err := proxyclient.Register([]proxyclient.Binding{
+			{Root: root, Token: token, Kind: "cursor"},
+			{Root: root + "-agent", Token: token, Kind: "cursor"},
+			{Root: root + "-repo", Token: token, Kind: "cursor"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		env, err := prepareCursorProxyEnvironment([]string{cursorProxyRootEnv + "=" + root, "HOME=" + home})
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := envValue(env, "CURSOR_CONFIG_DIR")
+		if dir == "" || (configDir != "" && dir != configDir) || envValue(env, "CURSOR_AUTH_TOKEN") != token {
+			t.Fatal("Cursor did not keep its private config and use the current token")
+		}
+		configDir = dir
+	}
+}
+
 func TestCursorProxyRequiresEveryRoot(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("cursor-bin proxy mode fails closed off Linux")

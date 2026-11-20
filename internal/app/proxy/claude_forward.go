@@ -81,7 +81,7 @@ func (s *Service) claudeForward(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-func (s *Service) claudeForwardRequestSlot(w http.ResponseWriter) bool {
+func (s *Service) requestSlot(w http.ResponseWriter) bool {
 	select {
 	case s.slots <- struct{}{}:
 		return true
@@ -136,7 +136,7 @@ func (s *Service) claudeForwardBootstrap(w http.ResponseWriter, r *http.Request,
 		http.Error(w, "invalid bootstrap target", 400)
 		return
 	}
-	if !s.claudeForwardRequestSlot(w) {
+	if !s.requestSlot(w) {
 		return
 	}
 	defer func() { <-s.slots }()
@@ -146,10 +146,7 @@ func (s *Service) claudeForwardBootstrap(w http.ResponseWriter, r *http.Request,
 		if r.URL.EscapedPath() != ar.LocalPrefix+provider.discovery {
 			continue
 		}
-		values := r.Header.Values(ar.CallerAuth.Header)
-		if len(values) == 1 && strings.HasPrefix(values[0], ar.CallerAuth.Prefix) {
-			name, token = ar.Name, strings.TrimPrefix(values[0], ar.CallerAuth.Prefix)
-		}
+		name, token = ar.Name, callerCredential(r.Header, ar.CallerAuth.Header, ar.CallerAuth.Prefix)
 		break
 	}
 	ar, caller, err := s.nativeForwardRouteLocked(name, token, provider)
@@ -212,7 +209,7 @@ func (s *Service) claudeForwardAdmit(w http.ResponseWriter, r *http.Request) *cl
 		http.Error(w, "proxy authentication required", 407)
 		return nil
 	}
-	if !s.claudeForwardRequestSlot(w) {
+	if !s.requestSlot(w) {
 		return nil
 	}
 	defer func() { <-s.slots }()

@@ -37,6 +37,7 @@ func (s *store) createNativeSetup(ctx context.Context, next *snapshot, account *
 type nativeSetupCaller struct{ id, token, name string }
 
 func (c nativeSetupCaller) write(ctx context.Context, tx *sql.Tx, grants []string, next *snapshot) error {
+	hash, _ := callerTokenHash(c.token)
 	if c.token == "" {
 		if err := editableCaller(tx, c.id); err != nil {
 			return err
@@ -48,7 +49,7 @@ func (c nativeSetupCaller) write(ctx context.Context, tx *sql.Tx, grants []strin
 		}
 	} else if err := makeCallerRoom(ctx, tx, inputError("Client limit reached (1024)")); err != nil {
 		return err
-	} else if _, err := tx.ExecContext(ctx, "INSERT INTO callers(id,name,hash,created) VALUES(?,?,?,?)", c.id, c.name, hashToken(c.token), time.Now().UnixMilli()); err != nil {
+	} else if _, err := tx.ExecContext(ctx, "INSERT INTO callers(id,name,hash,created) VALUES(?,?,?,?)", c.id, c.name, hash, time.Now().UnixMilli()); err != nil {
 		return err
 	}
 	return writeGrants(tx, c.id, grants, next)

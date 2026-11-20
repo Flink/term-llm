@@ -27,7 +27,7 @@ func (s *Service) claudeForwardProbe(w http.ResponseWriter, r *http.Request, hos
 		http.Error(w, "connectivity probes cannot contain a body", http.StatusBadRequest)
 		return
 	}
-	if !s.claudeForwardRequestSlot(w) {
+	if !s.requestSlot(w) {
 		return
 	}
 	defer func() { <-s.slots }()

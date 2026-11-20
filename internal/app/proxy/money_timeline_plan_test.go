@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/term-llm/term-llm/internal/app/proxy/moneytimeline"
 )
 
 func timelinePlanEstimate(kind, currency string, micros int64) Money {
@@ -25,21 +27,21 @@ func TestTimelineStoredPlanOnlyOnDefaultAPI(t *testing.T) {
 	if !s.moneyAPI(w, httptest.NewRequest(http.MethodGet, "/_proxy/api/timeline", nil), "timeline") || w.Code != http.StatusOK {
 		t.Fatalf("default timeline status %d: %s", w.Code, w.Body.String())
 	}
-	var got moneyTimeline
+	var got moneytimeline.Response
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
 	if got.Range != "30d" || !reflect.DeepEqual(got.Currencies, []string{"USD"}) {
 		t.Fatalf("unexpected default range or currencies: %s", w.Body.String())
 	}
-	var all []timelineSeries
+	var all []moneytimeline.Series
 	for _, bucket := range got.Buckets {
 		all = append(all, bucket.Series...)
 	}
 	if len(all) != 1 || all[0].Key != "total" || all[0].UnknownCost != 0 || all[0].Plan != 1 {
 		t.Fatalf("unexpected default series: %+v", all)
 	}
-	want := []timelineCost{{Currency: "USD", Micros: 40, Estimated: true, PlanEstimateMicros: moneyPtr(40)}}
+	want := []moneytimeline.Cost{{Currency: "USD", Micros: 40, Estimated: true, PlanEstimateMicros: moneyPtr(40)}}
 	if !reflect.DeepEqual(all[0].Costs, want) || !strings.Contains(w.Body.String(), `"plan_estimate_micros":40`) {
 		t.Fatalf("default timeline did not include the frozen estimate: %s", w.Body.String())
 	}
@@ -74,7 +76,7 @@ func TestTimelineStoredPlanMixesCostsWithoutChangingSummaryOrBudget(t *testing.T
 		t.Fatal(err)
 	}
 	series := got.Buckets[len(got.Buckets)-1].Series
-	want := []timelineCost{
+	want := []moneytimeline.Cost{
 		{Currency: "AUD", Micros: 20, Estimated: true},
 		{Currency: "EUR", Micros: 30, Estimated: true, PlanEstimateMicros: moneyPtr(30)},
 		{Currency: "USD", Micros: 140, Estimated: true, PlanEstimateMicros: moneyPtr(40)},
@@ -126,9 +128,9 @@ func TestTimelineStoredPlanCoverageRequiresValidEvidence(t *testing.T) {
 			a, currencies := freshTimelineAggregate(), map[string]bool{}
 			accumulateTimelineRecord(a, MoneyRecord{Money: m}, currencies)
 			series := timelineSeriesFromAggregate("total", a, []string{"USD"})
-			var want []timelineCost
+			var want []moneytimeline.Cost
 			if tc.wantCost {
-				want = []timelineCost{{Currency: "USD", Micros: *m.APIEquivalent.Amount, Estimated: true, PlanEstimateMicros: m.APIEquivalent.Amount}}
+				want = []moneytimeline.Cost{{Currency: "USD", Micros: *m.APIEquivalent.Amount, Estimated: true, PlanEstimateMicros: m.APIEquivalent.Amount}}
 			}
 			if series.UnknownCost != tc.unknown || currencies["USD"] != tc.wantCost || (tc.wantCost && !reflect.DeepEqual(series.Costs, want)) || (!tc.wantCost && len(series.Costs) != 0) {
 				t.Fatalf("wrong cost or coverage: %+v, currencies=%v", series, currencies)
@@ -151,12 +153,13 @@ func TestTimelineStoredPlanGroupsByClientAndProviderOnLocalDates(t *testing.T) {
 	insertTimelineEvidence(t, s, "f", midnight, MoneyRecord{DeviceID: "f", Provider: "openai", Money: timelinePlanEstimate("estimated", "USD", 30)})
 	insertTimelineEvidence(t, s, "g", midnight, MoneyRecord{DeviceID: "g", Provider: "openai", Money: timelinePlanEstimate("estimated_floor", "USD", 40)})
 
+	type planTotals struct{ micros, requests, missing int64 }
 	for _, tc := range []struct {
-		group, previousKey, currentKey string
-		seriesCount                    int
+		group, previousKey string
+		current            map[string]planTotals
 	}{
-		{"client", "a", timelineOtherKey, 6},
-		{"provider", "chatgpt", "openai", 2},
+		{"client", "a", map[string]planTotals{"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {30, 1, 0}, "g": {40, 1, 1}}},
+		{"provider", "chatgpt", map[string]planTotals{"fixture": {}, "openai": {70, 2, 1}}},
 	} {
 		t.Run(tc.group, func(t *testing.T) {
 			got, err := s.moneyTimeline(context.Background(), now, "7d", tc.group, nil)
@@ -165,49 +168,46 @@ func TestTimelineStoredPlanGroupsByClientAndProviderOnLocalDates(t *testing.T) {
 			}
 			before, after := got.Buckets[5], got.Buckets[6]
 			if before.Label != "2026-11-17" || after.Label != "2026-11-18" || !after.Start.Equal(midnight) ||
-				len(before.Series) != 1 || len(after.Series) != tc.seriesCount {
+				len(before.Series) != 1 || len(after.Series) != len(tc.current) {
 				t.Fatalf("unexpected buckets: before=%+v after=%+v", before, after)
 			}
-			wantDay1 := []timelineCost{{Currency: "USD", Micros: 20, Estimated: true, PlanEstimateMicros: moneyPtr(20)}}
+			wantDay1 := []moneytimeline.Cost{{Currency: "USD", Micros: 20, Estimated: true, PlanEstimateMicros: moneyPtr(20)}}
 			if day1 := before.Series[0]; day1.Key != tc.previousKey || day1.Plan != 1 || day1.UnknownCost != 0 || !reflect.DeepEqual(day1.Costs, wantDay1) {
 				t.Fatalf("previous day's estimate went into the wrong group: %+v", day1)
 			}
-			wantDay2 := []timelineCost{{Currency: "USD", Micros: 70, Estimated: true, PlanEstimateMicros: moneyPtr(70)}}
-			var found bool
 			for _, series := range after.Series {
-				if series.Key == tc.currentKey {
-					found = true
-					if series.Plan != 2 || series.UnknownCost != 1 || !reflect.DeepEqual(series.Costs, wantDay2) {
-						t.Fatalf("group lost plan totals or floor qualifier: %+v", series)
-					}
-				} else if len(series.Costs) > 0 {
-					t.Fatalf("estimate assigned to wrong group: %+v", series)
+				totals, ok := tc.current[series.Key]
+				wantCosts := []moneytimeline.Cost{}
+				if totals.micros > 0 {
+					wantCosts = append(wantCosts, moneytimeline.Cost{Currency: "USD", Micros: totals.micros, Estimated: true, PlanEstimateMicros: moneyPtr(totals.micros)})
 				}
-			}
-			if !found {
-				t.Fatalf("missing group %q: %+v", tc.currentKey, after.Series)
+				if !ok || series.Plan != totals.requests || series.UnknownCost != totals.missing || !reflect.DeepEqual(series.Costs, wantCosts) {
+					t.Fatalf("wrong group or plan totals: %+v", series)
+				}
 			}
 		})
 	}
 }
 
 func TestTimelineStoredPlanOverflowPreservesExistingCost(t *testing.T) {
-	a, b := freshTimelineAggregate(), freshTimelineAggregate()
+	a := freshTimelineAggregate()
 	currencies := map[string]bool{}
-	for _, row := range []Money{timelinePlanEstimate("estimated", "USD", maxMoneyMicros), timelinePlanEstimate("estimated", "USD", 30)} {
+	for _, row := range []Money{
+		timelinePlanEstimate("estimated", "USD", maxMoneyMicros),
+		timelinePlanEstimate("estimated", "USD", 30),
+		timelinePlanEstimate("estimated_floor", "USD", 40),
+	} {
 		accumulateTimelineRecord(a, MoneyRecord{Money: row}, currencies)
 	}
-	accumulateTimelineRecord(b, MoneyRecord{Money: timelinePlanEstimate("estimated_floor", "USD", 40)}, currencies)
-	mergeTimelineAggregate(a, b)
 	before := timelineSeriesFromAggregate("total", a, []string{"USD"})
-	wantPlan := []timelineCost{{Currency: "USD", Micros: maxMoneyMicros, Estimated: true, PlanEstimateMicros: moneyPtr(maxMoneyMicros)}}
+	wantPlan := []moneytimeline.Cost{{Currency: "USD", Micros: maxMoneyMicros, Estimated: true, PlanEstimateMicros: moneyPtr(maxMoneyMicros)}}
 	if before.UnknownCost != 2 || !reflect.DeepEqual(before.Costs, wantPlan) {
 		t.Fatalf("overflow dropped plotted plan estimate or counted a floor twice: %+v", before)
 	}
 	paid := Money{Billing: "pay_as_you_go", Kind: "charged", Currency: "USD", Amount: moneyPtr(100), Source: "fixture", AsOf: "2026-11-16"}
 	accumulateTimelineRecord(a, MoneyRecord{Money: paid}, currencies)
 	after := timelineSeriesFromAggregate("total", a, []string{"USD"})
-	if after.UnknownCost != 3 || !reflect.DeepEqual(after.Costs, []timelineCost{{Currency: "USD", Micros: 100}}) {
+	if after.UnknownCost != 3 || !reflect.DeepEqual(after.Costs, []moneytimeline.Cost{{Currency: "USD", Micros: 100}}) {
 		t.Fatalf("mixed currency overflow lost the existing plotted charge: %+v", after)
 	}
 }

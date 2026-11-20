@@ -96,19 +96,29 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it('renders the saved client name even after the client is deleted', async () => {
+it('renders the saved client name and tag even after the client is deleted', async () => {
   const { root, requests } = setup(1);
+  const request = {
+    ...record(1),
+    caller_id: 'c_deleted',
+    caller_name: 'Deleted client',
+    tag: 'lab',
+  };
   requests.mockImplementation(async () => ({
-    requests: [{ ...record(1), caller_id: 'c_deleted', caller_name: 'Deleted client' }],
+    requests: [request],
     next: 0,
     total: 1,
     page: 1,
     page_size: 25,
   }));
   // The state fixture has no callers. The ledger must use the request snapshot.
-  await waitFor(() =>
-    expect(root.querySelector('.request-client')).toHaveTextContent('Deleted client'),
-  );
+  await waitFor(() => {
+    const cell = root.querySelector('.request-client');
+    expect(cell).toHaveTextContent('Deleted client · lab');
+    expect(cell).toHaveAttribute('title', 'Client: Deleted client · lab · Route: route');
+    expect(cell).toHaveAttribute('aria-label', 'Client: Deleted client · lab · Route: route');
+  });
+  expect(requestDetail(request)).toHaveTextContent('Deleted client · lab');
 });
 
 describe('first-page polling', () => {

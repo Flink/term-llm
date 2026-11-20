@@ -52,31 +52,7 @@ func mergeProviderConfigUpdates(providers map[string]Provider, updates map[strin
 
 // clientProviders serves caller-token-authenticated discovery for granted
 // providers and their optional term-llm client_config metadata.
-func (s *Service) clientProviders(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	select {
-	case s.slots <- struct{}{}:
-	default:
-		http.Error(w, "proxy concurrency limit", http.StatusServiceUnavailable)
-		return
-	}
-	defer func() { <-s.slots }()
-	values := r.Header.Values("Authorization")
-	if len(values) != 1 || !strings.HasPrefix(values[0], "Bearer ") {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var callerID string
-	if s.closing || s.store.db.QueryRow("SELECT id FROM callers WHERE hash=? AND revoked=0", hashToken(strings.TrimPrefix(values[0], "Bearer "))).Scan(&callerID) != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
+func (s *Service) clientProviders(w http.ResponseWriter, caller Caller) {
 	c := s.snap.config
 	groups := providerRoutes(c)
 	granted := make(map[string]string)
@@ -86,7 +62,7 @@ func (s *Service) clientProviders(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		var authority string
-		if s.store.db.QueryRow("SELECT authority FROM grants WHERE caller=? AND route=?", callerID, ar.Name).Scan(&authority) != nil || authority != ar.authority {
+		if s.store.db.QueryRow("SELECT authority FROM grants WHERE caller=? AND route=?", caller.ID, ar.Name).Scan(&authority) != nil || authority != ar.authority {
 			continue
 		}
 		granted[ar.Name] = ar.Provider

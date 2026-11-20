@@ -5,57 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
-	"strings"
 	"time"
+
+	"github.com/term-llm/term-llm/internal/app/proxy/moneytimeline"
 )
-
-const timelineOtherKey = "\x00timeline-other"
-
-type moneyTimeline struct {
-	Timezone   string           `json:"timezone"`
-	Range      string           `json:"range"`
-	Start      time.Time        `json:"start"`
-	End        time.Time        `json:"end"`
-	Currencies []string         `json:"currencies"`
-	Buckets    []timelineBucket `json:"buckets"`
-}
-type timelineBucket struct {
-	Start  time.Time        `json:"start"`
-	End    time.Time        `json:"end"`
-	Label  string           `json:"label"`
-	Series []timelineSeries `json:"series"`
-}
-type timelineSeries struct {
-	Key           string         `json:"key"`
-	Label         string         `json:"label"`
-	Costs         []timelineCost `json:"costs"`
-	Tokens        *int64         `json:"tokens,omitempty"`
-	UnknownCost   int64          `json:"unknown_cost"`
-	UnknownTokens int64          `json:"unknown_tokens"`
-	Plan          int64          `json:"plan"`
-}
-type timelineCost struct {
-	Currency           string `json:"currency"`
-	Micros             int64  `json:"micros"`
-	Estimated          bool   `json:"estimated"`
-	PlanEstimateMicros *int64 `json:"plan_estimate_micros,omitempty"`
-}
-type timelinePlanCost struct {
-	micros   int64
-	complete int64 // Floors are already counted in unknownCost.
-}
-type timelineAggregate struct {
-	label     string
-	cost      map[string]int64
-	estimated map[string]bool
-	// Keep plan estimates separate so they cannot displace existing plotted costs on overflow.
-	planCost                         map[string]timelinePlanCost
-	tokens                           int64
-	tokenKnown                       bool
-	unknownCost, unknownTokens, plan int64
-	requests                         int64
-}
 
 func validTimelineGroup(group string) bool {
 	switch group {
@@ -68,133 +21,80 @@ func validTimelineGroup(group string) bool {
 
 // An explicit location affects this chart only. Callers without one keep the
 // configured money timezone, which still governs summaries and budgets.
-func (s *Service) moneyTimeline(ctx context.Context, now time.Time, period, group string, loc *time.Location) (moneyTimeline, error) {
+func (s *Service) moneyTimeline(ctx context.Context, now time.Time, period, group string, loc *time.Location) (moneytimeline.Response, error) {
 	if !validTimelineGroup(group) {
-		return moneyTimeline{}, fmt.Errorf("invalid group")
+		return moneytimeline.Response{}, fmt.Errorf("invalid group")
 	}
 	if loc == nil {
 		settings, err := s.currentMoneySettings(ctx)
 		if err != nil {
-			return moneyTimeline{}, err
+			return moneytimeline.Response{}, err
 		}
 		loc, err = time.LoadLocation(settings.Timezone) // An empty timezone means UTC.
 		if err != nil {
-			return moneyTimeline{}, err
+			return moneytimeline.Response{}, err
 		}
 	}
-	start, bounds, hourly, err := timelineBounds(now, loc, period)
+	result, err := moneytimeline.New(now, loc, period)
 	if err != nil {
-		return moneyTimeline{}, err
+		return moneytimeline.Response{}, err
 	}
-	count := len(bounds) - 1
-	end := now
-	result := moneyTimeline{Timezone: loc.String(), Range: period, Start: start, End: end, Currencies: []string{}, Buckets: make([]timelineBucket, count)}
-	for i := 0; i < count; i++ {
-		e := bounds[i+1]
-		if e.After(now) {
-			e = now
-		}
-		if e.Before(bounds[i]) {
-			e = bounds[i]
-		}
-		label := bounds[i].In(loc).Format("2006-01-02 15:00 -0700")
-		if !hourly {
-			label = bounds[i].In(loc).Format("2006-01-02")
-		}
-		result.Buckets[i] = timelineBucket{Start: bounds[i], End: e, Label: label, Series: []timelineSeries{}}
-	}
+	from, through := result.Start.UnixMilli(), result.End.UnixMilli()
 	// Repair retained rows before reading so pre-feature requests are represented
 	// and missing response observations can be backfilled without repricing.
-	if err := s.store.reconcileMoneyHistory(ctx, start.UnixMilli(), now.UnixMilli()); err != nil {
-		return moneyTimeline{}, err
+	if err := s.store.reconcileMoneyHistory(ctx, from, through); err != nil {
+		return moneytimeline.Response{}, fmt.Errorf("reconcile current timeline: %w", err)
 	}
-	// Stream every retained matching financial row. No LIMIT or request-body data.
-	rows, err := s.store.db.QueryContext(ctx, "SELECT started,caller,route,data FROM money_history WHERE started>=? AND started<=? ORDER BY started,request_id", start.UnixMilli(), now.UnixMilli())
+	aggs := make([]map[string]*timelineAggregate, len(result.Buckets))
+	currencySet := map[string]bool{}
+	err = s.store.streamTimelineRows(ctx, from, through, func(ms int64, caller, route string, rec MoneyRecord) {
+		idx := result.BucketIndex(time.UnixMilli(ms))
+		if idx < 0 {
+			return
+		}
+		if aggs[idx] == nil {
+			aggs[idx] = map[string]*timelineAggregate{}
+		}
+		key, label := timelineGroupIdentity(rec, caller, route, group)
+		a := aggs[idx][key]
+		if a == nil {
+			a = newTimelineAggregate(label)
+			aggs[idx][key] = a
+		}
+		accumulateTimelineRecord(a, rec, currencySet)
+	})
 	if err != nil {
-		return moneyTimeline{}, err
+		return moneytimeline.Response{}, fmt.Errorf("read current timeline: %w", err)
+	}
+	result.Currencies = sortedTimelineCurrencies(currencySet)
+	finalizeTimelineBuckets(&result, aggs)
+	if result.Previous, err = s.timelinePrevious(ctx, result); err != nil {
+		return moneytimeline.Response{}, err
+	}
+	return result, nil
+}
+
+// streamTimelineRows reads all retained financial rows in an inclusive
+// millisecond interval. It does not load technical requests or their bodies.
+func (s *store) streamTimelineRows(ctx context.Context, from, through int64, visit func(ms int64, caller, route string, rec MoneyRecord)) error {
+	rows, err := s.db.QueryContext(ctx, "SELECT started,caller,route,data FROM money_history WHERE started>=? AND started<=? ORDER BY started,request_id", from, through)
+	if err != nil {
+		return err
 	}
 	defer rows.Close()
-	aggs := make([]map[string]*timelineAggregate, count)
-	currencySet := map[string]bool{}
-	for i := range aggs {
-		aggs[i] = map[string]*timelineAggregate{}
-	}
 	for rows.Next() {
 		var ms int64
 		var caller, route, data string
-		if err = rows.Scan(&ms, &caller, &route, &data); err != nil {
-			return moneyTimeline{}, err
+		if err := rows.Scan(&ms, &caller, &route, &data); err != nil {
+			return err
 		}
 		var rec MoneyRecord
 		if json.Unmarshal([]byte(data), &rec) != nil {
 			rec.Money = *pendingRequestMoney("unspecified")
 		}
-		t := time.UnixMilli(ms)
-		idx := timelineBucketIndex(t, bounds)
-		if idx < 0 {
-			continue
-		}
-		key, label := timelineGroupIdentity(rec, caller, route, group)
-		a := aggs[idx][key]
-		if a == nil {
-			a = &timelineAggregate{label: label, cost: map[string]int64{}, estimated: map[string]bool{}}
-			aggs[idx][key] = a
-		}
-		accumulateTimelineRecord(a, rec, currencySet)
+		visit(ms, caller, route, rec)
 	}
-	if err = rows.Err(); err != nil {
-		return moneyTimeline{}, err
-	}
-	for c := range currencySet {
-		result.Currencies = append(result.Currencies, c)
-	}
-	sort.Strings(result.Currencies)
-	finalizeTimelineBuckets(&result, aggs)
-	return result, nil
-}
-
-func timelineProviderLabel(raw string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "openai":
-		return "OpenAI"
-	case "anthropic", "claude-code", "claude-bin":
-		return "Claude"
-	case "chatgpt":
-		return "ChatGPT"
-	case "grok", "xai", "grok-bin":
-		return "Grok"
-	case "gemini", "google":
-		return "Gemini"
-	case "copilot":
-		return "Copilot"
-	default:
-		return ""
-	}
-}
-
-func mergeTimelineAggregate(dst, src *timelineAggregate) {
-	for currency, value := range src.cost {
-		if value > maxMoneyMicros-dst.cost[currency] {
-			dst.unknownCost++
-			dst.estimated[currency] = true
-		} else {
-			dst.cost[currency] += value
-		}
-		dst.estimated[currency] = dst.estimated[currency] || src.estimated[currency]
-	}
-	for currency, cost := range src.planCost {
-		dst.addPlanCost(currency, cost)
-	}
-	dst.unknownCost += src.unknownCost
-	dst.unknownTokens += src.unknownTokens
-	dst.plan += src.plan
-	dst.requests += src.requests
-	if dst.tokens > maxMoneyMicros-src.tokens {
-		dst.unknownTokens++
-	} else {
-		dst.tokens += src.tokens
-	}
-	dst.tokenKnown = dst.tokenKnown || src.tokenKnown
+	return rows.Err()
 }
 
 func (s *Service) timelineAPI(w http.ResponseWriter, r *http.Request) bool {
@@ -206,7 +106,7 @@ func (s *Service) timelineAPI(w http.ResponseWriter, r *http.Request) bool {
 	if group == "" {
 		group = "total"
 	}
-	if (period != "today" && period != "7d" && period != "30d") || !validTimelineGroup(group) {
+	if !moneytimeline.ValidRange(period) || !validTimelineGroup(group) {
 		fail(w, 400, "Invalid timeline range or grouping")
 		return true
 	}
@@ -229,5 +129,3 @@ func (s *Service) timelineAPI(w http.ResponseWriter, r *http.Request) bool {
 	jsonReply(w, 200, out)
 	return true
 }
-
-var _ = http.MethodGet

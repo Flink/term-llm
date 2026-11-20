@@ -17,6 +17,7 @@ import (
 type ProxyConfig struct {
 	URL          string   `mapstructure:"url" yaml:"url,omitempty"`
 	Token        string   `mapstructure:"token" yaml:"token,omitempty"`
+	Tag          string   `mapstructure:"tag" yaml:"tag,omitempty"`
 	Direct       []string `mapstructure:"direct" yaml:"direct,omitempty"`
 	Providers    []string `mapstructure:"providers" yaml:"providers,omitempty"`
 	materialized bool
@@ -98,6 +99,11 @@ func resolveProxySRVURL(u *url.URL) error {
 }
 
 func (c *Config) materializeProxy(file *fileSettings) error {
+	if tag := c.Proxy.Tag; tag != "" {
+		if err := proxyprofile.ValidateCallerTag(tag); err != nil {
+			return err
+		}
+	}
 	if err := c.Proxy.readProviderSelection(file); err != nil {
 		return err
 	}
@@ -128,6 +134,10 @@ func (c *Config) materializeProxy(file *fileSettings) error {
 	token, err := Cred(c.Proxy.Token).Resolve()
 	if err != nil || len(token) < 16 || strings.ContainsAny(token, "\r\n\t ") {
 		return fmt.Errorf("proxy.token must resolve to a private scoped client token (at least 16 characters)")
+	}
+	token, err = proxyprofile.TagCallerToken(token, c.Proxy.Tag)
+	if err != nil {
+		return err
 	}
 	catalog, err := discoverProxyProviders(root, token)
 	if err != nil {

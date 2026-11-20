@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+
+	"github.com/term-llm/term-llm/internal/proxyprofile"
 )
 
 // Binding is an explicit credential delegation to an API root. Tokens are never serialized.
@@ -42,10 +44,10 @@ func Register(bindings []Binding) error {
 		if err != nil {
 			return err
 		}
-		if old, ok := pending[root]; ok && (old.Kind != b.Kind || old.Token != b.Token) {
+		if old, ok := pending[root]; ok && !old.SamePrincipal(b) {
 			return fmt.Errorf("proxy API root cannot represent conflicting credential kinds or principals")
 		}
-		if old, ok := registry.bindings[root]; ok && (old.Kind != b.Kind || old.Token != b.Token) {
+		if old, ok := registry.bindings[root]; ok && !old.SamePrincipal(b) {
 			return fmt.Errorf("proxy API root is already bound to another credential kind or caller; restart after changing proxy client identity")
 		}
 		pending[root] = b
@@ -66,6 +68,17 @@ func Register(bindings []Binding) error {
 		registry.bindings[root] = b
 	}
 	return nil
+}
+
+func callerSecret(token string) string {
+	secret, _ := proxyprofile.SplitCallerToken(token)
+	return secret
+}
+
+// SamePrincipal reports whether two bindings use the same credential kind
+// and caller secret, regardless of attribution tags.
+func (a Binding) SamePrincipal(b Binding) bool {
+	return a.Kind == b.Kind && callerSecret(a.Token) == callerSecret(b.Token)
 }
 
 // Lookup returns only a registered API root or an operation below that root.

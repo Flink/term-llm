@@ -228,11 +228,11 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if path, ok := strings.CutPrefix(r.URL.Path, "/_proxy/client/"); ok {
 		switch path {
 		case "v1/whoami":
-			s.whoami(w, r)
+			s.serveClientQuery(w, r, s.whoami)
 		case "v1/providers":
 			http.Error(w, "proxy discovery v1 was removed; upgrade term-llm", http.StatusGone)
 		case "v2/providers":
-			s.clientProviders(w, r)
+			s.serveClientQuery(w, r, s.clientProviders)
 		default:
 			// An unavailable binding is a base URL, so callers can append paths.
 			tail, unavailable := strings.CutPrefix(path, "unavailable/")
@@ -287,10 +287,7 @@ func (s *Service) forward(w http.ResponseWriter, r *http.Request) {
 	}
 	// Bound admission before authentication/store work; rejected traffic must not
 	// create an unbounded queue waiting for SQLite or a configuration writer.
-	select {
-	case s.slots <- struct{}{}:
-	default:
-		http.Error(w, "proxy concurrency limit", 503)
+	if !s.requestSlot(w) {
 		return
 	}
 	defer func() { <-s.slots }()
@@ -319,13 +316,7 @@ func (s *Service) forward(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported upgrade", 400)
 		return
 	}
-	values := r.Header.Values(route.CallerAuth.Header)
-	if len(values) != 1 || !strings.HasPrefix(values[0], route.CallerAuth.Prefix) {
-		s.mu.RUnlock()
-		http.Error(w, "unauthorized", 401)
-		return
-	}
-	token := strings.TrimPrefix(values[0], route.CallerAuth.Prefix)
+	token := callerCredential(r.Header, route.CallerAuth.Header, route.CallerAuth.Prefix)
 	if token == "" || subtle.ConstantTimeCompare([]byte(hashToken(token)), []byte(s.adminHash)) == 1 {
 		s.mu.RUnlock()
 		http.Error(w, "unauthorized", 401)
@@ -360,7 +351,7 @@ func (s *Service) forward(w http.ResponseWriter, r *http.Request) {
 	peer, _, _ := net.SplitHostPort(r.RemoteAddr)
 	path := strings.TrimPrefix(r.URL.EscapedPath(), ar.LocalPrefix)
 	started := time.Now()
-	rec := Record{App: s.redactPath(boundedAttribution(r.Header.Get("X-Term-LLM-Proxy-App")), token, snap), ID: id, Started: started.UnixMilli(), CallerID: caller.ID, CallerName: caller.Name, Route: ar.Name, Revision: snap.revision, Method: r.Method, Path: s.redactPath("/"+path, token, snap), LocalPrefix: ar.LocalPrefix, Peer: peer, Outcome: "unknown"}
+	rec := Record{App: s.redactPath(boundedAttribution(r.Header.Get("X-Term-LLM-Proxy-App")), token, snap), ID: id, Started: started.UnixMilli(), CallerID: caller.ID, CallerName: caller.Name, Tag: caller.Tag, Route: ar.Name, Revision: snap.revision, Method: r.Method, Path: s.redactPath("/"+path, token, snap), LocalPrefix: ar.LocalPrefix, Peer: peer, Outcome: "unknown"}
 	rec.Money = pendingRequestMoney(ar.Route.Billing)
 	if err = s.store.start(r.Context(), &rec); err != nil {
 		s.mu.RUnlock()
@@ -404,7 +395,7 @@ func hasConnectionToken(h http.Header, token string) bool {
 }
 func (s *Service) redactPath(path, token string, snap *snapshot) string {
 	decoded, _ := url.PathUnescape(path)
-	for _, value := range []string{token} {
+	for _, value := range []string{token, distinctCallerSecret(token)} {
 		if value != "" {
 			decoded = strings.ReplaceAll(decoded, value, "[redacted]")
 		}

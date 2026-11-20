@@ -4,11 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/term-llm/term-llm/internal/app/proxy/moneytimeline"
 	"github.com/term-llm/term-llm/internal/app/proxy/usagetap"
 )
+
+// Keep the chart cost fixture shared with the provider-level usage tests.
+type timelineCost = moneytimeline.Cost
 
 func setTimelineZone(t *testing.T, s *Service, zone string) {
 	t.Helper()
@@ -82,78 +87,60 @@ func TestMoneyTimelineKeepsKnownTokensBesideUnknownEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var found *timelineSeries
+	var found *moneytimeline.Series
 	for i := range got.Buckets {
 		if len(got.Buckets[i].Series) > 0 {
 			found = &got.Buckets[i].Series[0]
 			break
 		}
 	}
-	if found == nil || found.Tokens == nil || *found.Tokens != 14 || found.UnknownTokens != 2 {
-		t.Fatalf("known tokens lost: %+v", found)
+	want := moneytimeline.TokenParts{Input: 8, Output: 4, CacheRead: 2}
+	if found == nil || found.Tokens == nil || *found.Tokens != 14 || found.UnknownTokens != 2 || found.TokenParts == nil || *found.TokenParts != want {
+		t.Fatalf("known token evidence lost: %+v", found)
 	}
 }
-func TestMoneyTimelineGroupsUnknownOnceAndCapsSeries(t *testing.T) {
+func TestMoneyTimelineKeepsAllClientAndProviderGroups(t *testing.T) {
 	s := testService(t)
 	now := time.Date(2026, 11, 17, 12, 30, 0, 0, time.UTC)
-	for i := 0; i < 8; i++ {
-		data, _ := json.Marshal(MoneyRecord{Started: now, DeviceID: fmt.Sprintf("client-%d", i), Device: fmt.Sprintf("Client %d", i), Provider: "openai", Money: Money{Billing: "pay_as_you_go", Kind: "unmeasured"}})
-		if _, err := s.store.db.Exec("INSERT INTO money_history(request_id,started,caller,route,data) VALUES(?,?,?,?,?)", fmt.Sprintf("row-%d", i), now.UnixMilli(), fmt.Sprintf("client-%d", i), "openai", string(data)); err != nil {
-			t.Fatal(err)
+	var clients, providers []moneytimeline.Series
+	for i := range 8 {
+		client, provider := fmt.Sprintf("client-%d", i), fmt.Sprintf("provider-%d", i)
+		label := fmt.Sprintf("Client %d", i)
+		if i == 7 {
+			client, label = "total", "Total Labs"
 		}
+		insertTimelineEvidence(t, s, client, now, MoneyRecord{DeviceID: client, Device: label, Provider: provider, Money: Money{Billing: "pay_as_you_go", Kind: "unmeasured"}})
+		clients = append(clients, moneytimeline.Series{Key: client, Label: label, Costs: []moneytimeline.Cost{}, UnknownCost: 1, UnknownTokens: 1})
+		providers = append(providers, moneytimeline.Series{Key: provider, Label: provider, Costs: []moneytimeline.Cost{}, UnknownCost: 1, UnknownTokens: 1})
 	}
-	got, err := s.moneyTimeline(context.Background(), now, "7d", "client", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var total int64
-	for _, b := range got.Buckets {
-		for _, item := range b.Series {
-			if item.UnknownCost != 0 && item.Key != timelineOtherKey && item.UnknownCost != 1 {
-				t.Fatalf("unknown cost counted incorrectly: %+v", item)
+	for _, tc := range []struct {
+		group string
+		want  []moneytimeline.Series
+	}{
+		{"client", clients},
+		{"provider", providers},
+		{"total", []moneytimeline.Series{{Key: "total", Label: "Total", Costs: []moneytimeline.Cost{}, UnknownCost: 8, UnknownTokens: 8}}},
+	} {
+		t.Run(tc.group, func(t *testing.T) {
+			got, err := s.moneyTimeline(context.Background(), now, "7d", tc.group, time.UTC)
+			if err != nil {
+				t.Fatal(err)
 			}
-			total += item.UnknownCost
-		}
-		if len(b.Series) > 6 {
-			t.Fatalf("too many series: %d", len(b.Series))
-		}
-	}
-	if total != 8 {
-		t.Fatalf("unknown requests counted %d, want 8", total)
+			if series := got.Buckets[6].Series; !reflect.DeepEqual(series, tc.want) {
+				t.Fatalf("series = %+v; want %+v", series, tc.want)
+			}
+		})
 	}
 }
-func TestTimelineMergeOverflowRemainsUnknownWithoutSaturation(t *testing.T) {
-	dst := &timelineAggregate{cost: map[string]int64{"USD": maxMoneyMicros - 2}, estimated: map[string]bool{}}
-	src := &timelineAggregate{cost: map[string]int64{"USD": 10}, estimated: map[string]bool{}}
-	mergeTimelineAggregate(dst, src)
-	if dst.cost["USD"] != maxMoneyMicros-2 || dst.unknownCost != 1 {
-		t.Fatalf("overflow invented exact total: %+v", dst)
+func TestTimelineChargeOverflowRemainsUnknownWithoutSaturation(t *testing.T) {
+	a := newTimelineAggregate("Total")
+	currencies := map[string]bool{}
+	for _, amount := range []int64{maxMoneyMicros - 2, 10} {
+		accumulateTimelineRecord(a, timelineCharge("USD", amount), currencies)
 	}
-}
-func TestTimelineOtherIdentityDoesNotReplaceRealOther(t *testing.T) {
-	aggs := map[string]*timelineAggregate{"other": {label: "Other route", requests: 10, cost: map[string]int64{}, estimated: map[string]bool{}}, "a": {label: "A", requests: 1, cost: map[string]int64{}, estimated: map[string]bool{}}, "b": {label: "B", requests: 1, cost: map[string]int64{}, estimated: map[string]bool{}}, "c": {label: "C", requests: 1, cost: map[string]int64{}, estimated: map[string]bool{}}, "d": {label: "D", requests: 1, cost: map[string]int64{}, estimated: map[string]bool{}}, "e": {label: "E", requests: 1, cost: map[string]int64{}, estimated: map[string]bool{}}}
-	keep := timelineTopKeys([]map[string]*timelineAggregate{aggs})
-	series := timelineBucketSeries(aggs, keep, nil)
-	if len(series) != 6 {
-		t.Fatalf("series=%d", len(series))
-	}
-	actual, other := false, false
-	for _, item := range series {
-		if item.Key == "other" && item.Label == "Other route" {
-			actual = true
-		}
-		if item.Key == timelineOtherKey && item.Label == "Other" {
-			other = true
-		}
-	}
-	if !actual || !other {
-		t.Fatalf("synthetic Other replaced identity: %+v", series)
-	}
-}
-func TestTimelineUnsupportedUsageProtocolIsUnknown(t *testing.T) {
-	a := &timelineAggregate{cost: map[string]int64{}, estimated: map[string]bool{}}
-	accumulateTimelineRecord(a, MoneyRecord{Usage: &ObservedUsage{Protocol: usagetap.Inapplicable, Usage: usagetap.Usage{Input: 42, Output: 7, Source: usagetap.Reported}}}, map[string]bool{})
-	if a.tokenKnown || a.unknownTokens != 1 {
-		t.Fatalf("unsupported protocol counted: %+v", a)
+	series := timelineSeriesFromAggregate("total", a, sortedTimelineCurrencies(currencies))
+	want := []moneytimeline.Cost{{Currency: "USD", Micros: maxMoneyMicros - 2, Estimated: true}}
+	if !reflect.DeepEqual(series.Costs, want) || series.UnknownCost != 1 {
+		t.Fatalf("overflow invented exact total: %+v", series)
 	}
 }

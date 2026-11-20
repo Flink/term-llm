@@ -4,42 +4,85 @@ import type {
   MoneyTimeline,
   TimelineSeries,
 } from '../src/api/proxy-timeline';
-import { el, select } from './dom';
+import { button, el } from './dom';
 import { moneyAmount } from './home';
+import { breakdownView, shareRows } from './timeline-breakdown';
+import { drawChart } from './timeline-chart';
+import { groupingLabels, periodLabels, timelineControls } from './timeline-controls';
+import { defaultTimelinePrefs, type TimelinePrefs } from './timeline-prefs';
+import { timelineTooltip } from './timeline-tooltip';
+import { aggregateTokenMix, tokenMixText, tokenMixView } from './timeline-tokens';
 
-type Metric = 'cost' | 'tokens';
-const palette = ['#446bc1', '#168578', '#b57629', '#9860aa', '#c6556c', '#557d37'];
-function svg<K extends keyof SVGElementTagNameMap>(
-  tag: K,
-  attrs: Record<string, string | number>,
-  text = '',
-): SVGElementTagNameMap[K] {
-  const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
-  for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
-  node.textContent = text;
-  return node;
+const palette = ['#5b5bd6', '#10a37f', '#3b82f6', '#a78bfa', '#d3800f', '#75859b'];
+const compactNumber = new Intl.NumberFormat(undefined, {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
+const comparison = new Intl.NumberFormat(undefined, {
+  style: 'percent',
+  signDisplay: 'exceptZero',
+  maximumFractionDigits: 1,
+});
+let chartSequence = 0;
+
+function safeAmount(amount: number): boolean {
+  return Number.isSafeInteger(amount) && amount >= 0;
 }
+
+function summarize<T>(
+  items: T[],
+  value: (item: T) => number | undefined,
+  unknown: (item: T) => number,
+  estimated: (item: T) => boolean,
+) {
+  let amount: number | undefined;
+  let unsafe = false;
+  let missing = 0;
+  let estimate = false;
+  for (const item of items) {
+    const measured = value(item);
+    if (measured !== undefined) {
+      amount = (amount ?? 0) + measured;
+      unsafe ||= !safeAmount(measured) || !safeAmount(amount);
+    }
+    missing += unknown(item);
+    estimate ||= estimated(item);
+  }
+  return { amount, unsafe, unknown: missing, estimated: estimate };
+}
+
+/** `initial` was loaded with the supplied preferences; standalone callers default to Total. */
 export function timelineView(
   initial: MoneyTimeline,
   load: (range: ChartRange, group: ChartGroup) => Promise<MoneyTimeline>,
+  prefs?: TimelinePrefs,
+  onChange?: (prefs: TimelinePrefs) => void,
+  details?: HTMLElement[],
 ): HTMLElement {
+  const defaults = prefs
+    ? defaultTimelinePrefs
+    : { ...defaultTimelinePrefs, group: 'total' as const };
+  let settings = prefs ? { ...prefs } : { ...defaults, range: initial.range };
   let data = initial;
-  let metric: Metric = 'cost';
-  let group: ChartGroup = 'total';
-  let range = initial.range;
-  let currency = data.currencies[0] ?? 'USD';
+  let currency = 'USD';
   let selected = -1;
+  let hoverSelection = false;
+  let restoringFocus = false;
   let sequence = 0;
-  let failed = false;
+  let phase: 'ready' | 'loading' | 'failed' = 'ready';
+  const uid = `timeline-bars-${++chartSequence}`;
   const colourGroups: Partial<Record<ChartGroup, Map<string, string>>> = {};
-  function colours(): Map<string, string> {
-    return (colourGroups[group] ??= new Map());
-  }
   function colour(key: string): string {
-    const cache = colours();
+    if (settings.group === 'total') return palette[0]!;
+    const cache = (colourGroups[settings.group] ??= new Map());
     if (!cache.has(key)) {
       let hash = 0;
       for (const char of key) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+      if (cache.size >= palette.length) {
+        const extra = `hsl(${hash % 360} 57% ${40 + (Math.floor(hash / 360) % 3) * 7}%)`;
+        cache.set(key, extra);
+        return extra;
+      }
       let index = hash % palette.length;
       for (let n = 0; n < palette.length && [...cache.values()].includes(palette[index]!); n++)
         index = (index + 1) % palette.length;
@@ -47,325 +90,412 @@ export function timelineView(
     }
     return cache.get(key)!;
   }
+
   const view = el('div');
   view.className = 'timeline';
-  const title = el('h2', 'Cost');
+  const titleText = document.createTextNode('');
+  const period = el('span');
+  period.className = 'timeline-period';
+  // The selected range is already announced by the range controls.
+  period.setAttribute('aria-hidden', 'true');
+  const title = el('h2', titleText, period);
   title.tabIndex = -1;
   const total = el('p');
   total.className = 'timeline-total';
-  const planNote = el('small');
-  planNote.hidden = true;
-  const metricControl = select(
-    [
-      ['cost', 'Cost'],
-      ['tokens', 'Tokens'],
-    ],
-    metric,
-  );
-  const groupControl = select(
-    [
-      ['total', 'Total'],
-      ['client', 'By client'],
-      ['provider', 'By provider'],
-      ['model', 'By model'],
-    ],
-    group,
-  );
-  const rangeControl = select(
-    [
-      ['today', 'Today'],
-      ['7d', '7 days'],
-      ['30d', '30 days'],
-    ],
-    range,
-  );
-  const currencyControl = select([], currency);
-  for (const [control, label] of [
-    [metricControl, 'Metric'],
-    [groupControl, 'Grouping'],
-    [rangeControl, 'Range'],
-    [currencyControl, 'Currency'],
-  ] as const)
-    control.setAttribute('aria-label', label);
-  const controls = el('div', metricControl, groupControl, rangeControl, currencyControl);
-  controls.className = 'timeline-controls';
-  const heading = el('div', el('div', title, total, planNote), controls);
+  const delta = el('span');
+  delta.className = 'timeline-delta';
+  delta.hidden = true;
+  const totalRow = el('div', total, delta);
+  totalRow.className = 'timeline-total-row';
+  const planNote = el('small', 'Plan estimates aren’t charges.');
+  const summary = el('div', title, totalRow, planNote);
+  summary.className = 'timeline-summary';
+  const controls = timelineControls(change, reset);
+  const heading = el('div', summary, controls.view);
   heading.className = 'timeline-heading';
   const plot = el('div');
   plot.className = 'timeline-plot';
-  const tooltip = el('div');
-  tooltip.className = 'timeline-tooltip';
-  tooltip.role = 'status';
-  const legend = el('div');
-  legend.className = 'timeline-legend';
-  view.append(heading, plot, legend, tooltip);
+  const tooltip = timelineTooltip(() => dismiss(true));
+  plot.append(tooltip.view);
+  const body = el('div', plot);
+  body.className = 'timeline-body';
+  const timezone = el('span');
+  timezone.className = 'timeline-timezone';
+  const status = el('span');
+  status.role = 'status';
+  status.className = 'timeline-status';
+  const disclosures = el('div', ...(details ?? []));
+  disclosures.className = 'timeline-details';
+  disclosures.hidden = !details?.length;
+  const footer = el('div', timezone, status, disclosures);
+  footer.className = 'timeline-footer';
+  const mixSlot = el('div');
+  view.append(heading, mixSlot, body, footer);
+
   function cost(series: TimelineSeries) {
-    return series.costs.find((cost) => cost.currency === currency);
+    return series.costs.find((entry) => entry.currency === currency);
   }
   function value(series: TimelineSeries): number | undefined {
-    return metric === 'tokens' ? series.tokens : cost(series)?.micros;
+    return settings.metric === 'tokens' ? series.tokens : cost(series)?.micros;
   }
-  function format(value: number): string {
-    return metric === 'cost' ? moneyAmount(value, currency) : `${value.toLocaleString()} tokens`;
+  function unknown(series: TimelineSeries): number {
+    return settings.metric === 'cost' ? series.unknown_cost : series.unknown_tokens;
+  }
+  function estimated(series: TimelineSeries): boolean {
+    return settings.metric === 'cost' && !!cost(series)?.estimated;
+  }
+  function hasPlanEstimate(series: TimelineSeries): boolean {
+    return settings.metric === 'cost' && cost(series)?.plan_estimate_micros !== undefined;
+  }
+  function format(amount: number): string {
+    if (!safeAmount(amount)) return 'Amount unavailable';
+    return settings.metric === 'cost'
+      ? moneyAmount(amount, currency)
+      : `${amount.toLocaleString()} tokens`;
+  }
+  function qualified(amount: number | undefined, missing: number, estimate: boolean): string {
+    return amount === undefined
+      ? 'Not measured'
+      : `${missing ? '≥ ' : estimate ? '≈ ' : ''}${format(amount)}`;
   }
   function incompleteData(count: number): string {
-    const measure = metric === 'cost' ? 'cost' : 'token';
+    const measure = settings.metric === 'cost' ? 'cost' : 'token';
     return `${count.toLocaleString()} ${count === 1 ? 'request' : 'requests'} with incomplete ${measure} data`;
   }
-  function inspect(index: number, label?: string) {
+  function updateDelta(current: ReturnType<typeof summarize>, includesPlan: boolean) {
+    const previous = data.previous;
+    const baseline = previous ? value(previous) : undefined;
+    delta.hidden = true;
+    if (
+      !previous ||
+      baseline === undefined ||
+      !safeAmount(baseline) ||
+      baseline === 0 ||
+      current.amount === undefined ||
+      current.unsafe ||
+      current.unknown ||
+      current.estimated ||
+      includesPlan ||
+      unknown(previous) ||
+      estimated(previous) ||
+      hasPlanEstimate(previous)
+    )
+      return;
+    const change = (current.amount - baseline) / baseline;
+    const label = comparison.format(change);
+    delta.dataset.direction = change > 0 ? 'up' : change < 0 ? 'down' : 'same';
+    const prior = data.range === 'today' ? 'yesterday' : `prior ${periodLabels[data.range]}`;
+    delta.textContent = `${label} vs ${prior}`;
+    delta.hidden = false;
+  }
+
+  let ranks = new Map<string, number>();
+  function ordered(series: TimelineSeries[]) {
+    return [...series].sort((a, b) => ranks.get(a.key)! - ranks.get(b.key)!);
+  }
+  function bar(index: number): SVGGElement | null {
+    return plot.querySelector<SVGGElement>(`[data-bucket="${index}"]`);
+  }
+  function inspect(index: number, refresh = false) {
+    if (index === selected && !refresh) return;
     selected = index;
-    for (const bar of plot.querySelectorAll<SVGGElement>('[data-bucket]')) {
-      const active = Number(bar.dataset.bucket) === index;
-      bar.classList.toggle('selected', active);
-      bar.setAttribute('aria-pressed', String(active));
+    for (const slot of plot.querySelectorAll<SVGGElement>('[data-bucket]')) {
+      const active = Number(slot.dataset.bucket) === index;
+      slot.classList.toggle('selected', active);
+      slot.setAttribute('aria-pressed', String(active));
     }
-    tooltip.replaceChildren();
     const bucket = data.buckets[index];
-    if (!bucket) {
-      tooltip.append(el('span', 'Select a bar for details.'));
+    const target = bar(index);
+    if (!bucket || !target || phase !== 'ready') {
+      tooltip.hide();
       return;
     }
-    const dateLabel =
-      label ??
-      plot.querySelector<SVGGElement>(`[data-bucket="${index}"]`)?.getAttribute('aria-label');
-    tooltip.append(el('strong', dateLabel || bucket.label));
-    const items = el('div');
-    for (const series of bucket.series) {
-      const amount = value(series);
-      const unknown = metric === 'cost' ? series.unknown_cost : series.unknown_tokens;
-      const money = metric === 'cost' ? cost(series) : undefined;
-      const planEstimate = money?.plan_estimate_micros;
-      const estimated = money?.estimated;
-      const text =
-        amount === undefined
-          ? metric === 'cost' && series.plan && !unknown
+    // Hover ranks this interval, independently of the range-wide stack and rail.
+    const ranked = [...bucket.series].sort(
+      (a, b) =>
+        (value(b) ?? -1) - (value(a) ?? -1) ||
+        a.label.localeCompare(b.label) ||
+        a.key.localeCompare(b.key),
+    );
+    const detail = (row: TimelineSeries) => {
+      const amount = value(row);
+      const missing = unknown(row);
+      const plan = hasPlanEstimate(row) ? cost(row)?.plan_estimate_micros : undefined;
+      return {
+        series: row,
+        amount:
+          amount === undefined && settings.metric === 'cost' && row.plan && !missing
             ? 'Plan activity'
-            : 'Not measured'
-          : `${unknown ? '≥ ' : estimated ? '≈ ' : ''}${format(amount)}`;
-      const row = el(
-        'span',
-        `${series.label} · ${text}${planEstimate === undefined ? '' : ` · ${format(planEstimate)} plan estimate`}${unknown ? ` · ${incompleteData(unknown)}` : ''}${metric === 'cost' && series.plan ? ` · ${series.plan} plan` : ''}`,
-      );
-      items.append(row);
+            : qualified(amount, missing, estimated(row)),
+        notes: [
+          ...(settings.metric === 'tokens' ? [tokenMixText(aggregateTokenMix([row]))] : []),
+          ...(plan === undefined ? [] : [`${format(plan)} plan estimate`]),
+          ...(missing ? [incompleteData(missing)] : []),
+          ...(settings.metric === 'cost' && row.plan
+            ? [`${row.plan.toLocaleString()} plan ${row.plan === 1 ? 'request' : 'requests'}`]
+            : []),
+        ],
+      };
+    };
+    const sum = summarize(bucket.series, value, unknown, estimated);
+    tooltip.show(
+      plot,
+      target,
+      target.getAttribute('aria-label') || bucket.label,
+      ranked,
+      detail,
+      colour,
+      sum.amount === undefined ? undefined : qualified(sum.amount, sum.unknown, sum.estimated),
+    );
+  }
+  function focusBar(index: number) {
+    restoringFocus = true;
+    bar(index)?.focus();
+    restoringFocus = false;
+  }
+  function dismiss(restore: boolean) {
+    hoverSelection = false;
+    if (restore) focusBar(selected);
+    inspect(-1);
+  }
+  plot.addEventListener('pointerleave', (event) => {
+    if (event.relatedTarget instanceof Node && plot.contains(event.relatedTarget)) return;
+    if (hoverSelection) dismiss(tooltip.view.contains(document.activeElement));
+  });
+  view.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && selected !== -1) {
+      event.preventDefault();
+      event.stopPropagation();
+      dismiss(tooltip.view.contains(document.activeElement));
     }
-    if (!bucket.series.length) items.append(el('span', 'No activity'));
-    tooltip.append(items);
+  });
+
+  function replacePlot(content: Element) {
+    const current = plot.firstElementChild;
+    if (current && current !== tooltip.view) current.replaceWith(content);
+    else plot.prepend(content);
   }
   function draw() {
-    if (failed) return;
-    currencyControl.replaceChildren(
-      ...data.currencies.map((code) => {
-        const option = el('option', code);
-        option.value = code;
-        return option;
-      }),
+    const ready = phase === 'ready';
+    const currencies = ready ? data.currencies : [];
+    currency =
+      settings.currency && currencies.includes(settings.currency)
+        ? settings.currency
+        : (currencies[0] ?? 'USD');
+    controls.update(
+      settings,
+      currencies,
+      currency,
+      settings.metric === defaults.metric &&
+        settings.range === defaults.range &&
+        settings.group === defaults.group &&
+        settings.currency === undefined,
     );
-    if (!data.currencies.includes(currency)) currency = data.currencies[0] ?? 'USD';
-    currencyControl.value = currency;
-    currencyControl.hidden = metric !== 'cost' || data.currencies.length < 2;
-    const hourly = data.range === 'today';
-    const formatters = {
-      tooltip: new Intl.DateTimeFormat(undefined, {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-        ...(hourly ? { hour: 'numeric', minute: '2-digit', timeZoneName: 'shortOffset' } : {}),
-        timeZone: data.timezone,
-      }),
-      axis: new Intl.DateTimeFormat(undefined, {
-        ...(hourly ? { hour: 'numeric', minute: '2-digit' } : { day: 'numeric', month: 'short' }),
-        timeZone: data.timezone,
-      }),
-    };
-    const all = data.buckets.flatMap((bucket) => bucket.series);
-    const hasPlanEstimate =
-      metric === 'cost' && all.some((series) => cost(series)?.plan_estimate_micros !== undefined);
-    title.textContent =
-      metric === 'tokens' ? 'Tokens' : hasPlanEstimate ? 'Cost incl. plan estimates' : 'Cost';
-    planNote.hidden = !hasPlanEstimate;
-    planNote.textContent = hasPlanEstimate ? 'Plan estimates aren’t charges.' : '';
-    const active = new Map(all.map((series) => [series.key, series.label]));
-    const cache = colours();
-    for (const key of cache.keys()) if (!active.has(key)) cache.delete(key);
-    const amounts = all.map(value).filter((v): v is number => v !== undefined);
-    const unknown = all.reduce(
-      (sum, series) => sum + (metric === 'cost' ? series.unknown_cost : series.unknown_tokens),
-      0,
-    );
-    const estimate =
-      metric === 'cost' &&
-      all.some((series) => series.costs.some((c) => c.currency === currency && c.estimated));
-    const sum = amounts.reduce((a, b) => a + b, 0);
-    total.textContent = amounts.length
-      ? `${unknown ? '≥ ' : estimate ? '≈ ' : ''}${format(sum)}`
-      : all.length
-        ? 'Not measured'
-        : 'No activity';
-    if (!all.length || !Number.isSafeInteger(sum)) {
-      if (all.length) total.textContent = 'Amount unavailable';
+    const all = ready ? data.buckets.flatMap((bucket) => bucket.series) : [];
+    const includesPlan = all.some(hasPlanEstimate);
+    titleText.data =
+      settings.metric === 'tokens' ? 'Tokens' : includesPlan ? 'Cost incl. plan estimates' : 'Cost';
+    period.textContent = ` · ${periodLabels[ready ? data.range : settings.range]}`;
+    planNote.hidden = !includesPlan;
+    const summary = summarize(all, value, unknown, estimated);
+    const invalidCurrency = settings.metric === 'cost' && !/^[A-Z]{3}$/.test(currency);
+    const unsafe = summary.unsafe || invalidCurrency;
+    timezone.textContent = ready ? `Times in ${data.timezone}` : '';
+    status.textContent = ready && summary.unknown ? incompleteData(summary.unknown) : '';
+    status.hidden = !status.textContent;
+    delta.hidden = true;
+    mixSlot.replaceChildren();
+    if (unsafe || !all.length) {
+      total.textContent =
+        phase === 'loading'
+          ? 'Loading…'
+          : phase === 'failed'
+            ? 'Unavailable'
+            : unsafe
+              ? 'Amount unavailable'
+              : 'No activity';
       const message = el(
         'p',
-        all.length ? 'Amount unavailable' : 'No proxy activity in this date range.',
+        phase === 'loading'
+          ? 'Loading chart…'
+          : phase === 'failed'
+            ? 'Chart unavailable.'
+            : unsafe
+              ? 'Amount unavailable'
+              : 'No proxy activity in this date range.',
       );
       message.className = 'preview';
-      plot.replaceChildren(message);
-      legend.replaceChildren();
-      tooltip.replaceChildren();
+      const content =
+        phase === 'failed'
+          ? el(
+              'div',
+              message,
+              button('Retry chart', () => void reload()),
+            )
+          : message;
+      replacePlot(content);
+      if (body.lastElementChild !== plot) body.lastElementChild?.remove();
+      inspect(-1, true);
       return;
     }
-    const width = Math.max(320, plot.clientWidth || 960);
-    const height = width < 600 ? 330 : 390;
-    const left = width < 600 ? 56 : 72,
-      right = 12,
-      top = 20,
-      bottom = height - 44;
-    const chart = svg('svg', {
-      viewBox: `0 0 ${width} ${height}`,
-      role: 'group',
-      'aria-label': `${metric === 'cost' ? currency + ' cost' : 'Tokens'} over time · ${data.timezone}`,
-    });
-    const sums = data.buckets.map((bucket) =>
-      bucket.series.reduce((n, series) => n + (value(series) ?? 0), 0),
-    );
-    const maximum = Math.max(...sums, metric === 'cost' ? 10000 : 10) * 1.12;
-    for (let tick = 0; tick <= 4; tick++) {
-      const y = bottom - ((bottom - top) * tick) / 4;
-      chart.append(
-        svg('line', { x1: left, x2: width - right, y1: y, y2: y, class: 'timeline-grid' }),
-      );
-      const n = (maximum * tick) / 4;
-      const label =
-        metric === 'cost'
-          ? moneyAmount(Math.round(n), currency)
-          : Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(
-              n,
-            );
-      chart.append(
-        svg(
-          'text',
-          { x: left - 10, y: y + 4, 'text-anchor': 'end', class: 'timeline-axis' },
-          label,
-        ),
-      );
+    total.textContent = qualified(summary.amount, summary.unknown, summary.estimated);
+    updateDelta(summary, includesPlan);
+    const showTokenMix = settings.metric === 'tokens';
+    if (showTokenMix) mixSlot.append(tokenMixView(aggregateTokenMix(all)));
+    const rows = shareRows(all, value, unknown, estimated);
+    ranks = new Map(rows.map((row, index) => [row.key, index]));
+    const cache = colourGroups[settings.group];
+    if (cache) {
+      for (const key of cache.keys()) if (!ranks.has(key)) cache.delete(key);
     }
-    const step = (width - left - right) / Math.max(1, data.buckets.length);
-    data.buckets.forEach((bucket, index) => {
-      const x = left + step * index;
-      const bar = svg('g', {
-        role: 'button',
-        tabindex: 0,
-        'data-bucket': index,
-        'aria-label': formatters.tooltip.format(new Date(bucket.start)),
+    // Reserve the most distinct colours for the leaders; retain assignments across metric changes.
+    for (const key of ranks.keys()) colour(key);
+    const rail = breakdownView(
+      rows,
+      groupingLabels[settings.group],
+      periodLabels[data.range],
+      colour,
+      (row) => qualified(row.amount, row.unknown, row.estimated),
+      !!body.querySelector('.timeline-breakdown details[open]'),
+      showTokenMix ? (row) => tokenMixText(aggregateTokenMix(row.series)) : undefined,
+    );
+    if (body.lastElementChild === plot) body.append(rail);
+    else body.lastElementChild?.replaceWith(rail);
+
+    const hourly = data.range === 'today';
+    const date = new Intl.DateTimeFormat(undefined, {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      ...(hourly ? { hour: 'numeric', minute: '2-digit', timeZoneName: 'shortOffset' } : {}),
+      timeZone: data.timezone,
+    });
+    const axis = new Intl.DateTimeFormat(undefined, {
+      ...(hourly ? { hour: 'numeric', minute: '2-digit' } : { day: 'numeric', month: 'short' }),
+      timeZone: data.timezone,
+    });
+    const currencyTick = new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency,
+      currencyDisplay: 'narrowSymbol',
+      notation: 'compact',
+      maximumFractionDigits: 6,
+    });
+    const chart = drawChart({
+      data,
+      width: Math.max(280, plot.clientWidth || 960),
+      ordered,
+      value,
+      colour,
+      tick: (amount) =>
+        settings.metric === 'cost'
+          ? currencyTick.format(amount / 1_000_000)
+          : compactNumber.format(amount),
+      ariaLabel: `${settings.metric === 'cost' ? `${currency} cost` : 'Tokens'} over time · ${data.timezone}`,
+      bucketLabel: (start) => date.format(new Date(start)),
+      axisLabel: (start, last) => {
+        const label = axis.format(new Date(start));
+        return last && !hourly && label === axis.format(new Date(data.end)) ? 'Today' : label;
+      },
+      unit: 1,
+      uid,
+    });
+    for (const slot of chart.querySelectorAll<SVGGElement>('[data-bucket]')) {
+      const index = Number(slot.dataset.bucket);
+      slot.addEventListener('pointerenter', (event) => {
+        if (event.pointerType === 'touch' || index === selected) return;
+        hoverSelection = true;
+        inspect(index);
       });
-      // Keep time slots tappable even when they have no measurable value.
-      bar.append(
-        svg('rect', { x, y: top, width: step, height: bottom - top, class: 'timeline-hit' }),
-      );
-      let y = bottom;
-      for (const series of bucket.series) {
-        const amount = value(series);
-        if (amount === undefined) continue;
-        const h = ((bottom - top) * amount) / maximum;
-        y -= h;
-        bar.append(
-          svg('rect', {
-            x: x + step * 0.17,
-            y,
-            width: step * 0.66,
-            height: Math.max(1, h),
-            fill: group === 'total' ? palette[0]! : colour(series.key),
-            rx: 2,
-          }),
-        );
-      }
-      bar.addEventListener('pointerenter', () => inspect(index));
-      bar.addEventListener('focus', () => inspect(index));
-      bar.addEventListener('click', () => inspect(index));
-      bar.addEventListener('keydown', (event) => {
+      slot.addEventListener('focus', () => {
+        if (restoringFocus) return;
+        hoverSelection = false;
+        inspect(index);
+      });
+      slot.addEventListener('click', () => {
+        hoverSelection = false;
+        inspect(index);
+      });
+      slot.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
+          hoverSelection = false;
           inspect(index);
-        }
-        if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+        } else if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
           event.preventDefault();
-          const next =
-            (index + (event.key === 'ArrowRight' ? 1 : -1) + data.buckets.length) %
-            data.buckets.length;
-          plot.querySelector<SVGGElement>(`[data-bucket="${next}"]`)?.focus();
+          const count = data.buckets.length;
+          const next = (index + (event.key === 'ArrowRight' ? 1 : -1) + count) % count;
+          bar(next)?.focus();
         }
       });
-      chart.append(bar);
-      const every = Math.max(1, Math.ceil(data.buckets.length / (width < 600 ? 3 : 6)));
-      if (index % every === 0 || index === data.buckets.length - 1) {
-        const label = formatters.axis.format(new Date(bucket.start));
-        chart.append(
-          svg(
-            'text',
-            { x: x + step / 2, y: height - 14, 'text-anchor': 'middle', class: 'timeline-axis' },
-            label,
-          ),
-        );
-      }
-    });
-    plot.replaceChildren(chart);
-    legend.replaceChildren();
-    for (const [key, label] of active) {
-      const swatch = el('i');
-      swatch.style.backgroundColor = group === 'total' ? palette[0]! : colour(key);
-      legend.append(el('span', swatch, label));
     }
-    if (unknown) legend.append(el('span', incompleteData(unknown)));
-    legend.append(el('span', data.timezone));
-    inspect(selected);
+    const focused = plot.contains(document.activeElement)
+      ? document.activeElement?.getAttribute('data-bucket')
+      : null;
+    replacePlot(chart);
+    if (focused != null) focusBar(Number(focused));
+    inspect(selected, true);
   }
+
   async function reload() {
     const current = ++sequence;
-    range = rangeControl.value as ChartRange;
-    group = groupControl.value as ChartGroup;
+    phase = 'loading';
+    selected = -1;
+    hoverSelection = false;
     view.setAttribute('aria-busy', 'true');
+    draw();
     try {
-      const next = await load(range, group);
+      const next = await load(settings.range, settings.group);
       if (current !== sequence) return;
       data = next;
-      failed = false;
-      selected = -1;
+      phase = 'ready';
       draw();
     } catch {
       if (current !== sequence) return;
-      failed = true;
-      plot.replaceChildren(el('p', 'Chart unavailable. Change the range to retry.'));
-      title.textContent = metric === 'cost' ? 'Cost' : 'Tokens';
-      planNote.hidden = true;
-      total.textContent = 'Unavailable';
-      tooltip.replaceChildren();
-      legend.replaceChildren();
+      phase = 'failed';
+      draw();
     } finally {
       if (current === sequence) view.setAttribute('aria-busy', 'false');
     }
   }
-  metricControl.addEventListener('change', () => {
-    metric = metricControl.value as Metric;
-    draw();
-  });
-  currencyControl.addEventListener('change', () => {
-    currency = currencyControl.value;
-    draw();
-  });
-  groupControl.addEventListener('change', () => {
-    void reload();
-  });
-  rangeControl.addEventListener('change', () => {
-    void reload();
-  });
+  function apply(next: TimelinePrefs, retry = false) {
+    const needsData = next.range !== settings.range || next.group !== settings.group;
+    if (needsData || next.metric !== settings.metric || next.currency !== settings.currency) {
+      settings = next;
+      onChange?.({ ...settings });
+    }
+    if (needsData || (phase === 'failed' && retry)) void reload();
+    else draw();
+  }
+  function change(part: Partial<TimelinePrefs>) {
+    apply({ ...settings, ...part }, part.range !== undefined);
+  }
+  function reset() {
+    apply({ ...defaults }, true);
+  }
   draw();
-  // Window resize avoids retaining detached views in a long-lived observer.
-  const resize = () => {
-    if (view.isConnected) draw();
-    else window.removeEventListener('resize', resize);
-  };
-  window.addEventListener('resize', resize);
   queueMicrotask(() => {
-    if (view.isConnected) draw();
+    if (!view.isConnected) return;
+    let width = plot.clientWidth;
+    if (phase === 'ready') draw();
+    const resize = () => {
+      if (width === plot.clientWidth) return;
+      width = plot.clientWidth;
+      if (phase === 'ready') draw();
+    };
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(() => {
+        if (view.isConnected) resize();
+        else observer.disconnect();
+      });
+      observer.observe(plot);
+    } else {
+      const fallback = () => {
+        if (view.isConnected) resize();
+        else window.removeEventListener('resize', fallback);
+      };
+      window.addEventListener('resize', fallback);
+    }
   });
   return view;
 }

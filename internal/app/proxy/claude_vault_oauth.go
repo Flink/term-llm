@@ -25,7 +25,7 @@ func (s *Service) claudeVaultOAuth(w http.ResponseWriter, r *http.Request, tunne
 		claudeVaultError(w, 400, "invalid_request")
 		return
 	}
-	if !s.claudeForwardRequestSlot(w) {
+	if !s.requestSlot(w) {
 		return
 	}
 	defer func() { <-s.slots }()

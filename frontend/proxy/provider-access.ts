@@ -8,33 +8,10 @@ import {
 import { routeAllowsClientApproval, routeNativeProvider, routeSharedNativeAccount } from './native';
 import { actions, button, check, dateTime, el, field, input, submit, type UIContext } from './dom';
 import { clientLabel, duplicateSuffixes, sortCallers } from './client-list';
+import { termLLMConfigSection, tokenCopyRow } from './client-config-snippet';
 import { authLabel, joinLocalPrefix, routeRules } from './route-rules';
 import { providerApproval, type ProviderGroup } from './provider-groups';
 import { callerCurl } from './security';
-
-function termLLMConnection(origin: string, group: ProviderGroup): HTMLElement {
-  const yaml = `proxy:\n  url: ${origin}\n  token: file:///run/secrets/proxy-client-token\n  providers: [${group.id}]`;
-  const section = el(
-    'div',
-    el('h4', 'term-llm client configuration'),
-    el(
-      'p',
-      `Add ${group.id} to proxy.providers in config.yaml to connect to this provider through the proxy. Other providers stay direct. Change the file reference to the private file where you saved this client token.`,
-    ),
-    el('pre', el('code', yaml)),
-  );
-  const visionRef = group.config?.vision_via?.trim();
-  if (visionRef) {
-    const visionProvider = visionRef.split(':')[0];
-    section.append(
-      el(
-        'p',
-        `This provider routes vision via ${visionRef}. Approve ${visionProvider} and include it in proxy.providers if clients use image inputs.`,
-      ),
-    );
-  }
-  return section;
-}
 
 // Keep endpoint instructions separate from approval: the token covers the
 // provider, while individual integrations still need their own base URL.
@@ -277,29 +254,6 @@ export function providerAccess(
     token.readOnly = true;
     token.className = 'caller-token';
     token.spellcheck = false;
-    const copy = button('Copy token', () => {
-      void context.run(async () => {
-        if (!navigator.clipboard) {
-          token.focus();
-          token.select();
-          context.announce('Clipboard unavailable. Copy the selected token manually.');
-          return;
-        }
-        try {
-          await navigator.clipboard.writeText(token.value);
-          copy.textContent = 'Copied ✓';
-          setTimeout(() => {
-            if (copy.isConnected) copy.textContent = 'Copy token';
-          }, 2000);
-          context.announce('Client token copied. Store it safely before dismissing.');
-        } catch {
-          token.focus();
-          token.select();
-          context.announce('Copy unavailable. Copy the selected token manually.');
-        }
-      }, copy);
-    });
-    copy.setAttribute('aria-label', 'Copy token');
     const dismiss = button('I saved it — dismiss', () => {
       void context.run(async () => {
         // The token is unrecoverable after this point: clear every copy in the
@@ -324,15 +278,24 @@ export function providerAccess(
     });
     const heading = el('h4', 'Copy this token now');
     heading.tabIndex = -1;
+    const configSnippet = termLLMConfigSection(location.origin, [group], context, {
+      heading: 'h4',
+      getToken: () => token.value,
+      onTokenFallback: () => {
+        token.focus();
+        token.select();
+      },
+    });
+    const footer = actions(dismiss);
+    footer.classList.add('client-token-footer');
     panel.replaceChildren(
       heading,
       el(
         'p',
         `Shown once. Save it securely before dismissing; it cannot be retrieved later. Access is limited to the current routes for ${group.label}.`,
       ),
-      field('Client token', token),
-      copy,
-      termLLMConnection(location.origin, group),
+      tokenCopyRow(token, context),
+      ...(configSnippet ? [configSnippet] : []),
       ...group.routes.map(connectionDetails),
       el(
         'p',
@@ -342,7 +305,7 @@ export function providerAccess(
         'p',
         'For apps configured manually, point only this provider’s base URL at the proxy. Do not set a global HTTP_PROXY or HTTPS_PROXY; a global proxy variable would reroute other providers.',
       ),
-      dismiss,
+      footer,
     );
     token.focus();
     token.select();

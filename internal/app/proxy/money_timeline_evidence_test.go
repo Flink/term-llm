@@ -6,36 +6,43 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/term-llm/term-llm/internal/app/proxy/moneytimeline"
 	"github.com/term-llm/term-llm/internal/app/proxy/usagetap"
 )
 
 func freshTimelineAggregate() *timelineAggregate {
 	return &timelineAggregate{cost: map[string]int64{}, estimated: map[string]bool{}}
 }
-func TestTimelineProtocolTokensCountCacheAndReasoningOnce(t *testing.T) {
+func TestTimelineProtocolTokenPartsCountCacheAndReasoningOnce(t *testing.T) {
 	for _, tc := range []struct {
 		name                                        string
 		protocol                                    usagetap.Protocol
 		input, read, write, output, reasoning, want int64
+		parts                                       moneytimeline.TokenParts
 	}{
-		{"responses", usagetap.Responses, 100, 30, 40, 20, 7, 120},
-		{"chat", usagetap.ChatCompletions, 100, 30, 40, 20, 7, 120},
-		{"messages", usagetap.Messages, 100, 30, 40, 20, 7, 190},
-		{"bedrock", usagetap.Bedrock, 100, 30, 40, 20, 7, 190},
-		{"gemini", usagetap.Gemini, 100, 30, 40, 20, 7, 127},
-		{"ollama", usagetap.Ollama, 100, -1, -1, 20, -1, 120},
-		{"reported zero", usagetap.Responses, 0, 0, 0, 0, 0, 0},
+		{"responses", usagetap.Responses, 100, 30, 40, 20, 7, 120, moneytimeline.TokenParts{Input: 70, Output: 20, CacheRead: 30}},
+		{"chat", usagetap.ChatCompletions, 100, 30, 40, 20, 7, 120, moneytimeline.TokenParts{Input: 70, Output: 20, CacheRead: 30}},
+		{"messages", usagetap.Messages, 100, 30, 40, 20, 7, 190, moneytimeline.TokenParts{Input: 100, Output: 20, CacheRead: 30, CacheWrite: 40}},
+		{"bedrock", usagetap.Bedrock, 100, 30, 40, 20, 7, 190, moneytimeline.TokenParts{Input: 100, Output: 20, CacheRead: 30, CacheWrite: 40}},
+		{"gemini", usagetap.Gemini, 100, 30, 40, 20, 7, 127, moneytimeline.TokenParts{Input: 70, Output: 27, CacheRead: 30}},
+		{"ollama", usagetap.Ollama, 100, -1, -1, 20, -1, 120, moneytimeline.TokenParts{Input: 100, Output: 20}},
+		{"reported zero", usagetap.Responses, 0, 0, 0, 0, 0, 0, moneytimeline.TokenParts{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := freshTimelineAggregate()
 			rec := MoneyRecord{Usage: &ObservedUsage{Protocol: tc.protocol, Usage: usagetap.Usage{Input: tc.input, CachedInput: tc.read, CacheWrite: tc.write, Output: tc.output, Reasoning: tc.reasoning, Total: 999999, Source: usagetap.Reported}}}
-			accumulateTimelineRecord(a, rec, map[string]bool{})
-			if !a.tokenKnown || a.tokens != tc.want || a.unknownTokens != 0 {
-				t.Fatalf("tokens=%d known=%v missing=%d; want %d", a.tokens, a.tokenKnown, a.unknownTokens, tc.want)
+			accumulateTimelineRecord(a, rec, nil)
+			series := timelineSeriesFromAggregate("total", a, nil)
+			if series.Tokens == nil || *series.Tokens != tc.want || series.UnknownTokens != 0 {
+				t.Fatalf("wrong token total: %+v; want %d", series, tc.want)
+			}
+			if series.TokenParts == nil || *series.TokenParts != tc.parts {
+				t.Fatalf("parts = %+v; want %+v", series.TokenParts, tc.parts)
 			}
 		})
 	}
@@ -50,15 +57,32 @@ func TestTimelineMissingTokenComponentsStayUnknown(t *testing.T) {
 		{"invalid cache", usagetap.ChatCompletions, usagetap.Usage{Input: 100, CachedInput: 101, Output: 20, Source: usagetap.Reported}},
 		{"partial", usagetap.Messages, usagetap.Usage{Input: 100, Output: 20, Source: usagetap.Partial}},
 		{"gemini missing thoughts", usagetap.Gemini, usagetap.Usage{Input: 100, Output: 20, Reasoning: -1, Source: usagetap.Reported}},
+		{"unsupported protocol", usagetap.Inapplicable, usagetap.Usage{Input: 42, Output: 7, Source: usagetap.Reported}},
 		{"overflow", usagetap.Ollama, usagetap.Usage{Input: maxMoneyMicros, Output: 1, Source: usagetap.Reported}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := freshTimelineAggregate()
-			accumulateTimelineRecord(a, MoneyRecord{Usage: &ObservedUsage{Protocol: tc.protocol, Usage: tc.usage}}, map[string]bool{})
-			if a.tokenKnown || a.unknownTokens != 1 {
-				t.Fatalf("invented tokens: %+v", a)
+			accumulateTimelineRecord(a, MoneyRecord{Usage: &ObservedUsage{Protocol: tc.protocol, Usage: tc.usage}}, nil)
+			series := timelineSeriesFromAggregate("total", a, nil)
+			if series.Tokens != nil || series.TokenParts != nil || series.UnknownTokens != 1 {
+				t.Fatalf("invented tokens: %+v", series)
 			}
 		})
+	}
+}
+func TestTimelineTokenOverflowKeepsOnlyAcceptedParts(t *testing.T) {
+	a := freshTimelineAggregate()
+	for _, usage := range []usagetap.Usage{
+		{Input: maxMoneyMicros - 10, Output: 2, CachedInput: 3, CacheWrite: 4, Source: usagetap.Reported},
+		{Input: 2, Output: 1, CachedInput: 1, CacheWrite: 1, Source: usagetap.Reported},
+		{Output: 1, Source: usagetap.Reported},
+	} {
+		accumulateTimelineRecord(a, MoneyRecord{Usage: &ObservedUsage{Protocol: usagetap.Messages, Usage: usage}}, nil)
+	}
+	series := timelineSeriesFromAggregate("total", a, nil)
+	want := moneytimeline.TokenParts{Input: maxMoneyMicros - 10, Output: 3, CacheRead: 3, CacheWrite: 4}
+	if series.Tokens == nil || *series.Tokens != maxMoneyMicros || series.UnknownTokens != 1 || series.TokenParts == nil || *series.TokenParts != want {
+		t.Fatalf("overflow changed accepted evidence: %+v, parts = %+v, want %+v", series, series.TokenParts, want)
 	}
 }
 func TestTimelineCostModesCurrenciesAndFloor(t *testing.T) {
@@ -224,28 +248,29 @@ func TestTimelineInvalidCostProvenanceStaysUnknown(t *testing.T) {
 	}
 }
 
-func TestTimelineSparseBinsStillUseGlobalTopFivePlusOther(t *testing.T) {
-	aggs := make([]map[string]*timelineAggregate, 8)
-	result := moneyTimeline{Buckets: make([]timelineBucket, 8), Currencies: []string{"USD"}}
-	for i := range aggs {
-		a := freshTimelineAggregate()
-		a.requests = 1
-		a.label = fmt.Sprintf("Client %d", i)
-		a.cost["USD"] = 1
-		aggs[i] = map[string]*timelineAggregate{fmt.Sprintf("client-%d", i): a}
+func TestTimelineSparseDaysKeepTheirNamedGroups(t *testing.T) {
+	s := testService(t)
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	for i := range 8 {
+		row := timelineCharge("USD", int64(i+1))
+		row.DeviceID = fmt.Sprintf("client-%d", i)
+		row.Device = fmt.Sprintf("Client %d", i)
+		insertTimelineEvidence(t, s, row.DeviceID, now.AddDate(0, 0, -2*i), row)
 	}
-	finalizeTimelineBuckets(&result, aggs)
-	keys := map[string]bool{}
-	var amount int64
-	for _, bucket := range result.Buckets {
-		for _, s := range bucket.Series {
-			keys[s.Key] = true
-			for _, c := range s.Costs {
-				amount += c.Micros
-			}
+	got, err := s.moneyTimeline(context.Background(), now, "30d", "client", time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, bucket := range got.Buckets {
+		want := []moneytimeline.Series{}
+		daysAgo := len(got.Buckets) - 1 - i
+		if daysAgo < 16 && daysAgo%2 == 0 {
+			n := daysAgo / 2
+			want = append(want, moneytimeline.Series{Key: fmt.Sprintf("client-%d", n), Label: fmt.Sprintf("Client %d", n),
+				Costs: []moneytimeline.Cost{{Currency: "USD", Micros: int64(n + 1)}}, UnknownTokens: 1})
 		}
-	}
-	if len(keys) != 6 || !keys[timelineOtherKey] || amount != 8 {
-		t.Fatalf("sparse bins bypassed global grouping: keys=%v amount=%d", keys, amount)
+		if !reflect.DeepEqual(bucket.Series, want) {
+			t.Fatalf("bucket %s = %+v; want %+v", bucket.Label, bucket.Series, want)
+		}
 	}
 }

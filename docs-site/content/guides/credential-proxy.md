@@ -503,9 +503,15 @@ routes you want to use:
 proxy:
   url: https://proxy.example.test
   token: file:///run/secrets/proxy-client-token
+  tag: laptop
   providers: [claude-bin, chatgpt, exa]
 ```
 
+- `proxy.tag` is an optional label for this client, useful when clients share a
+  token. Tagged requests appear as `<client> · <tag>` in the proxy's **By client**
+  chart and **Requests** list. Use 1–64 letters, digits, dots (`.`), underscores
+  (`_`), or hyphens (`-`), starting with a letter or digit. A tag requires a normal
+  `sk-tlp-` client token.
 - `proxy.providers` is an allowlist. A provider name selects its granted routes,
   including companions: `exa` covers Exa REST and MCP; `chatgpt` covers its chat,
   usage, dictation, embeddings and realtime routes. To use only ChatGPT, set
@@ -597,10 +603,20 @@ browser origin, not an SRV URL.
 
 ## Usage and spending
 
-Home charts **Cost/Tokens** over **Today/7/30 days**, grouped by total, client,
-provider, or model. Hover, tap, or use the keyboard for values. The chart uses
-your browser timezone: Today starts at local midnight, and longer ranges use
-local calendar days. Currencies remain separate.
+Home opens on **30 days of cost by model**. Choose **Cost** or **Tokens**, a range
+(**Today**, **7d**, **30d**), and a split (total, client, provider, or model).
+The breakdown lists the biggest contributors first, ranked by cost in the selected
+currency or by token count, not by request count. Expand **more** to see the rest
+by name. **Tokens** also splits usage into input, output, cache reads, and cache
+writes for the range and each group. Hover, tap, or focus a bar to see the top 20
+contributors for that hour or day. Expand the list for the rest; the total includes
+them all. The chart uses your browser timezone: Today starts at local midnight,
+and longer ranges use local calendar days. Currencies remain separate.
+
+The address bar reflects the active filters. Reload or bookmark that URL to
+restore the same view; opening bare `/_proxy/` restores this browser’s last
+selection. **Reset view** returns to the default. Only filter choices are saved,
+not costs, client identities, or request data.
 
 Only traffic through this proxy is counted. Missing evidence is not zero.
 Provider token semantics are normalized without counting caches/reasoning twice;

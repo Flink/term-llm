@@ -251,6 +251,13 @@ function unmeasuredError(request: ProxyRequest): boolean {
         ['unpriced', 'unmeasured', 'unspecified'].includes(money.kind)),
   );
 }
+export function clientLabel(
+  request: Pick<ProxyRequest, 'caller_name' | 'caller_id' | 'tag'>,
+): string {
+  const name = request.caller_name || request.caller_id || 'Unknown client';
+  return request.tag ? `${name} · ${request.tag}` : name;
+}
+
 export function requestGroups(requests: ProxyRequest[]): ProxyRequest[][] {
   const groups: ProxyRequest[][] = [];
   let previous = '';
@@ -266,6 +273,7 @@ export function requestGroups(requests: ProxyRequest[]): ProxyRequest[][] {
             request.revision,
             request.caller_id,
             request.caller_name,
+            request.tag || '',
             request.status,
             request.outcome,
             request.usage?.usage?.model,

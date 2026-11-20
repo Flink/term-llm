@@ -385,6 +385,7 @@ export interface ProxyRequest {
   ended: string | number;
   caller_id: string;
   caller_name: string;
+  tag?: string;
   route: string;
   revision: number;
   method: string;

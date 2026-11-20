@@ -1,45 +1,45 @@
 package proxy
 
 import (
-	"time"
+	"cmp"
+	"strings"
 
+	"github.com/term-llm/term-llm/internal/app/proxy/moneytimeline"
 	"github.com/term-llm/term-llm/internal/app/proxy/usagetap"
 )
 
-func timelineBucketIndex(t time.Time, bounds []time.Time) int {
-	for i := 0; i < len(bounds)-1; i++ {
-		if !t.Before(bounds[i]) && (t.Before(bounds[i+1]) || (i == len(bounds)-2 && t.Equal(bounds[i+1]))) {
-			return i
-		}
-	}
-	return -1
+type timelinePlanCost struct {
+	micros   int64
+	complete int64 // Floors are already counted in unknownCost.
+}
+type timelineAggregate struct {
+	label     string
+	cost      map[string]int64
+	estimated map[string]bool
+	// Keep plan estimates separate so they cannot displace existing plotted costs on overflow.
+	planCost                         map[string]timelinePlanCost
+	tokens                           int64
+	tokenParts                       moneytimeline.TokenParts
+	tokenKnown                       bool
+	unknownCost, unknownTokens, plan int64
+}
+
+func newTimelineAggregate(label string) *timelineAggregate {
+	return &timelineAggregate{label: label, cost: map[string]int64{}, estimated: map[string]bool{}}
 }
 
 func timelineGroupIdentity(rec MoneyRecord, caller, route, group string) (string, string) {
 	if group == "client" {
-		key := rec.DeviceID
-		if key == "" {
-			key = caller
-		}
-		label := rec.Device
-		if label == "" {
-			label = "Unknown client"
+		key := cmp.Or(rec.DeviceID, caller)
+		label := cmp.Or(rec.Device, "Unknown client")
+		if rec.Tag != "" {
+			return key + "\x00" + rec.Tag, label + " · " + rec.Tag
 		}
 		return key, label
 	}
 	if group == "provider" {
-		key := rec.Provider
-		if key == "" {
-			key = route
-		}
-		label := timelineProviderLabel(key)
-		if label == "" {
-			label = key
-		}
-		if label == "" {
-			label = "Unknown provider"
-		}
-		return key, label
+		key := cmp.Or(rec.Provider, route)
+		return key, cmp.Or(timelineProviderLabel(key), key, "Unknown provider")
 	}
 	if group == "model" {
 		model := timelineModel(rec)
@@ -78,9 +78,8 @@ func supportedTimelineProtocol(p usagetap.Protocol) bool {
 }
 
 func accumulateTimelineRecord(a *timelineAggregate, rec MoneyRecord, currencies map[string]bool) {
-	a.requests++
 	accumulateTimelineCost(a, rec.Money, currencies)
-	if rec.Usage == nil || rec.Usage.Usage.Source != "reported" || !supportedTimelineProtocol(rec.Usage.Protocol) {
+	if rec.Usage == nil || rec.Usage.Usage.Source != usagetap.Reported || !supportedTimelineProtocol(rec.Usage.Protocol) {
 		a.unknownTokens++
 		return
 	}
@@ -98,7 +97,12 @@ func accumulateTimelineRecord(a *timelineAggregate, rec MoneyRecord, currencies 
 		a.unknownTokens++
 		return
 	}
+	// Count the same evidence in the total and the breakdown, or in neither.
 	a.tokens += total
+	a.tokenParts.Input += mi.InputTokens
+	a.tokenParts.Output += mi.OutputTokens
+	a.tokenParts.CacheRead += mi.CacheReadTokens
+	a.tokenParts.CacheWrite += mi.CacheWriteTokens
 	a.tokenKnown = true
 }
 
@@ -140,28 +144,40 @@ func accumulateTimelinePlanCost(a *timelineAggregate, e *APIEquivalent, currenci
 		a.unknownCost++
 		return
 	}
-	cost := timelinePlanCost{micros: *e.Amount}
-	if e.Kind == "estimated_floor" {
+	current := a.planCost[e.Currency]
+	overflow := *e.Amount > maxMoneyMicros-current.micros
+	if e.Kind == "estimated_floor" || overflow {
 		a.unknownCost++
-	} else {
-		cost.complete = 1
 	}
-	if a.addPlanCost(e.Currency, cost) {
-		currencies[e.Currency] = true
-	}
-}
-
-func (a *timelineAggregate) addPlanCost(currency string, cost timelinePlanCost) bool {
-	current := a.planCost[currency]
-	if cost.micros > maxMoneyMicros-current.micros {
-		a.unknownCost += cost.complete
-		return false
+	if overflow {
+		return
 	}
 	if a.planCost == nil {
 		a.planCost = make(map[string]timelinePlanCost)
 	}
-	current.micros += cost.micros
-	current.complete += cost.complete
-	a.planCost[currency] = current
-	return true
+	current.micros += *e.Amount
+	if e.Kind == "estimated" {
+		current.complete++
+	}
+	a.planCost[e.Currency] = current
+	currencies[e.Currency] = true
+}
+
+func timelineProviderLabel(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "openai":
+		return "OpenAI"
+	case "anthropic", "claude-code", "claude-bin":
+		return "Claude"
+	case "chatgpt":
+		return "ChatGPT"
+	case "grok", "xai", "grok-bin":
+		return "Grok"
+	case "gemini", "google":
+		return "Gemini"
+	case "copilot":
+		return "Copilot"
+	default:
+		return ""
+	}
 }

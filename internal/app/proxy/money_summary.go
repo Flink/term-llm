@@ -37,6 +37,7 @@ func ValidateMoneySettings(s MoneySettings) error {
 type MoneyRecord struct {
 	Started                         time.Time
 	DeviceID, Device, App, Provider string
+	Tag                             string `json:"tag,omitempty"`
 	Paused                          bool
 	Money                           Money
 	Usage                           *ObservedUsage `json:"usage,omitempty"`

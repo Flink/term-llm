@@ -362,6 +362,20 @@ it('creates a provider-scoped client, shows the token once, and guards dismissal
   fireEvent.click(getByRole(root, 'button', { name: 'Copy token' }));
   await waitFor(() => expect(writeText).toHaveBeenCalledWith('sk-tlp-once-only'));
 
+  fireEvent.click(getByRole(root, 'button', { name: 'Copy YAML' }));
+  await waitFor(() =>
+    expect(writeText).toHaveBeenCalledWith(
+      `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token\n  providers: [openai]`,
+    ),
+  );
+
+  fireEvent.click(getByRole(root, 'button', { name: 'Copy with token' }));
+  await waitFor(() =>
+    expect(writeText).toHaveBeenCalledWith(
+      `proxy:\n  url: ${location.origin}\n  token: 'sk-tlp-once-only'\n  providers: [openai]`,
+    ),
+  );
+
   // A successful reconciliation must not replace the only copy of the token.
   await waitFor(() => expect(refresh).toHaveBeenCalledWith(undefined, true));
   expect(token.value).toBe('sk-tlp-once-only');

@@ -275,15 +275,10 @@ func TestProductionBundleSizeBudgets(t *testing.T) {
 		// retain modest gzip headroom for the updated runtime and bundler.
 		"dist/hub.js":  {raw: 107_500, gzip: 35_500},
 		"dist/hub.css": {raw: 20_500, gzip: 5_500},
-		// Route setup, accounts, Claude/ChatGPT onboarding, live requests,
-		// payload debug, the Cost graph, the Clients list, and per-provider
-		// term-llm client config editing/import measure ~138.6/49.4 kB
-		// raw/Go-gzip6. Retain modest headroom.
-		"dist/proxy.js": {raw: 145_000, gzip: 52_000},
-		// Routes, flattened provider management sections/footer, requests ledger,
-		// Home timeline, and Clients list styles measure ~28.3/6.8 kB raw/Go-gzip6;
-		// retain modest headroom.
-		"dist/proxy.css": {raw: 30_000, gzip: 7_500},
+		// The proxy admin UI is served separately from Chat and Hub. Give it
+		// room to grow without relaxing either of their download budgets.
+		"dist/proxy.js":  {raw: 313_000, gzip: 112_000},
+		"dist/proxy.css": {raw: 70_000, gzip: 16_600},
 	}
 	for name, budget := range budgets {
 		body, err := testBuildAsset(name)

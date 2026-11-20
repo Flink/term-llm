@@ -119,6 +119,7 @@ func selectStrings(ctx context.Context, db callerReader, query string, args ...a
 func (s *store) insertCaller(ctx context.Context, name string, grants []string, snap *snapshot, keyID, externalID string) (Caller, string, error) {
 	c := Caller{ID: randomToken("c_")[:26], Name: name, Created: time.Now().UnixMilli(), Grants: grants, CreatedBy: keyID, ExternalID: externalID}
 	token := randomToken("sk-tlp-")
+	hash, _ := callerTokenHash(token)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return c, "", err
@@ -132,7 +133,7 @@ func (s *store) insertCaller(ctx context.Context, name string, grants []string, 
 	if err := makeCallerRoom(ctx, tx, callerLimitError); err != nil {
 		return c, "", err
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO callers(id,name,hash,created,created_by,external_id) VALUES(?,?,?,?,?,?)", c.ID, c.Name, hashToken(token), c.Created, c.CreatedBy, c.ExternalID); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO callers(id,name,hash,created,created_by,external_id) VALUES(?,?,?,?,?,?)", c.ID, c.Name, hash, c.Created, c.CreatedBy, c.ExternalID); err != nil {
 		return c, "", err
 	}
 	if err := writeGrants(tx, c.ID, grants, snap); err != nil {

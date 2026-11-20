@@ -160,8 +160,63 @@ describe('provider-wide client approval', () => {
     expect(root).toHaveTextContent(`Base URL: ${location.origin}/chatgpt/`);
     expect(root).toHaveTextContent(`Base URL: ${location.origin}/chatgpt-backend/`);
     expect(root).not.toHaveTextContent(`${location.origin}/venice/`);
-    expect(root.querySelector('pre')).toHaveTextContent('$TOKEN');
+    expect(getByRole(root, 'heading', { name: 'term-llm client configuration' })).toBeVisible();
+    expect(root.querySelector('pre code')?.textContent).toBe(
+      `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token\n  providers: [chatgpt]`,
+    );
+    expect(root.textContent).not.toContain('sk-tlp-provider');
+    expect(root.querySelector('pre:not(:has(code))')).toHaveTextContent('$TOKEN');
     expect(announce).toHaveBeenLastCalledWith(expect.stringContaining('Copy the token now'));
+  });
+
+  it('shows a copyable multi-provider term-llm config.yaml snippet after creating a client', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const { root, createProviderCaller, announce } = setup();
+    createProviderCaller.mockResolvedValue({
+      token: 'sk-tlp-multi-secret',
+      caller: caller({
+        id: 'c_multi',
+        name: 'Laptop',
+        grants: ['chatgpt', 'chatgpt-backend', 'venice'],
+      }),
+    });
+    const composer = root.querySelector<HTMLFormElement>('#client-composer')!;
+    fireEvent.input(getByLabelText(composer, 'Client name'), { target: { value: 'Laptop' } });
+    fireEvent.click(getByLabelText(composer, 'ChatGPT plan'));
+    fireEvent.click(getByLabelText(composer, 'Venice'));
+    fireEvent.click(getByRole(composer, 'button', { name: 'Create client' }));
+
+    await waitFor(() => getByLabelText(root, 'Client token'));
+    expect(root).toHaveTextContent('~/.config/term-llm/config.yaml');
+    expect(root.textContent).not.toContain('sk-tlp-multi-secret');
+    expect(root.querySelector('pre code')?.textContent).toBe(
+      `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token\n  providers: [chatgpt, venice]`,
+    );
+
+    const copyYAML = getByRole(root, 'button', { name: 'Copy YAML' });
+    fireEvent.click(copyYAML);
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token\n  providers: [chatgpt, venice]`,
+      ),
+    );
+    expect(copyYAML.textContent).toBe('Copied ✓');
+    expect(announce).toHaveBeenLastCalledWith(
+      'term-llm config.yaml snippet copied. Point token at the saved client token.',
+    );
+
+    const copyWithToken = getByRole(root, 'button', { name: 'Copy with token' });
+    fireEvent.click(copyWithToken);
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        `proxy:\n  url: ${location.origin}\n  token: 'sk-tlp-multi-secret'\n  providers: [chatgpt, venice]`,
+      ),
+    );
+    expect(copyWithToken.textContent).toBe('Copied ✓');
+    expect(announce).toHaveBeenLastCalledWith(
+      'term-llm config.yaml snippet with client token copied. Keep config.yaml private.',
+    );
   });
 
   it('keeps a legacy partial approval untouched until the operator changes it', async () => {

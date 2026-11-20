@@ -56,6 +56,7 @@ func Save(cfg *Config) error {
 	type saveProxy struct {
 		URL       string    `yaml:"url,omitempty"`
 		Token     string    `yaml:"token,omitempty"`
+		Tag       string    `yaml:"tag,omitempty"`
 		Direct    []string  `yaml:"direct,omitempty"`
 		Providers *[]string `yaml:"providers,omitempty"`
 	}
@@ -75,8 +76,8 @@ func Save(cfg *Config) error {
 		Exec:            saveExec{Suggestions: cfg.Exec.Suggestions},
 		Providers:       make(map[string]saveProvider, len(cfg.Providers)),
 	}
-	if p := cfg.Proxy; p.URL != "" || p.Token != "" || len(p.Direct) != 0 || p.Providers != nil {
-		saved.Proxy = &saveProxy{URL: p.URL, Token: p.Token, Direct: p.Direct}
+	if p := cfg.Proxy; p.URL != "" || p.Token != "" || p.Tag != "" || len(p.Direct) != 0 || p.Providers != nil {
+		saved.Proxy = &saveProxy{URL: p.URL, Token: p.Token, Tag: p.Tag, Direct: p.Direct}
 		if p.Providers != nil {
 			saved.Proxy.Providers = &p.Providers
 		}

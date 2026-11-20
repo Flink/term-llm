@@ -219,6 +219,7 @@ func DefaultLinkedDevicesICEServers() []LinkedDevicesICEServerConfig {
 var keySpecs = []KeySpec{
 	optional("proxy.url"),
 	optional("proxy.token", sensitive()),
+	optional("proxy.tag", described("Optional client label shown in the credential proxy's By client chart and Requests")),
 	optional("proxy.direct", withPlaceholder([]string{})),
 	optional("proxy.providers", withPlaceholder([]string{}), described("Only proxy the listed providers and integrations; [] proxies none; omit for legacy proxy-all behavior"), withoutResetTemplate()),
 	def("default_provider", DefaultConfigProvider),

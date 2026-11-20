@@ -3,12 +3,15 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/term-llm/term-llm/internal/app/proxy/moneytimeline"
 	"github.com/term-llm/term-llm/internal/app/proxy/usagetap"
 )
 
@@ -37,27 +40,58 @@ func TestTimelineAPIByModel(t *testing.T) {
 	for _, row := range rows {
 		insertTimelineEvidence(t, s, row.id, now, row.rec)
 	}
+	for i := range 5 {
+		model := fmt.Sprintf("cheap-%d", i)
+		row := timelineCharge("USD", 1)
+		row.Usage = usage(model, false)
+		for j := range 3 {
+			insertTimelineEvidence(t, s, fmt.Sprintf("%s-%d", model, j), now, row)
+		}
+	}
+	for model, micros := range map[string]int64{"premium": 9000, "Other": 200} {
+		row := timelineCharge("EUR", micros)
+		row.Usage = usage(model, false)
+		insertTimelineEvidence(t, s, model, now, row)
+	}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/_proxy/api/timeline?range=7d&group=model&timezone=Australia%2FSydney", nil)
 	if !s.moneyAPI(w, r, "timeline") || w.Code != http.StatusOK {
 		t.Fatalf("timeline status %d: %s", w.Code, w.Body.String())
 	}
-	var got moneyTimeline
+	var got moneytimeline.Response
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
 	if got.Timezone != "Australia/Sydney" {
 		t.Fatalf("wrong timezone: %q", got.Timezone)
 	}
-	want := map[string]timelineSeries{
-		"test-model": {Key: "model:test-model", Label: "test-model", Tokens: moneyPtr(12), UnknownTokens: 1, Plan: 1, Costs: []timelineCost{{Currency: "USD", Micros: 110, Estimated: true, PlanEstimateMicros: moneyPtr(30)}}},
-		"total":      {Key: "model:total", Label: "total", Tokens: moneyPtr(12), Costs: []timelineCost{{Currency: "USD", Micros: 80}}},
-		"Unknown model": {Key: "model:", Label: "Unknown model", Tokens: moneyPtr(12),
-			UnknownCost: 2, UnknownTokens: 1, Costs: []timelineCost{}},
+	want := map[string]moneytimeline.Series{
+		"test-model": {Key: "model:test-model", Label: "test-model", Tokens: moneyPtr(12), TokenParts: &moneytimeline.TokenParts{Input: 10, Output: 2}, UnknownTokens: 1, Plan: 1, Costs: []moneytimeline.Cost{{Currency: "USD", Micros: 110, Estimated: true, PlanEstimateMicros: moneyPtr(30)}}},
+		"total":      {Key: "model:total", Label: "total", Tokens: moneyPtr(12), TokenParts: &moneytimeline.TokenParts{Input: 10, Output: 2}, Costs: []moneytimeline.Cost{{Currency: "USD", Micros: 80}}},
+		"Unknown model": {Key: "model:", Label: "Unknown model", Tokens: moneyPtr(12), TokenParts: &moneytimeline.TokenParts{Input: 10, Output: 2},
+			UnknownCost: 2, UnknownTokens: 1, Costs: []moneytimeline.Cost{}},
 	}
-	byModel := map[string]timelineSeries{}
+	for i := range 5 {
+		model := fmt.Sprintf("cheap-%d", i)
+		want[model] = moneytimeline.Series{Key: "model:" + model, Label: model, Tokens: moneyPtr(36),
+			TokenParts: &moneytimeline.TokenParts{Input: 30, Output: 6}, Costs: []moneytimeline.Cost{{Currency: "USD", Micros: 3}}}
+	}
+	for model, micros := range map[string]int64{"premium": 9000, "Other": 200} {
+		want[model] = moneytimeline.Series{Key: "model:" + model, Label: model, Tokens: moneyPtr(12),
+			TokenParts: &moneytimeline.TokenParts{Input: 10, Output: 2}, Costs: []moneytimeline.Cost{{Currency: "EUR", Micros: micros}}}
+	}
+	if !reflect.DeepEqual(got.Currencies, []string{"EUR", "USD"}) {
+		t.Fatalf("unexpected currencies: %v", got.Currencies)
+	}
+	if !strings.Contains(w.Body.String(), `"token_parts":{"input":10,"output":2,"cache_read":0,"cache_write":0}`) {
+		t.Fatalf("missing normalized token parts on the wire: %s", w.Body.String())
+	}
+	byModel := map[string]moneytimeline.Series{}
 	for _, bucket := range got.Buckets {
 		for _, item := range bucket.Series {
+			if _, ok := byModel[item.Label]; ok {
+				t.Fatalf("duplicate model label %q in fixture: %s", item.Label, w.Body.String())
+			}
 			byModel[item.Label] = item
 		}
 	}

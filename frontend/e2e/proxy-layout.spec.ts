@@ -527,12 +527,46 @@ test('Clients creates one client for approved providers without per-route contro
   await expect(providerFieldset.getByText('Beta', { exact: true })).toBeVisible();
   await expect(providerFieldset.getByText('alpha', { exact: true })).toHaveCount(0);
   await expect(providerFieldset.getByText('alpha-extra', { exact: true })).toHaveCount(0);
+  const geometry = await page.evaluate(() => {
+    const composer = document.querySelector<HTMLElement>('.client-composer')!;
+    const nameField = composer.querySelector<HTMLElement>('.field')!.getBoundingClientRect();
+    const chips = composer.querySelector<HTMLElement>('.grant-chips')!.getBoundingClientRect();
+    const note = composer
+      .querySelector<HTMLElement>('.client-composer-note')!
+      .getBoundingClientRect();
+    const footer = composer
+      .querySelector<HTMLElement>('.client-composer-actions')!
+      .getBoundingClientRect();
+    return {
+      composerRight: composer.getBoundingClientRect().right,
+      nameBottom: nameField.bottom,
+      chipsTop: chips.top,
+      chipsBottom: chips.bottom,
+      chipsRight: chips.right,
+      noteTop: note.top,
+      noteBottom: note.bottom,
+      footerTop: footer.top,
+    };
+  });
+  expect(geometry.nameBottom).toBeLessThanOrEqual(geometry.chipsTop);
+  expect(geometry.chipsBottom).toBeLessThanOrEqual(geometry.noteTop);
+  expect(geometry.noteBottom).toBeLessThanOrEqual(geometry.footerTop);
+  expect(geometry.chipsRight).toBeLessThanOrEqual(geometry.composerRight);
   await page.getByLabel('Client name', { exact: true }).fill('Browser worker');
   await page.locator('[data-provider="alpha"]').check();
   await page.getByRole('button', { name: 'Create client', exact: true }).click();
   await expect(page.getByLabel('Client token', { exact: true })).toHaveValue(
     'provider-client-token',
   );
+  await expect(
+    page.getByRole('heading', { name: 'term-llm client configuration', exact: true }),
+  ).toBeVisible();
+  await expect(page.locator('.config-snippet pre code')).toHaveText(
+    'proxy:\n  url: http://proxy.test\n  token: file:///run/secrets/proxy-client-token\n  providers: [alpha]',
+  );
+  await expect(page.getByRole('button', { name: 'Copy YAML', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Copy with token', exact: true })).toBeVisible();
+  expect(await page.locator('#proxy-app').textContent()).not.toContain('provider-client-token');
   expect(creations).toEqual([{ name: 'Browser worker', providers: ['alpha'], revision: 3 }]);
   expect(
     await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage })),

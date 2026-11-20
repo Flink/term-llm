@@ -71,7 +71,7 @@ func (p *CursorBinProvider) cursorProxyArgs(args []string) []string {
 	if !ok || !proxyclient.SameRoot(found.Root, root) {
 		return args
 	}
-	binding := &cliProxyBinding{Root: found.Root, Token: found.Token, Kind: found.Kind}
+	binding := &cliProxyBinding{Binding: found}
 	agent, repo, err := cursorProxyRoots(binding)
 	if err != nil {
 		return args

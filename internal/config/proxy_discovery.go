@@ -73,12 +73,13 @@ var proxyDiscoveryState = struct {
 var fetchProxyProviders = fetchProxyProvidersHTTP
 
 func proxyDiscoveryCacheKey(root, token string) proxyDiscoveryKey {
-	sum := sha256.Sum256([]byte(token))
+	secret, _ := proxyprofile.SplitCallerToken(token)
+	sum := sha256.Sum256([]byte(secret))
 	return proxyDiscoveryKey{root: root, tokenHash: hex.EncodeToString(sum[:])}
 }
 
 // discoverProxyProviders fetches GET /_proxy/client/v2/providers at most once
-// per process for a given (proxyRoot, token) pair. No TTL is used so an active
+// per process for a given (proxy root, caller secret) pair. No TTL is used so an active
 // process/conversation is never silently reconfigured mid-flight.
 func discoverProxyProviders(root, token string) (*proxyDiscoveryCatalog, error) {
 	key := proxyDiscoveryCacheKey(root, token)

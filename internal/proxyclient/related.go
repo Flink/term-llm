@@ -38,7 +38,7 @@ func Related(endpoint, profile string) (Binding, bool) {
 		return Binding{}, false
 	}
 	b, ok := Lookup(root)
-	return b, ok && b.Root == root && b.Token == source.Token && b.Kind == source.Kind
+	return b, ok && b.Root == root && b.SamePrincipal(source)
 }
 
 // KindActive lets unscoped metadata-only paths avoid reading a local vendor

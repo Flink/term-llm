@@ -65,6 +65,7 @@ The index below follows the canonical config schema. A dash means no default or 
 |---|---|---|---|
 | `proxy.url` | string | — | — |
 | `proxy.token` | string | — | — |
+| `proxy.tag` | string | — | Optional client label shown in the credential proxy's By client chart and Requests |
 | `proxy.direct` | list of string | — | — |
 | `proxy.providers` | list of string | — | Only proxy the listed providers and integrations; [] proxies none; omit for legacy proxy-all behavior |
 | `default_provider` | string | `openrouter` | — |
@@ -1191,6 +1192,7 @@ This is passed only to the provider subprocess. It does not mutate your parent s
 proxy:
   url: https://proxy.example.test
   token: file:///run/secrets/proxy-client-token
+  tag: laptop
   providers: [claude-bin, chatgpt, exa]
 ```
 
@@ -1202,6 +1204,12 @@ to keep both Exa backends direct, using local credentials if configured. Do not
 combine a nonempty `direct` list with an explicit `providers` list. See the
 [credential proxy guide](/guides/credential-proxy/#using-term-llm-as-a-client)
 for discovery, client defaults and keyless fallback.
+
+`proxy.tag` is an optional label for this client. The proxy shows tagged requests
+as `<client> · <tag>` in the **By client** chart and **Requests** list. Use 1–64
+letters, digits, dots (`.`), underscores (`_`), or hyphens (`-`), starting with a
+letter or digit. A tag requires a normal `sk-tlp-` client token for each proxy
+binding, including per-provider Claude Code bindings.
 
 ## Claude Code through a credential proxy
 

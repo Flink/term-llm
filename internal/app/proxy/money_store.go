@@ -83,7 +83,7 @@ func requestMoneyRecord(rec Record) MoneyRecord {
 	if provider == "" {
 		provider = rec.Route
 	}
-	return MoneyRecord{Started: time.UnixMilli(rec.Started), DeviceID: rec.CallerID, Device: rec.CallerName, App: rec.App, Provider: provider, Money: money, Usage: rec.Usage}
+	return MoneyRecord{Started: time.UnixMilli(rec.Started), DeviceID: rec.CallerID, Device: rec.CallerName, Tag: rec.Tag, App: rec.App, Provider: provider, Money: money, Usage: rec.Usage}
 }
 
 // writeMoneyRecord shares the admission or terminal request transaction. The

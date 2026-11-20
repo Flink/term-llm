@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/proxyclient"
+	"github.com/term-llm/term-llm/internal/proxyprofile"
 )
 
 // ProviderProxyConfig opts a native claude-bin provider into a scoped proxy
@@ -87,6 +88,10 @@ func (c *Config) materializeProviderProxies(file *fileSettings) ([]proxyclient.B
 			// Credential resolver errors can contain command output or raw
 			// references. Do not expose them or fall back to Claude credentials.
 			return nil, fmt.Errorf("%s.token must resolve to a private scoped client token (at least 16 characters)", field)
+		}
+		token, err = proxyprofile.TagCallerToken(token, c.Proxy.Tag)
+		if err != nil {
+			return nil, fmt.Errorf("%s.token: %w", field, err)
 		}
 		pc.Type = ProviderTypeClaudeBin
 		pc.BaseURL = root
