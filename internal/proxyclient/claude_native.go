@@ -30,9 +30,14 @@ func (p nativePolicy) stateDir(namespace, root, token string) (string, error) {
 	if err := p.validateToken(token); err != nil {
 		return "", err
 	}
-	cache, err := os.UserCacheDir()
-	if err != nil {
-		return "", errors.New("could not locate the private application cache directory")
+	// Honor XDG_CACHE_HOME on every OS; os.UserCacheDir ignores it on macOS
+	// and Windows.
+	cache := strings.TrimSpace(os.Getenv("XDG_CACHE_HOME"))
+	if cache == "" {
+		var err error
+		if cache, err = os.UserCacheDir(); err != nil {
+			return "", errors.New("could not locate the private application cache directory")
+		}
 	}
 	sum := sha256.Sum256([]byte(canonical + "\x00" + callerSecret(token)))
 	return filepath.Join(cache, "term-llm", namespace, hex.EncodeToString(sum[:16])), nil

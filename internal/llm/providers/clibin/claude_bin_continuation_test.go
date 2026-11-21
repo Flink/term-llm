@@ -163,13 +163,30 @@ func TestClaudeBinResumeResetsWhenHistoryRewritten(t *testing.T) {
 	}
 
 	rewritten := core.UserText("turn one, rewritten")
-	h.turn(t, system, rewritten, core.AssistantText("answer one"), core.UserText("turn two"))
+	h.turn(t, system, rewritten,
+		assistantToolCall("call-1", "glob", `{"pattern":"*.md"}`),
+		core.ToolResultMessage("call-1", "glob", "README.md", nil),
+		assistantToolCall("call-2", "mcp__term-llm__read_file", `{"path":"README.md"}`),
+		core.ToolResultMessage("call-2", "mcp__term-llm__read_file", "Project docs", nil),
+		core.AssistantText("answer one"), core.UserText("turn two"))
 
 	if h.resumed() {
 		t.Fatalf("resumed a diverged transcript: %q", strings.Join(h.args, " "))
 	}
-	if !strings.Contains(h.stdin, "turn one, rewritten") {
-		t.Fatalf("fresh session did not replay the rewritten history:\n%s", h.stdin)
+	history, latest, ok := strings.Cut(h.inputText(t), "</conversation_history>")
+	if !ok || !strings.Contains(latest, "turn two") {
+		t.Fatalf("fresh session did not separate prior history from the new turn:\n%s", h.stdin)
+	}
+	for _, want := range []string{
+		"turn one, rewritten",
+		"Assistant called tool: mcp__term-llm__glob\n",
+		"Tool result (mcp__term-llm__glob): README.md\n",
+		"Assistant called tool: mcp__term-llm__read_file\n",
+		"Tool result (mcp__term-llm__read_file): Project docs\n",
+	} {
+		if !strings.Contains(history, want) {
+			t.Errorf("replayed history missing %q:\n%s", want, history)
+		}
 	}
 }
 

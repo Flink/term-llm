@@ -3,6 +3,7 @@ package schema
 import (
 	"bytes"
 	"encoding/json"
+	"regexp"
 )
 
 // Automatic OpenAI strict mode for tool schemas that survive the conversion
@@ -23,7 +24,15 @@ var strictUnsafeKeywords = []string{
 	"unevaluatedProperties", "dependentSchemas", "dependentRequired",
 	"dependencies", "contains", "minContains", "maxContains", "prefixItems",
 	"minProperties", "maxProperties",
+	// Accepted by the ChatGPT backend only outside strict mode.
+	"uniqueItems",
 }
+
+// strictLookaroundRE matches regex lookahead/lookbehind. The ChatGPT backend
+// cannot compile it in closed schemas, strict or not, and its rejection names
+// no tool; keeping such tools non-strict stops that failure being blamed on
+// strict mode for every other tool.
+var strictLookaroundRE = regexp.MustCompile(`\(\?<?[=!]`)
 
 // StrictToolParameters returns strict-mode parameters for a tool schema, or
 // ok=false when the schema cannot be made strict without changing its meaning.
@@ -50,6 +59,9 @@ func strictCompatible(node map[string]interface{}, root bool) bool {
 		if _, ok := node[key]; ok {
 			return false
 		}
+	}
+	if pattern, ok := node["pattern"].(string); ok && strictLookaroundRE.MatchString(pattern) {
+		return false
 	}
 	if root && (!isObjectSchema(node) || node["anyOf"] != nil) {
 		return false

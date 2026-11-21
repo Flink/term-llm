@@ -71,5 +71,8 @@ export default defineConfig({
     // whole suite saturates the CPU. The timeout exists to catch hangs, not to
     // measure speed, so leave headroom for loaded machines and CI.
     testTimeout: 20_000,
+    // Assertions expect en-US number/date formatting; run workers in that
+    // locale whatever the host's (Node reads it from the environment at start).
+    env: { LC_ALL: 'en_US.UTF-8' },
   },
 });

@@ -21,6 +21,7 @@ import (
 	"github.com/term-llm/term-llm/internal/llm/core"
 	runpkg "github.com/term-llm/term-llm/internal/run"
 	"github.com/term-llm/term-llm/internal/session"
+	"github.com/term-llm/term-llm/internal/testutil/fakecli"
 )
 
 // The subprocess uses the production authenticated CONNECT/TLS filtering proxy.
@@ -146,7 +147,7 @@ func newAgyLifecycleFixture(t *testing.T) *agyLifecycleFixture {
 	if err := os.WriteFile(filepath.Join(tokenDir, "antigravity-oauth-token"), []byte("offline-test-only"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(f.dir, "agy"), []byte(agyLifecycleCLI), 0755); err != nil {
+	if err := os.WriteFile(filepath.Join(f.dir, "agy"), []byte(fakecli.PythonScript(t, agyLifecycleCLI)), 0755); err != nil {
 		t.Fatal(err)
 	}
 	oldResolver := net.DefaultResolver

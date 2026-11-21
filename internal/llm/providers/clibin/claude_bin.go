@@ -1371,10 +1371,12 @@ func (p *ClaudeBinProvider) prepareMCPBridge(ctx context.Context, req core.Reque
 	})
 }
 
+const claudeMCPServerName = "term-llm"
+
 func writeClaudeMCPConfig(endpoint cliMCPEndpoint) (string, error) {
 	data, err := json.Marshal(map[string]any{
 		"mcpServers": map[string]any{
-			"term-llm": map[string]any{
+			claudeMCPServerName: map[string]any{
 				"type": "http", "url": endpoint.url, "timeout": claudeMCPToolTimeoutMillis,
 				"headers": map[string]string{"Authorization": "Bearer " + endpoint.token},
 			},
@@ -1495,24 +1497,22 @@ func (p *ClaudeBinProvider) renderConversationParts(messages []core.Message) []s
 			}
 		case core.RoleAssistant:
 			text := core.CollectTextParts(msg.Parts)
-			// Also capture tool calls from assistant
 			for _, part := range msg.Parts {
 				if part.Type == core.PartToolCall && part.ToolCall != nil {
 					conversationParts = append(conversationParts,
-						fmt.Sprintf("Assistant called tool: %s", part.ToolCall.Name))
+						fmt.Sprintf("Assistant called tool: %s", claudeReplayToolName(part.ToolCall.Name)))
 				}
 			}
 			if text != "" {
 				conversationParts = append(conversationParts, "Assistant: "+text)
 			}
 		case core.RoleTool:
-			// Format tool results
 			for _, part := range msg.Parts {
 				if part.Type == core.PartToolResult && part.ToolResult != nil {
 					// Keep flattened history textual; final-turn images are emitted as native blocks.
 					content := core.ToolResultTextContent(part.ToolResult)
 					conversationParts = append(conversationParts,
-						fmt.Sprintf("Tool result (%s): %s", part.ToolResult.Name, content))
+						fmt.Sprintf("Tool result (%s): %s", claudeReplayToolName(part.ToolResult.Name), content))
 				}
 			}
 		}
@@ -1521,13 +1521,13 @@ func (p *ClaudeBinProvider) renderConversationParts(messages []core.Message) []s
 	return conversationParts
 }
 
-// mapClaudeToolName converts claude tool names back to term-llm names.
-// MCP tools are namespaced as mcp__term-llm__<tool>.
-func mapClaudeToolName(claudeName string) string {
-	if strings.HasPrefix(claudeName, "mcp__term-llm__") {
-		return strings.TrimPrefix(claudeName, "mcp__term-llm__")
+// claudeReplayToolName spells stored tool names as Claude Code sees them through MCP.
+func claudeReplayToolName(name string) string {
+	const prefix = "mcp__" + claudeMCPServerName + "__"
+	if name == "" || strings.HasPrefix(name, prefix) {
+		return name
 	}
-	return claudeName
+	return prefix + name
 }
 
 // mediaTypeToExt maps an image MIME type to a file extension.

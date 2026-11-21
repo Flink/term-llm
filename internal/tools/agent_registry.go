@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 	"github.com/term-llm/term-llm/internal/restart"
 	"github.com/term-llm/term-llm/internal/runtimeoutput"
 	"github.com/term-llm/term-llm/internal/session"
+	"github.com/term-llm/term-llm/internal/tools/spawnmodel"
 )
 
 // AgentContinuation is implemented by hosts that can resume a persisted child
@@ -145,7 +147,7 @@ func (m *agentManager) save(record session.AgentRun) bool {
 	return true
 }
 
-func (m *agentManager) start(ctx context.Context, name, prompt, model, callID string, cb SubagentEventCallback, external SubagentEventCallback, runner SpawnAgentRunner, depth int, resume bool, instructions string, existing session.AgentRun) (*agentEntry, error) {
+func (m *agentManager) start(ctx context.Context, name, prompt, requestedModel, callID string, cb SubagentEventCallback, external SubagentEventCallback, runner SpawnAgentRunner, depth int, resume bool, instructions string, existing session.AgentRun) (*agentEntry, error) {
 	id := existing.ID
 	if id == "" {
 		id = session.NewID()
@@ -163,7 +165,7 @@ func (m *agentManager) start(ctx context.Context, name, prompt, model, callID st
 		ctx = core.ContextWithSessionID(ctx, parent)
 	}
 	now := time.Now()
-	record := session.AgentRun{ID: id, ParentSessionID: parent, AgentName: name, Prompt: prompt, Model: model, BaseDir: existing.BaseDir, RunGeneration: existing.RunGeneration + 1, NotifyWhenDone: existing.NotifyWhenDone, NotifyOrigin: existing.NotifyOrigin, Status: "queued", TurnsGranted: DefaultSubagentMaxTurns, OwnerInstanceID: m.owner, UpdatedAt: now}
+	record := session.AgentRun{ID: id, ParentSessionID: parent, AgentName: name, Prompt: prompt, Model: cmp.Or(requestedModel, existing.Model), BaseDir: existing.BaseDir, RunGeneration: existing.RunGeneration + 1, NotifyWhenDone: existing.NotifyWhenDone, NotifyOrigin: existing.NotifyOrigin, Status: "queued", TurnsGranted: DefaultSubagentMaxTurns, OwnerInstanceID: m.owner, UpdatedAt: now}
 	origin, _ := QueueAgentOriginFromContext(ctx)
 	if parent != "" && origin.SessionID == parent {
 		record.ParentResponseID = origin.ResponseID
@@ -245,7 +247,7 @@ func (m *agentManager) start(ctx context.Context, name, prompt, model, callID st
 	m.save(record)
 	go func() {
 		defer releaseReload()
-		m.run(detached, e, runner, depth, model, resume, instructions)
+		m.run(detached, e, runner, depth, requestedModel, resume, instructions)
 	}()
 	if ctx.Err() != nil {
 		// Stopped between the check above and registration: the stop hook's
@@ -258,7 +260,7 @@ func (m *agentManager) start(ctx context.Context, name, prompt, model, callID st
 	return e, nil
 }
 
-func (m *agentManager) run(ctx context.Context, e *agentEntry, runner SpawnAgentRunner, depth int, model string, resume bool, instructions string) {
+func (m *agentManager) run(ctx context.Context, e *agentEntry, runner SpawnAgentRunner, depth int, requestedModel string, resume bool, instructions string) {
 	defer func() {
 		close(e.done)
 		// Publish completion only after waiters can observe done. The host must
@@ -328,7 +330,7 @@ func (m *agentManager) run(ctx context.Context, e *agentEntry, runner SpawnAgent
 	}
 	var result SpawnAgentRunResult
 	var err error
-	opts := SpawnAgentRunOptions{ModelOverride: model, ChildSessionID: e.record.ID, BaseDir: e.record.BaseDir, RemainingDepth: &e.childRemainingDepth}
+	opts := SpawnAgentRunOptions{ModelOverride: record.Model, ChildSessionID: e.record.ID, BaseDir: e.record.BaseDir, RemainingDepth: &e.childRemainingDepth}
 	if resume {
 		if continuation, ok := runner.(AgentContinuation); ok {
 			result, err = continuation.ContinueAgent(ctx, e.record.ID, e.record.AgentName, instructions, depth, e.originCallID, opts, cb)
@@ -337,6 +339,7 @@ func (m *agentManager) run(ctx context.Context, e *agentEntry, runner SpawnAgent
 		}
 	} else if extended, ok := runner.(SpawnAgentRunnerWithOptions); ok {
 		result, err = extended.RunAgentWithCallbackAndOptions(ctx, e.record.AgentName, e.record.Prompt, depth, e.originCallID, cb, opts)
+		err = spawnmodel.WithRejectionHint(err, requestedModel)
 	} else {
 		result, err = runner.RunAgentWithCallback(ctx, e.record.AgentName, e.record.Prompt, depth, e.originCallID, cb)
 	}

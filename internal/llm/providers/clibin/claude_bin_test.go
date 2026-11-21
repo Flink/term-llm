@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/term-llm/term-llm/internal/llm/core"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +12,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/term-llm/term-llm/internal/llm/core"
+	"github.com/term-llm/term-llm/internal/testutil/fakecli"
 
 	"github.com/term-llm/term-llm/internal/mcphttp"
 
@@ -45,7 +47,7 @@ requests = [frame['request'] for frame in controls]
 assert requests == [{'subtype':'interrupt'}], requests
 `
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(fakecli.PythonScript(t, script)), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -81,7 +83,7 @@ print(json.dumps({"type":"result","subtype":"error_during_execution","is_error":
 sys.exit(1)
 `
 	claudePath := filepath.Join(binDir, "claude")
-	if err := os.WriteFile(claudePath, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(claudePath, []byte(fakecli.PythonScript(t, script)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))

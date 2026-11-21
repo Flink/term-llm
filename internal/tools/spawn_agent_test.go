@@ -14,6 +14,7 @@ import (
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/llm/engine"
 	"github.com/term-llm/term-llm/internal/llm/mockprovider"
+	"github.com/term-llm/term-llm/internal/providerhttp"
 )
 
 type mediaEventMockRunner struct {
@@ -331,6 +332,51 @@ func TestSpawnAgentTool_ModelArgumentOverridesConfiguredAgentModel(t *testing.T)
 	}
 	if calls[0].ModelOverride != "provider:requested-model:variant" {
 		t.Fatalf("ModelOverride = %q, want provider:requested-model:variant", calls[0].ModelOverride)
+	}
+}
+
+func TestSpawnAgentModelRejectionHint(t *testing.T) {
+	const model = "chatgpt:gpt-5.4"
+	const message = "The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account."
+	rejection := &providerhttp.StatusError{StatusCode: 400, Body: `{"detail":"` + message + `"}`, Message: message}
+	for _, tc := range []struct {
+		name, requested, configured string
+		err                         error
+		wantHint                    bool
+	}{
+		{"explicit override", model, "", rejection, true},
+		{"configured default", "", model, rejection, false},
+		{"inherited default", "", "", rejection, false},
+		{"unrelated failure", model, "", errors.New("connection lost"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := DefaultSpawnConfig()
+			cfg.AgentModels = map[string]string{"reviewer": tc.configured}
+			tool := NewSpawnAgentTool(cfg, 0)
+			runner := newMockRunner().SetError(tc.err)
+			tool.SetRunner(runner)
+			out, err := tool.Execute(context.Background(), makeSpawnArgsWithModel("reviewer", "inspect", 0, tc.requested))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := parseResult(t, out.Content)
+			if len(runner.GetCalls()) != 1 || !out.IsError || got.Status != "failed" || !strings.Contains(got.Error, tc.err.Error()) || strings.Contains(got.Error, "omit model") != tc.wantHint {
+				t.Fatalf("spawn result = %s, want original failure, hint=%t, and no retry", out.Content, tc.wantHint)
+			}
+		})
+	}
+}
+
+func TestWaitAgentReportsExplicitModelRejection(t *testing.T) {
+	ctx := core.ContextWithSessionID(context.Background(), t.Name())
+	tool := NewSpawnAgentTool(DefaultSpawnConfig(), 0)
+	tool.SetRunner(newMockRunner().SetError(&providerhttp.StatusError{StatusCode: 404, Body: `{"error":{"code":"model_not_found"}}`}))
+	spawn := lifecycleResult(t, lifecycleCall(t, tool, ctx, `{"agent_name":"reviewer","prompt":"inspect","model":"chatgpt:missing","wait":0}`))
+	wait := &agentControlTool{name: WaitAgentToolName, spawn: tool}
+	out := lifecycleCall(t, wait, ctx, `{"agent_ids":["`+spawn.AgentID+`"],"max_wait":5}`)
+	var results []SpawnAgentResult
+	if err := json.Unmarshal([]byte(out.Content), &results); err != nil || len(results) != 1 || results[0].Status != "failed" || !strings.Contains(results[0].Error, "omit model") {
+		t.Fatalf("wait result = %s, want model rejection hint", out.Content)
 	}
 }
 

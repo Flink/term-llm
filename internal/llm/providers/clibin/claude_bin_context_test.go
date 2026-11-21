@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/term-llm/term-llm/internal/llm/core"
+	"github.com/term-llm/term-llm/internal/testutil/fakecli"
 )
 
 func claudeAssistantUsageLine(id, parent string, input, cacheRead, cacheWrite int) string {
@@ -231,7 +232,7 @@ emit(type='result', subtype='success', result='done', modelUsage=usage)
 assert not sys.stdin.read()
 `
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(fakecli.PythonScript(t, script)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

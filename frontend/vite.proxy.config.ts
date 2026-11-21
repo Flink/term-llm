@@ -36,5 +36,8 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     include: ['proxy/**/*.test.ts'],
     testTimeout: 20_000,
+    // Assertions expect en-US number/date formatting; run workers in that
+    // locale whatever the host's (Node reads it from the environment at start).
+    env: { LC_ALL: 'en_US.UTF-8' },
   },
 });

@@ -98,9 +98,14 @@ func siblingCLIProxyRoot(binding *cliProxyBinding, suffix string) (string, bool)
 // cliProxyStateDir is the private per-binding namespace for a CLI's config and
 // credential files. No real user login or configuration is imported into it.
 func cliProxyStateDir(name, root, token string) (string, error) {
-	cache, err := os.UserCacheDir()
-	if err != nil {
-		return "", fmt.Errorf("locate private %s proxy state: %w", name, err)
+	// Honor XDG_CACHE_HOME on every OS, like the other CLI adapters' state;
+	// os.UserCacheDir ignores it on macOS and Windows.
+	cache := strings.TrimSpace(os.Getenv("XDG_CACHE_HOME"))
+	if cache == "" {
+		var err error
+		if cache, err = os.UserCacheDir(); err != nil {
+			return "", fmt.Errorf("locate private %s proxy state: %w", name, err)
+		}
 	}
 	secret, _ := proxyprofile.SplitCallerToken(token)
 	sum := sha256.Sum256([]byte(root + "\x00" + secret))

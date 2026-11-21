@@ -245,7 +245,7 @@ func (p *AgyBinProvider) collectAgyStream(runCtx context.Context, cancel context
 	if dispatchErr != nil {
 		cancel()
 	}
-	scanErr := <-scanErrCh
+	scanErr := awaitCLIScanner(scanErrCh, runCtx.Done(), owned)
 	if scanErr != nil {
 		cancel()
 	}

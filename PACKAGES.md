@@ -212,6 +212,7 @@ One line per root-module package, generated from package doc comments by `make d
 - `internal/terminalpolicy` — centralizes decisions about whether term-llm may start an interactive terminal UI.
 - `internal/terminaltext` — sanitizes untrusted text so terminal control sequences cannot reach output.
 - `internal/testutil` — provides engine and TUI test harnesses, mock tools and output assertions.
+- `internal/testutil/fakecli` — helps tests write fake CLI executables as scripts.
 - `internal/testutil/mcptest` — provides the shared real MCP subprocess used by tests.
 - `internal/testutil/mediafixture` — synthesizes small structural identification fixtures.
 - `internal/testutil/procenv` — owns process-wide test environment isolation shared by command and application test binaries.

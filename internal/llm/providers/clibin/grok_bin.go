@@ -686,6 +686,7 @@ func (p *GrokBinProvider) runGrokCommand(
 	}()
 
 	state, toolsExecuted, dispatchErr := p.dispatchGrokEvents(ctx, lineCh, bridge.toolReqCh, debug, send, ephemeral)
+	stopping := ctx.Done()
 	if dispatchErr != nil {
 		stopScanner()
 		if cmd.Cancel != nil {
@@ -693,8 +694,9 @@ func (p *GrokBinProvider) runGrokCommand(
 		} else if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
+		stopping = closedCLIStop
 	}
-	scanErr := <-scanErrCh
+	scanErr := awaitCLIScanner(scanErrCh, stopping, owned)
 	if scanErr != nil {
 		if cmd.Cancel != nil {
 			_ = cmd.Cancel()

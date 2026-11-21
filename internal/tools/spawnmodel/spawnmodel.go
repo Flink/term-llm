@@ -4,8 +4,11 @@ package spawnmodel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"unicode"
+
+	"github.com/term-llm/term-llm/internal/llm/providers/responses"
 )
 
 // Catalog is implemented by spawn runners that can validate model overrides
@@ -31,6 +34,15 @@ func Resolve(ctx context.Context, runner any, model string) (string, error) {
 		return catalog.ResolveSpawnModel(ctx, model)
 	}
 	return model, nil
+}
+
+// WithRejectionHint adds recovery guidance only for an explicit spawn argument.
+// A configured or inherited model cannot be changed by omitting the argument.
+func WithRejectionHint(err error, requestedModel string) error {
+	if requestedModel == "" || !responses.IsModelRejection(err) {
+		return err
+	}
+	return fmt.Errorf("%w; if the user did not request %q, omit model from spawn_agent to use the agent's default", err, requestedModel)
 }
 
 func qualified(model string) bool {

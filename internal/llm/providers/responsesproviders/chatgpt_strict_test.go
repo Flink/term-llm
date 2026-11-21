@@ -140,7 +140,7 @@ func TestBuildChatGPTToolsKeepsExplicitStrictTools(t *testing.T) {
 	if len(tools) != 1 {
 		t.Fatalf("tools = %d, want 1", len(tools))
 	}
-	if len(upgraded) != 0 {
+	if len(upgraded.schemas) != 0 {
 		t.Fatalf("explicitly strict tools keep their existing lowering, got upgraded %v", upgraded)
 	}
 }

@@ -496,7 +496,7 @@ func (p *CursorBinProvider) runCursorCommand(ctx context.Context, args []string,
 	if dispatchErr != nil {
 		cancel()
 	}
-	scanErr := <-scanErrCh
+	scanErr := awaitCLIScanner(scanErrCh, runCtx.Done(), owned)
 	if scanErr != nil {
 		cancel()
 	}

@@ -623,6 +623,11 @@ func (s *responsesWebSocketFallbackStream) Recv() (Event, error) {
 		if err == io.EOF || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || len(s.fallbacks) == 0 {
 			return event, err
 		}
+		if _, rejected := InvalidFunctionSchemaTool(err); rejected {
+			// The same tools fail identically on retry or over HTTP; let the
+			// caller adjust them instead of downgrading the transport.
+			return event, err
+		}
 		if s.skipWebSocketRetriesForImmediateHTTP(err) && len(s.fallbacks) == 0 {
 			return event, err
 		}
@@ -633,6 +638,9 @@ func (s *responsesWebSocketFallbackStream) Recv() (Event, error) {
 	}
 	if event.Type == EventError {
 		if s.skipWebSocketRetriesForImmediateHTTP(event.Err) && len(s.fallbacks) == 0 {
+			return event, nil
+		}
+		if _, rejected := InvalidFunctionSchemaTool(event.Err); rejected {
 			return event, nil
 		}
 		if !s.emitted && len(s.fallbacks) > 0 {

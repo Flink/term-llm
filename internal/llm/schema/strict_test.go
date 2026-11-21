@@ -145,6 +145,10 @@ func TestStrictToolParametersFallsBackForUnsupportedSchemas(t *testing.T) {
 		"tuple items":        `{"type": "object", "properties": {"pt": {"type": "array", "items": [{"type": "number"}, {"type": "number"}]}}}`,
 		"boolean property":   `{"type": "object", "properties": {"anything": true}}`,
 		"nested in array":    `{"type": "object", "properties": {"rows": {"type": "array", "items": {"type": "object", "additionalProperties": {"type": "string"}}}}}`,
+		// Rejected by the ChatGPT backend for strict schemas (probed live).
+		"uniqueItems":         `{"type": "object", "properties": {"ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}}}`,
+		"lookahead":           `{"type": "object", "properties": {"a": {"type": "string", "pattern": "^(?=x).*$"}}}`,
+		"negative lookbehind": `{"type": "object", "properties": {"a": {"type": "string", "pattern": "(?<!x)y"}}}`,
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {

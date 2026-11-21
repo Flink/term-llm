@@ -14,6 +14,7 @@ import (
 	"github.com/term-llm/term-llm/internal/llm/core"
 	runpkg "github.com/term-llm/term-llm/internal/run"
 	"github.com/term-llm/term-llm/internal/session"
+	"github.com/term-llm/term-llm/internal/testutil/fakecli"
 	"github.com/term-llm/term-llm/internal/tools"
 )
 
@@ -56,7 +57,7 @@ if not os.path.exists(os.environ["FAKE_CLAUDE_EFFECT"]):
 else:
     print(json.dumps({"type":"result","subtype":"success","result":"recovered","usage":{"input_tokens":1,"output_tokens":1}}), flush=True)
 `
-			if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0755); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(fakecli.PythonScript(t, script)), 0755); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
