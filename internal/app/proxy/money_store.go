@@ -3,12 +3,14 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/term-llm/term-llm/internal/app/proxy/ledger"
 	"github.com/term-llm/term-llm/internal/app/proxy/usagetap"
 	"github.com/term-llm/term-llm/internal/sqliteutil"
 )
@@ -86,50 +88,27 @@ func requestMoneyRecord(rec Record) MoneyRecord {
 	return MoneyRecord{Started: time.UnixMilli(rec.Started), DeviceID: rec.CallerID, Device: rec.CallerName, Tag: rec.Tag, App: rec.App, Provider: provider, Money: money, Usage: rec.Usage}
 }
 
-// writeMoneyRecord shares the admission or terminal request transaction. The
-// request ID makes replacement and repeated terminal persistence idempotent. It never reprices previous rows.
-func writeMoneyRecord(tx sqliteutil.Executor, rec Record) error {
-	row := requestMoneyRecord(rec)
-	data, err := json.Marshal(row)
-	if err != nil {
-		return err
-	}
-	_, err = tx.Exec("INSERT INTO money_history(request_id,started,caller,route,data) VALUES(?,?,?,?,?) ON CONFLICT(request_id) DO UPDATE SET data=excluded.data", rec.ID, rec.Started, rec.CallerID, rec.Route, string(data))
+func marshalMoneyRecord(rec Record) (string, error) {
+	data, err := json.Marshal(requestMoneyRecord(rec))
+	return string(data), err
+}
+
+// The transaction-bound upsert replaces only the evidence, never its index keys.
+func writeMoneyRecord(ctx context.Context, stmt *sql.Stmt, rec Record, data string) error {
+	_, err := stmt.ExecContext(ctx, rec.ID, rec.Started, rec.CallerID, rec.Route, data)
 	return err
 }
 
 func (s *store) finishRequestAndMoney(ctx context.Context, rec Record, data []byte) error {
-	conn, err := s.db.Conn(ctx)
+	moneyData, err := marshalMoneyRecord(rec)
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	result, err := tx.StmtContext(ctx, s.finishStmt).ExecContext(ctx, rec.Outcome, string(data), rec.ID)
-	if err != nil {
-		return err
-	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n != 1 {
-		return fmt.Errorf("terminal request row is missing")
-	}
-	if err = writeMoneyRecord(tx, rec); err != nil {
-		return err
-	}
-	if err = tx.Commit(); err != nil {
-		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		_, _ = conn.ExecContext(cleanup, "ROLLBACK")
-		cancel()
-		return err
-	}
-	return nil
+	return s.ledger.Finish(ctx, ledgerPair(rec, data, moneyData))
+}
+
+func ledgerPair(rec Record, data []byte, money string) ledger.Pair {
+	return ledger.Pair{ID: rec.ID, Started: rec.Started, CallerID: rec.CallerID, Route: rec.Route, Method: rec.Method, Path: rec.Path, Outcome: rec.Outcome, Data: string(data), Money: money}
 }
 
 // pendingRequestMoney is also the admission hook: the server should attach this
@@ -142,27 +121,15 @@ func pendingRequestMoney(billing string) *Money {
 	return &Money{Billing: billing, Kind: "unmeasured", Reason: "In flight or outcome unknown; usage and any provider charge are not yet known."}
 }
 func (s *store) startRequestAndMoney(ctx context.Context, rec *Record, data []byte) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	moneyData, err := marshalMoneyRecord(*rec)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
-	result, err := tx.StmtContext(ctx, s.startStmt).ExecContext(ctx, rec.ID, rec.Started, rec.CallerID, rec.Route, rec.Method, rec.Path, "unknown", string(data))
-	if err != nil {
-		return err
+	seq, err := s.ledger.Start(ctx, ledgerPair(*rec, data, moneyData))
+	if err == nil {
+		rec.Seq = seq
 	}
-	seq, err := result.LastInsertId()
-	if err != nil {
-		return err
-	}
-	if err = writeMoneyRecord(tx, *rec); err != nil {
-		return err
-	}
-	if err = tx.Commit(); err != nil {
-		return err
-	}
-	rec.Seq = seq
-	return nil
+	return err
 }
 
 // Reconcile missing pre-fix money rows without repricing terminal evidence.
@@ -174,6 +141,7 @@ func (s *store) reconcileMoneyHistory(ctx context.Context, since, until int64) e
 		return err
 	}
 	defer tx.Rollback()
+	moneyStmt := tx.StmtContext(ctx, s.moneyStmt)
 	var after int64
 	for {
 		rows, err := tx.QueryContext(ctx, `SELECT r.seq,r.id,r.started,r.caller,r.route,r.data FROM requests r LEFT JOIN money_history m ON m.request_id=r.id WHERE r.seq>? AND r.started>=? AND r.started<=? AND m.request_id IS NULL ORDER BY r.seq LIMIT 128`, after, since, until)
@@ -208,7 +176,11 @@ func (s *store) reconcileMoneyHistory(ctx context.Context, since, until int64) e
 			return err
 		}
 		for _, rec := range records {
-			if err = writeMoneyRecord(tx, rec); err != nil {
+			moneyData, err := marshalMoneyRecord(rec)
+			if err != nil {
+				return err
+			}
+			if err = writeMoneyRecord(ctx, moneyStmt, rec, moneyData); err != nil {
 				return err
 			}
 		}
@@ -285,7 +257,7 @@ func prepareUsageBackfill(rows interface{ Scan(...any) error }) (usageBackfill, 
 }
 func (s *store) loadMoneySettings(ctx context.Context) (MoneySettings, error) {
 	var data string
-	if err := s.db.QueryRowContext(ctx, "SELECT data FROM money_settings WHERE id=1").Scan(&data); err != nil {
+	if err := s.settingsStmt.QueryRowContext(ctx).Scan(&data); err != nil {
 		return MoneySettings{}, err
 	}
 	var settings MoneySettings
