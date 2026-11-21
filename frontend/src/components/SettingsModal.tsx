@@ -1,6 +1,6 @@
 import { AGENT_AUTO_VALUE, agentChoiceFromValue } from '../domain/agent-choice';
 import '../styles/features/settings.css';
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { useStore } from '../app/context';
 import { errorMessage } from '../domain/text';
 import { agentPickerCommon, buildAgentMenu } from '../domain/agent-selection';
@@ -84,10 +84,23 @@ export function Settings() {
   const [linkedDevicesVisited, setLinkedDevicesVisited] = useState(false);
   // Matches the sidebar breakpoint in settings.css.
   const verticalTabs = useMediaQuery('(width >= 720px)');
-  const activeTab = tab;
-  const visibleTabs = store.linkedDevicesMode.value
+  const linkedDevicesMode = store.linkedDevicesMode.value;
+  useEffect(() => {
+    if (!linkedDevicesMode) void store.loadWidgetStatus();
+  }, [store, linkedDevicesMode]);
+  const visibleTabs = linkedDevicesMode
     ? settingsTabs.filter(({ slug }) => slug === 'model' || slug === 'interface')
-    : settingsTabs.filter(({ slug }) => slug !== 'widgets' || store.widgets.value.length > 0);
+    : settingsTabs.filter(
+        ({ slug }) =>
+          slug !== 'widgets' ||
+          store.widgets.value.length > 0 ||
+          store.widgetStore.loadErrors.value.length > 0,
+      );
+  const activeTabInfo = visibleTabs.find(({ slug }) => slug === tab) ?? visibleTabs[0];
+  const activeTab = activeTabInfo.slug;
+  useEffect(() => {
+    if (tab !== activeTab) setTab(activeTab);
+  }, [tab, activeTab]);
   const selectTab = (name: string) => {
     setTab(name);
     if (name === 'extensions') setExtensionsVisited(true);
@@ -101,7 +114,6 @@ export function Settings() {
   const [agent, setAgent] = useState(store.currentAgentChoiceValue());
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const activeTabInfo = visibleTabs.find(({ slug }) => slug === activeTab) ?? visibleTabs[0];
   const save = async () => {
     if (saving) return;
     setSaving(true);
@@ -448,7 +460,7 @@ export function Settings() {
             hidden={activeTab !== 'widgets'}
             class="settings-panel"
           >
-            <WidgetSettings />
+            {activeTab === 'widgets' && <WidgetSettings />}
           </div>
           <div
             id="settings-linked-devices-panel"

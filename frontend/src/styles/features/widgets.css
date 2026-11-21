@@ -78,6 +78,13 @@
   outline-offset: 1px;
 }
 
+.widget-load-errors {
+  grid-column: 1 / -1;
+  color: var(--danger);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
 .widget-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

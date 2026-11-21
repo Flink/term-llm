@@ -1,43 +1,52 @@
-import { useState } from 'preact/hooks';
 import { useStore } from '../app/context';
 import type { Widget } from '../domain/types';
 import { ToggleSwitch } from './ToggleSwitch';
+import { widgetDetail, WidgetLoadErrors } from './widget-details';
 
 /** On/off switches for this server's widgets; one turned off is stopped and left out of the launcher. */
 export function WidgetSettings() {
   const store = useStore();
-  const [pending, setPending] = useState('');
-  const widgets = [...store.widgets.value].sort((left, right) =>
-    left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }),
-  );
+  const { sorted, loadErrors } = store.widgetStore;
+  const pending = store.widgetStore.pending.value;
   const toggle = async (widget: Widget, on: boolean) => {
     if (!widget.mount) return;
-    setPending(widget.id);
     try {
       await store.widgetStore.setDisabled(widget.mount, !on);
     } catch (error) {
       store.toast(error, 'error');
-    } finally {
-      setPending('');
     }
   };
   return (
     <div class="settings-panel-body">
-      {widgets.map((widget) => (
+      <WidgetLoadErrors errors={loadErrors.value} />
+      {sorted.value.map((widget) => (
         <div class="settings-field" key={widget.id}>
           <label class="settings-toggle">
             <span>
               <span class="settings-label settings-label-inline">{widget.name}</span>{' '}
-              <span class="settings-help">
-                {widget.description || (widget.mount ? `/${widget.mount}` : 'Local widget')}
-              </span>
+              <span class="settings-help">{widgetDetail(widget)}</span>
             </span>
             <ToggleSwitch
               checked={widget.state !== 'disabled'}
               disabled={Boolean(pending) || !widget.mount}
-              onChange={(event) => void toggle(widget, event.currentTarget.checked)}
+              onChange={(event) => {
+                const on = event.currentTarget.checked;
+                // Keep displaying server state while the write (and any reconciliation) runs.
+                event.currentTarget.checked = widget.state !== 'disabled';
+                void toggle(widget, on);
+              }}
             />
           </label>
+          {widget.state === 'disabled' && widget.error && (
+            <p class="settings-help" role="status">
+              Turned off, but the process did not stop: {widget.error}
+            </p>
+          )}
+          {pending?.action === 'toggle' && pending.mount === widget.mount && (
+            <span class="settings-help" role="status">
+              Updating {widget.name}…
+            </span>
+          )}
         </div>
       ))}
     </div>

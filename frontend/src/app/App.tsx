@@ -239,7 +239,7 @@ export function App({ store }: { store: AppStore }) {
         primary &&
         !event.altKey &&
         !event.shiftKey &&
-        store.widgetStore.enabled.peek().length
+        (store.modal.peek() === 'widgets' || store.widgetStore.enabled.peek().length)
       ) {
         event.preventDefault();
         store.modal.value = store.modal.peek() === 'widgets' ? '' : 'widgets';

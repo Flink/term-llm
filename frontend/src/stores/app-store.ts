@@ -794,6 +794,7 @@ export class AppStore {
     const snapshot = this.startupDone.peek() ? null : this.readStartupSnapshot();
     try {
       let authorized = false;
+      const widgetRevision = this.widgetStore.capture();
       const capabilitiesRequest = this.endpoints.capabilities().then((value) => {
         authorized = true;
         return value;
@@ -801,7 +802,7 @@ export class AppStore {
       const cache = this.services.workspaceCache;
       if (snapshot && cache.policy === 'immediate') await this.restoreStartupSnapshot(snapshot);
       const capabilities = await capabilitiesRequest;
-      this.applyCapabilities(capabilities);
+      this.applyCapabilities(capabilities, widgetRevision);
       // Bearer servers serve public HTML: private cached state waits for proof
       // that this page's credential is currently accepted.
       if (snapshot && authorized && cache.policy === 'after-auth')
@@ -1378,7 +1379,7 @@ export class AppStore {
     return this.sessionStore.authors.viewer;
   }
 
-  private applyCapabilities(data: Record<string, unknown>): void {
+  private applyCapabilities(data: Record<string, unknown>, widgetRevision: number): void {
     this.viewer.value = authorFrom(data.viewer);
     this.thinking.applyCapabilities(data.reasoning);
     const linkedDevices = recordValue(data.linked_devices);
@@ -1423,11 +1424,7 @@ export class AppStore {
           : DEFAULT_ATTACHMENT_POLICY.extensions,
       });
     }
-    this.applyWidgetStatus(data.widget_status || data.widgets);
-  }
-
-  private applyWidgetStatus(value: unknown): void {
-    this.widgetStore.apply(value);
+    this.widgetStore.applyRead(data.widget_status ?? data.widgets, widgetRevision);
   }
 
   async loadWidgetStatus(): Promise<void> {

@@ -4,6 +4,7 @@ import type { Widget } from '../domain/types';
 import { SearchField } from './FormFields';
 import { Icon } from './Icon';
 import { Overlay } from './Overlay';
+import { widgetDetail, WidgetLoadErrors } from './widget-details';
 
 const WIDGET_STATUS: Record<string, { label: string; tone: string } | undefined> = {
   running: { label: 'Running', tone: 'running' },
@@ -21,10 +22,9 @@ function widgetStatus(widget: Widget): { label: string; tone: string } | null {
 export function Widgets() {
   const store = useStore();
   const [query, setQuery] = useState('');
-  const [stopping, setStopping] = useState<Set<string>>(() => new Set());
-  const widgets = [...store.widgetStore.enabled.value].sort((left, right) =>
-    left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }),
-  );
+  const { enabled, loadErrors } = store.widgetStore;
+  const pending = store.widgetStore.pending.value;
+  const widgets = enabled.value;
   const showSearch = widgets.length > 6;
   const normalizedQuery = query.trim().toLowerCase();
   const visibleWidgets = normalizedQuery
@@ -39,18 +39,11 @@ export function Widgets() {
   const countLabel = `${widgets.length} ${widgets.length === 1 ? 'widget' : 'widgets'}`;
 
   const stopWidget = async (widget: Widget) => {
-    if (!widget.mount || stopping.has(widget.id)) return;
-    setStopping((current) => new Set(current).add(widget.id));
+    if (!widget.mount) return;
     try {
       await store.widgetStore.stop(widget.mount);
     } catch (error) {
       store.toast(error, 'error');
-    } finally {
-      setStopping((current) => {
-        const next = new Set(current);
-        next.delete(widget.id);
-        return next;
-      });
     }
   };
 
@@ -75,6 +68,7 @@ export function Widgets() {
         />
       )}
       <div class="widget-grid">
+        <WidgetLoadErrors errors={loadErrors.value} />
         {widgets.length === 0 ? (
           <div class="widget-empty" role="status">
             <strong>No widgets available</strong>
@@ -87,7 +81,7 @@ export function Widgets() {
           </div>
         ) : (
           visibleWidgets.map((widget, index) => {
-            const isStopping = stopping.has(widget.id);
+            const isStopping = pending?.action === 'stop' && pending.mount === widget.mount;
             const state = String(widget.state || 'stopped').toLowerCase();
             const canStop = Boolean(
               widget.mount && ['running', 'started', 'starting'].includes(state),
@@ -95,8 +89,6 @@ export function Widgets() {
             const status = isStopping
               ? { label: 'Stopping', tone: 'starting' }
               : widgetStatus(widget);
-            const detail =
-              widget.description || (widget.mount ? `/${widget.mount}` : 'Local widget');
             return (
               <div
                 class="widget-card"
@@ -124,7 +116,7 @@ export function Widgets() {
                         </span>
                       )}
                     </span>
-                    <span class="widget-card-meta">{detail}</span>
+                    <span class="widget-card-meta">{widgetDetail(widget)}</span>
                     {status?.tone === 'error' && widget.error && (
                       <span class="widget-card-error">{widget.error}</span>
                     )}
@@ -137,7 +129,7 @@ export function Widgets() {
                     type="button"
                     aria-label={`Stop ${widget.name}`}
                     title={`Stop ${widget.name}`}
-                    disabled={isStopping}
+                    disabled={Boolean(pending)}
                     onClick={() => void stopWidget(widget)}
                   >
                     Stop

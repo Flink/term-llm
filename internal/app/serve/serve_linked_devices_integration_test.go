@@ -50,6 +50,7 @@ func TestLinkedDevicesDispatchesMountedServeHandler(t *testing.T) {
 				{http.MethodPost, "/uploads"},
 				{http.MethodPost, "/v1/push/subscribe"},
 				{http.MethodGet, "/admin/widgets/status"},
+				{http.MethodPost, "/admin/widgets/example/disable"},
 			} {
 				request, err := http.NewRequest(denied.method, "http://peer"+peerWirePath(basePath, denied.path), nil)
 				if err != nil {

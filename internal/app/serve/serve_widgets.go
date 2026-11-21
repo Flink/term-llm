@@ -1,9 +1,8 @@
 package serve
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
-	"html"
 	"net/http"
 	"strings"
 
@@ -12,9 +11,6 @@ import (
 
 // widgetsRoute returns the widgets sub-route, e.g. "/ui/widgets/".
 func (c serveServerConfig) widgetsRoute() string { return c.basePath + "/widgets/" }
-
-// adminWidgetsRoute returns the admin widgets sub-route, e.g. "/ui/admin/widgets/".
-func (c serveServerConfig) adminWidgetsRoute() string { return c.basePath + "/admin/widgets/" }
 
 // registerWidgetRoutes mounts widget proxy and admin routes on inner mux.
 // inner must be an http.ServeMux with basePath already stripped.
@@ -33,37 +29,7 @@ func (s *serveServer) handleWidgetIndex(w http.ResponseWriter, r *http.Request) 
 		http.NotFound(w, r)
 		return
 	}
-	statuses := s.widgetsMgr.Status()
-	errs := s.widgetsMgr.LoadErrors()
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html><html><head><title>Widgets</title></head><body>`)
-	fmt.Fprintf(w, `<h1>Widgets</h1>`)
-
-	if len(errs) > 0 {
-		fmt.Fprintf(w, `<h2>Load Errors</h2><ul>`)
-		for _, e := range errs {
-			fmt.Fprintf(w, `<li>%s</li>`, html.EscapeString(e.Error()))
-		}
-		fmt.Fprintf(w, `</ul>`)
-	}
-
-	if len(statuses) == 0 {
-		fmt.Fprintf(w, `<p>No widgets loaded.</p>`)
-	} else {
-		fmt.Fprintf(w, `<table border="1" cellpadding="4"><tr><th>Mount</th><th>Title</th><th>State</th><th>Link</th></tr>`)
-		for _, st := range statuses {
-			link := "widgets/" + st.Mount + "/"
-			fmt.Fprintf(w, `<tr><td>%s</td><td>%s</td><td>%s</td><td><a href="%s">open</a></td></tr>`,
-				html.EscapeString(st.Mount),
-				html.EscapeString(st.Title),
-				html.EscapeString(st.State),
-				html.EscapeString(link),
-			)
-		}
-		fmt.Fprintf(w, `</table>`)
-	}
-	fmt.Fprintf(w, `</body></html>`)
+	s.widgetsMgr.ServeIndex(w)
 }
 
 // handleWidgetProxy proxies requests to the appropriate widget process.
@@ -124,8 +90,7 @@ func (s *serveServer) handleAdminWidgetsReload(w http.ResponseWriter, r *http.Re
 	for _, e := range errs {
 		res.Errors = append(res.Errors, e.Error())
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(res)
+	writeJSON(w, http.StatusOK, res)
 }
 
 type widgetStatusResponse struct {
@@ -151,8 +116,8 @@ func (s *serveServer) handleAdminWidgetsStatus(w http.ResponseWriter, r *http.Re
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(s.currentWidgetStatus())
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, s.currentWidgetStatus())
 }
 
 // handleAdminWidgetsStop handles POST /admin/widgets/stop.
@@ -169,5 +134,38 @@ func (s *serveServer) handleAdminWidgetsStop(w http.ResponseWriter, r *http.Requ
 // handleAdminWidgetAction handles POST /admin/widgets/<mount>/stop, /disable
 // and /enable.
 func (s *serveServer) handleAdminWidgetAction(w http.ResponseWriter, r *http.Request) {
-	s.widgetsMgr.ServeAction(w, r, strings.TrimPrefix(r.URL.Path, "/admin/widgets/"))
+	mount, action, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/admin/widgets/"), "/")
+	if mount == "" || (action != "stop" && action != "enable" && action != "disable") {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var err error
+	if action == "stop" {
+		err = s.widgetsMgr.StopMount(mount)
+	} else {
+		err = s.widgetsMgr.SetDisabled(mount, action == "disable")
+	}
+	var warning string
+	var stopErr *widgets.DisableStopError
+	switch {
+	case err == nil:
+	case errors.As(err, &stopErr):
+		warning = stopErr.Error()
+	case errors.Is(err, widgets.ErrNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		widgetStatusResponse
+		OK      bool   `json:"ok"`
+		Warning string `json:"warning,omitempty"`
+	}{widgetStatusResponse: s.currentWidgetStatus(), OK: true, Warning: warning})
 }

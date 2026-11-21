@@ -84,6 +84,12 @@ func readSettings(dir string) (Settings, error) {
 	if err := decoder.Decode(&s); err != nil && !errors.Is(err, io.EOF) {
 		return Settings{}, fmt.Errorf("parse %s: %w", SettingsFile, err)
 	}
+	var trailing yaml.Node
+	if err := decoder.Decode(&trailing); err == nil {
+		return Settings{}, fmt.Errorf("parse %s: expected a single YAML document", SettingsFile)
+	} else if !errors.Is(err, io.EOF) {
+		return Settings{}, fmt.Errorf("parse %s: %w", SettingsFile, err)
+	}
 	return s, nil
 }
 
@@ -100,6 +106,9 @@ func writeSettings(dir string, s Settings) error {
 	if err := encoder.Close(); err != nil {
 		return err
 	}
+	if buf.Len() > maxSettingsBytes {
+		return fmt.Errorf("%s exceeds %d bytes", SettingsFile, maxSettingsBytes)
+	}
 	return fileprivacy.WriteFileAtomic(filepath.Join(dir, SettingsFile), buf.Bytes())
 }
 
@@ -114,16 +123,27 @@ func withDisabled(ids []string, id string, disabled bool) []string {
 	return slices.Compact(next)
 }
 
+// DisableStopError reports that the disabled preference was committed, but
+// stopping the widget process failed. The preference is not rolled back.
+type DisableStopError struct {
+	Err error
+}
+
+func (e *DisableStopError) Error() string { return fmt.Sprintf("stop disabled widget: %v", e.Err) }
+func (e *DisableStopError) Unwrap() error { return e.Err }
+
 // SetDisabled turns the widget at mount off, stopping its process, or back
 // on. The choice is kept in SettingsFile, so reloads and restarts keep it. A
 // disabled widget stays listed by Status, as "disabled", but is never started.
+// A *DisableStopError indicates that the preference was committed even though
+// stopping the process failed.
 func (m *Manager) SetDisabled(mount string, disabled bool) error {
 	e, err := m.recordDisabled(mount, disabled)
 	if err != nil || !disabled {
 		return err
 	}
-	if err := e.stopProcess(); err != nil {
-		return fmt.Errorf("stop disabled widget: %w", err)
+	if err := e.stopIfDisabled(); err != nil {
+		return &DisableStopError{Err: err}
 	}
 	return nil
 }
@@ -145,10 +165,20 @@ func (m *Manager) recordDisabled(mount string, disabled bool) (*widgetEntry, err
 	if err != nil {
 		return nil, fmt.Errorf("read widget settings: %w", err)
 	}
-	if next := withDisabled(settings.Disabled, id, disabled); !slices.Equal(next, settings.Disabled) {
+	next := withDisabled(settings.Disabled, id, disabled)
+	if !slices.Equal(next, settings.Disabled) {
 		if err := writeSettings(m.widgetsDir, Settings{Disabled: next}); err != nil {
 			return nil, fmt.Errorf("save widget settings: %w", err)
 		}
+	}
+	// Applying other IDs edited on disk still requires a reload.
+	if disabled {
+		if m.disabledIDs == nil {
+			m.disabledIDs = make(map[string]bool)
+		}
+		m.disabledIDs[id] = true
+	} else {
+		delete(m.disabledIDs, id)
 	}
 	e.mu.Lock()
 	e.disabled = disabled

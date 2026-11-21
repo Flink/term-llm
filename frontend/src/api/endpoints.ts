@@ -16,6 +16,17 @@ import type {
 } from './generated/types';
 export type SessionSearchSort = 'relevance' | 'newest' | 'oldest';
 
+export interface WidgetStatusResponse {
+  widgets: Array<Record<string, unknown>>;
+  load_errors?: string[];
+}
+
+// Older servers acknowledge mutations without including the new status.
+export interface WidgetMutationResponse extends Partial<WidgetStatusResponse> {
+  ok: true;
+  warning?: string;
+}
+
 export interface LiveSessionStartResponse {
   live_id: string;
   session_id: string;
@@ -861,15 +872,15 @@ export const endpoints = (api: APIClient) => ({
       { policy: 'mutation' },
     ),
   widgetStatus: () =>
-    api.json<Record<string, unknown>>(
+    api.json<WidgetStatusResponse>(
       '/admin/widgets/status',
       {},
       { policy: 'safe-read', auth: 'ignore' },
     ),
   stopWidget: (mount: string) =>
-    api.post<Record<string, unknown>>(`/admin/widgets/${encoded(mount)}/stop`, {}, 'mutation'),
+    api.post<WidgetMutationResponse>(`/admin/widgets/${encoded(mount)}/stop`, {}, 'mutation'),
   setWidgetDisabled: (mount: string, disabled: boolean) =>
-    api.post<Record<string, unknown>>(
+    api.post<WidgetMutationResponse>(
       `/admin/widgets/${encoded(mount)}/${disabled ? 'disable' : 'enable'}`,
       {},
       'mutation',

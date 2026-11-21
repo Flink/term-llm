@@ -390,6 +390,7 @@ export class SelectionStore {
     const sampledSteeringRevision = this.runEngine.steeringStateRevision;
     const sampledConfirmedEffort = this.confirmedEffortOf(id);
     const sampledActivity = this.sessionsStore.activity.capture();
+    const widgetRevision = this.widgets.capture();
     const stillCurrent = () =>
       epoch === this.epoch && this.sessionsStore.activeSessionId.peek() === id;
     try {
@@ -514,7 +515,7 @@ export class SelectionStore {
       this.plans.seen.value = loadedPlan ? planSummary(loadedPlan).signature : '';
       this.goals.state.value =
         state.goal && typeof state.goal === 'object' ? (state.goal as Goal) : updated.goal || null;
-      this.widgets.apply(selected.widget_status);
+      this.widgets.applyRead(selected.widget_status, widgetRevision);
       const asks = Array.isArray(state.pending_ask_users)
         ? state.pending_ask_users
         : [state.pending_ask_user];

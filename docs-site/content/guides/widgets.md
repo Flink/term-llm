@@ -175,7 +175,7 @@ disabled:
   - example
 ```
 
-To turn a widget back on by hand, remove its name and reload. A `widgets.yaml` that cannot be read disables nothing and is reported as a load error.
+To turn a widget back on by hand, remove its name and reload. If `widgets.yaml` cannot be read, term-llm reports a load error. A reload keeps the last successfully read preferences; on a fresh start there are no previous preferences to preserve. If turning a widget off saves the preference but the process does not stop, the widget stays off and Settings reports a warning.
 
 ## Reload and inspect
 

@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -36,6 +37,15 @@ func TestWidgetIndexUsesProxyPortableLinks(t *testing.T) {
 	}
 	if strings.Contains(body, `href="/ui/widgets/example/"`) {
 		t.Fatalf("index baked in node-local base path: %s", body)
+	}
+	if err := manager.SetDisabled("example", true); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	srv.handleWidgetIndex(rec, httptest.NewRequest(http.MethodGet, "/widgets", nil))
+	body = rec.Body.String()
+	if !strings.Contains(body, "<td>disabled</td>") || strings.Contains(body, `href="widgets/example/"`) {
+		t.Fatalf("disabled widget should be listed without a launch link: %s", body)
 	}
 }
 
@@ -94,8 +104,15 @@ func TestAdminWidgetActionRoutes(t *testing.T) {
 		{"/admin/widgets/example/stop", "stopped"},
 	} {
 		rec := serve(http.MethodPost, step.path)
-		if rec.Code != http.StatusOK || rec.Body.String() != `{"ok":true}` {
-			t.Fatalf("POST %s = %d %q, want 200 {\"ok\":true}", step.path, rec.Code, rec.Body.String())
+		var response struct {
+			widgetStatusResponse
+			OK bool `json:"ok"`
+		}
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &response) != nil || !response.OK {
+			t.Fatalf("POST %s = %d %q, want success JSON", step.path, rec.Code, rec.Body.String())
+		}
+		if len(response.Widgets) != 1 || response.Widgets[0].State != step.state {
+			t.Fatalf("POST %s returned widgets %+v, want %q", step.path, response.Widgets, step.state)
 		}
 		if got := state(); got != step.state {
 			t.Fatalf("after POST %s state = %q, want %q", step.path, got, step.state)
@@ -118,5 +135,20 @@ func TestAdminWidgetActionRoutes(t *testing.T) {
 	}
 	if got := state(); got != "stopped" {
 		t.Errorf("state after rejected requests = %q, want stopped", got)
+	}
+}
+
+func TestAdminWidgetActionsRequireAuth(t *testing.T) {
+	manager := widgets.NewManager(t.TempDir(), "/ui")
+	t.Cleanup(manager.Close)
+	s := &serveServer{cfg: serveServerConfig{requireAuth: true, token: "secret"}, widgetsMgr: manager}
+	mux := http.NewServeMux()
+	s.registerWidgetRoutes(mux)
+	for _, action := range []string{"stop", "enable", "disable"} {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/admin/widgets/example/"+action, nil))
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("unauthenticated %s = %d, want 401", action, w.Code)
+		}
 	}
 }

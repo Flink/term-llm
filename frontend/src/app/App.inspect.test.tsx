@@ -99,3 +99,24 @@ it('leaves browser Open untouched without a session or while authentication is r
   expect(noSession.defaultPrevented).toBe(false);
   expect(store.modal.value).toBe('');
 });
+
+it('closes Widgets with primary+K after the last enabled widget disappears', async () => {
+  setup();
+  const mac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+  const shortcut = { key: 'k', ...(mac ? { metaKey: true } : { ctrlKey: true }) };
+  act(() => {
+    store.widgets.value = [{ id: 'usage', name: 'Usage', url: '/ui/widgets/usage/' }];
+  });
+  fireEvent.keyDown(window, shortcut);
+  expect(await screen.findByRole('dialog', { name: 'Widgets' })).toBeVisible();
+
+  act(() => {
+    store.widgets.value = [];
+  });
+  expect(screen.getByText('No widgets available')).toBeVisible();
+  fireEvent.keyDown(window, shortcut);
+  expect(store.modal.value).toBe('');
+  expect(screen.queryByRole('dialog', { name: 'Widgets' })).toBeNull();
+  fireEvent.keyDown(window, shortcut);
+  expect(store.modal.value).toBe('');
+});

@@ -48,7 +48,7 @@ type widgetEntry struct {
 	manifest *Manifest
 
 	mu       sync.Mutex
-	startMu  sync.Mutex // serializes concurrent start attempts
+	startMu  sync.Mutex // serializes process starts and stops
 	state    processState
 	errMsg   string
 	owned    *procutil.Command
@@ -66,6 +66,14 @@ func (e *widgetEntry) setError(err error) error {
 	e.errMsg = err.Error()
 	e.mu.Unlock()
 	return err
+}
+
+// resetErrorLocked allows a retry on reload only if there is no process to stop.
+func (e *widgetEntry) resetErrorLocked() {
+	if e.state == stateError && e.owned == nil {
+		e.state = stateStopped
+		e.errMsg = ""
+	}
 }
 
 func (e *widgetEntry) process() *os.Process {
@@ -91,9 +99,10 @@ type Manager struct {
 	entries  map[string]*widgetEntry // mount → entry
 	loadErrs []error
 
-	// settingsMu serializes reading and rewriting SettingsFile, including
-	// the read in each scan, so a reload never undoes a concurrent change.
-	settingsMu sync.Mutex
+	// settingsMu serializes settings IO and updates to disabledIDs, the last
+	// applied preferences (including IDs without a loaded manifest).
+	settingsMu  sync.Mutex
+	disabledIDs map[string]bool
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
@@ -126,13 +135,14 @@ func (m *Manager) scan() {
 	m.settingsMu.Lock()
 	defer m.settingsMu.Unlock()
 	manifests, errs := ScanDir(m.widgetsDir)
-	// A settings file that cannot be read disables nothing; the error is
-	// reported with the other load errors.
 	settings, err := readSettings(m.widgetsDir)
 	if err != nil {
+		// Keep the last applied preferences on a bad reload. On a cold
+		// start there are none, so the load error alone is reported.
 		errs = append(errs, fmt.Errorf("widget settings: %w", err))
+	} else {
+		m.disabledIDs = settings.disabledIDs()
 	}
-	disabled := settings.disabledIDs()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -149,19 +159,19 @@ func (m *Manager) scan() {
 
 	newEntries := make(map[string]*widgetEntry, len(manifests))
 	for _, mf := range manifests {
-		off := disabled[mf.ID]
+		off := m.disabledIDs[mf.ID]
 		if existing, ok := m.entries[mf.Mount]; ok {
 			existing.mu.Lock()
 			existing.manifest = mf
 			existing.disabled = off
-			if existing.state == stateError {
-				existing.state = stateStopped
-				existing.errMsg = ""
-			}
-			live := existing.state != stateStopped
+			existing.resetErrorLocked()
+			live := existing.owned != nil || existing.state == stateStarting
+			retry := existing.state == stateError && existing.owned != nil
 			existing.mu.Unlock()
-			if off && live {
-				go existing.stopProcess()
+			if retry {
+				go existing.reconcileStop(stopIfFailed, mf.Mount)
+			} else if off && live {
+				go existing.reconcileStop(stopIfDisabled, mf.Mount)
 			}
 			newEntries[mf.Mount] = existing
 		} else {
@@ -223,7 +233,7 @@ func (m *Manager) Status() []WidgetStatus {
 			s.Error = e.errMsg
 		}
 		if e.disabled {
-			s.State, s.Error = "disabled", ""
+			s.State = "disabled"
 		}
 		e.mu.Unlock()
 		out = append(out, s)
@@ -343,6 +353,11 @@ func (m *Manager) Proxy(mount string, w http.ResponseWriter, r *http.Request) {
 	}
 
 	e.mu.Lock()
+	if e.disabled {
+		e.mu.Unlock()
+		http.Error(w, "widget disabled: "+mount, http.StatusNotFound)
+		return
+	}
 	e.lastReq = time.Now()
 	proxy := e.proxy
 	widgetID := e.manifest.ID
@@ -436,24 +451,41 @@ func (m *Manager) ensureRunning(e *widgetEntry) error {
 		return err
 	}
 	if m.isShuttingDown() {
-		e.stopProcessLocked()
+		e.stopProcessLocked(stopAlways)
 		return errWidgetManagerShuttingDown
 	}
+	// A settings change during probing must not admit this request while
+	// the corresponding stop is waiting for startMu.
+	e.mu.Lock()
+	disabled = e.disabled
+	e.mu.Unlock()
+	if disabled {
+		return errWidgetDisabled
+	}
 	return nil
+}
+
+func (e *widgetEntry) beginStart(ctx context.Context) (*Manifest, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if ctx.Err() != nil {
+		return nil, errWidgetManagerShuttingDown
+	}
+	if e.disabled {
+		return nil, errWidgetDisabled
+	}
+	e.state = stateStarting
+	return e.manifest, nil
 }
 
 func (e *widgetEntry) startProcess(ctx context.Context, basePath string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if ctx.Err() != nil {
-		return errWidgetManagerShuttingDown
+	mf, err := e.beginStart(ctx)
+	if err != nil {
+		return err
 	}
-
-	e.mu.Lock()
-	mf := e.manifest
-	e.state = stateStarting
-	e.mu.Unlock()
 	mode, _ := mf.PlaceholderMode()
 
 	var (
@@ -550,22 +582,25 @@ func (e *widgetEntry) startProcess(ctx context.Context, basePath string) error {
 	e.mu.Unlock()
 
 	go func() {
-		defer close(procDone)
 		_ = owned.Wait()
 		_ = owned.Close()
 		e.mu.Lock()
-		if e.owned == owned && (e.state == stateRunning || e.state == stateStarting) {
-			e.state = stateStopped
+		if e.owned == owned {
+			if e.state == stateRunning || e.state == stateStarting {
+				e.state = stateStopped
+			}
 			e.owned = nil
 			e.procDone = nil
 			e.proxy = nil
+			e.port = 0
 		}
+		close(procDone)
 		e.mu.Unlock()
 		log.Printf("[widget] %s process exited", mf.Mount)
 	}()
 
 	if ctx.Err() != nil {
-		e.stopProcessLocked()
+		e.stopProcessLocked(stopAlways)
 		return errWidgetManagerShuttingDown
 	}
 
@@ -575,7 +610,7 @@ func (e *widgetEntry) startProcess(ctx context.Context, basePath string) error {
 	var lastErr error
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
-			e.stopProcessLocked()
+			e.stopProcessLocked(stopAlways)
 			return errWidgetManagerShuttingDown
 		}
 
@@ -600,7 +635,7 @@ func (e *widgetEntry) startProcess(ctx context.Context, basePath string) error {
 			break
 		}
 		if ctx.Err() != nil {
-			e.stopProcessLocked()
+			e.stopProcessLocked(stopAlways)
 			return errWidgetManagerShuttingDown
 		}
 		lastErr = err
@@ -608,19 +643,14 @@ func (e *widgetEntry) startProcess(ctx context.Context, basePath string) error {
 		t := time.NewTimer(startupProbeInterval)
 		select {
 		case <-ctx.Done():
-			if !t.Stop() {
-				select {
-				case <-t.C:
-				default:
-				}
-			}
-			e.stopProcessLocked()
+			t.Stop()
+			e.stopProcessLocked(stopAlways)
 			return errWidgetManagerShuttingDown
 		case <-t.C:
 		}
 	}
 	if ctx.Err() != nil {
-		e.stopProcessLocked()
+		e.stopProcessLocked(stopAlways)
 		return errWidgetManagerShuttingDown
 	}
 	if lastErr != nil {
@@ -638,7 +668,7 @@ func (e *widgetEntry) startProcess(ctx context.Context, basePath string) error {
 	proxy.Transport = transport
 
 	if ctx.Err() != nil {
-		e.stopProcessLocked()
+		e.stopProcessLocked(stopAlways)
 		return errWidgetManagerShuttingDown
 	}
 
@@ -649,7 +679,7 @@ func (e *widgetEntry) startProcess(ctx context.Context, basePath string) error {
 	e.mu.Unlock()
 
 	if ctx.Err() != nil {
-		e.stopProcessLocked()
+		e.stopProcessLocked(stopAlways)
 		return errWidgetManagerShuttingDown
 	}
 
@@ -657,20 +687,46 @@ func (e *widgetEntry) startProcess(ctx context.Context, basePath string) error {
 	return nil
 }
 
-func (e *widgetEntry) stopProcess() error {
-	e.startMu.Lock()
-	defer e.startMu.Unlock()
-	return e.stopProcessLocked()
+func (e *widgetEntry) stopProcess() error { return e.stopWhen(stopAlways) }
+
+// stopIfDisabled reconciles the current preference, not the preference that
+// queued this work: an enable can commit while the stop waits for startMu.
+func (e *widgetEntry) stopIfDisabled() error { return e.stopWhen(stopIfDisabled) }
+
+type stopCondition uint8
+
+const (
+	stopAlways stopCondition = iota
+	stopIfDisabled
+	stopIfFailed
+)
+
+func (e *widgetEntry) reconcileStop(condition stopCondition, mount string) {
+	if err := e.stopWhen(condition); err != nil {
+		log.Printf("[widget] %s: reconcile process stop: %v", mount, err)
+	}
 }
 
-// stopProcessLocked requires startMu to be held.
-func (e *widgetEntry) stopProcessLocked() (err error) {
+func (e *widgetEntry) stopWhen(condition stopCondition) error {
+	e.startMu.Lock()
+	defer e.startMu.Unlock()
+	return e.stopProcessLocked(condition)
+}
+
+// stopProcessLocked requires startMu to be held. For a settings-driven stop,
+// check the preference and detach the process in the same critical section.
+func (e *widgetEntry) stopProcessLocked(condition stopCondition) (err error) {
 	e.mu.Lock()
+	if condition == stopIfDisabled && !e.disabled || condition == stopIfFailed && e.state != stateError {
+		e.mu.Unlock()
+		return nil
+	}
 	owned := e.owned
 	done := e.procDone
 	mode, _ := e.manifest.PlaceholderMode()
 	socketID := e.manifest.ID
 	e.state = stateStopped
+	e.errMsg = ""
 	e.owned = nil
 	e.procDone = nil
 	e.proxy = nil
@@ -703,8 +759,15 @@ func (e *widgetEntry) stopProcessLocked() (err error) {
 	case <-done:
 		return nil
 	case <-time.After(3 * time.Second):
-		// Retain ownership if even SIGKILL has not produced a wait acknowledgement.
+		// The waiter closes done under mu. Do not re-adopt a process that
+		// exited after the timeout fired but before we acquired mu.
 		e.mu.Lock()
+		select {
+		case <-done:
+			e.mu.Unlock()
+			return nil
+		default:
+		}
 		e.owned = owned
 		e.procDone = done
 		e.state = stateError

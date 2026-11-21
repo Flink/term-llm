@@ -8753,7 +8753,11 @@ describe('Preact-owned chat surfaces', () => {
         state: 'running',
       },
     ];
-    store.endpoints.stopWidget = vi.fn(async () => ({ ok: true }));
+    store.endpoints.stopWidget = vi.fn(async () => ({
+      ok: true as const,
+      widgets: [{ mount: 'usage', title: 'Usage dashboard', state: 'stopped' }],
+      load_errors: ['Could not load the reports widget'],
+    }));
 
     render(
       <StoreContext.Provider value={store}>
@@ -8773,6 +8777,7 @@ describe('Preact-owned chat surfaces', () => {
       'href',
       '/ui/widgets/usage/',
     );
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load the reports widget');
   });
 
   it('renders MCP servers as a quiet, filterable list', async () => {
