@@ -64,8 +64,7 @@ func (m *Model) handleStreamError(msg streamEventMsg, ev ui.StreamEvent, state *
 		if m.altScreen {
 			m.viewCache.historyValid = false
 			m.viewCache.lastViewportView = ""
-			m.viewCache.cachedCompletedContent = ""
-			m.viewCache.cachedTrackerVersion = 0
+			m.streamView.InvalidateCompleted()
 			m.resetAltScreenStreamingAppendCache()
 			m.bumpContentVersion()
 		}
@@ -198,7 +197,7 @@ func (m *Model) handleStreamDone(msg streamEventMsg, ev ui.StreamEvent, state *s
 				// This preserves the correct position of images/diffs relative to text.
 				// The last assistant message will be skipped in renderHistory() to avoid duplication.
 				completed := m.tracker.CompletedSegments()
-				m.viewCache.completedStream = ui.RenderSegmentsWithImageRenderer(completed, m.width, -1, m.renderMd, true, m.toolsExpanded, m.imageArtifactRenderer())
+				m.viewCache.completedStream = m.renderCompletedSegments(completed)
 				m.bumpContentVersion()
 			}
 		} else {

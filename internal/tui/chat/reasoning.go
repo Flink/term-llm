@@ -8,7 +8,6 @@ import (
 	"github.com/term-llm/term-llm/internal/llm/core"
 	internalreasoning "github.com/term-llm/term-llm/internal/reasoning"
 	renderchat "github.com/term-llm/term-llm/internal/render/chat"
-	"github.com/term-llm/term-llm/internal/session"
 	"github.com/term-llm/term-llm/internal/ui"
 )
 
@@ -219,16 +218,7 @@ func (m *Model) renderReasoningPartBlock(part core.Part) string {
 }
 
 func (m *Model) renderReasoningPartBlockWithConfig(part core.Part, cfg config.ReasoningConfig) string {
-	r := renderchat.NewMessageBlockRenderer(m.width, m.renderMd, m.toolsExpanded)
-	r.SetReasoningConfig(cfg)
-	block := r.Render(&session.Message{
-		Role:  core.RoleAssistant,
-		Parts: []core.Part{reasoningDisplayPart(part)},
-	})
-	if block == nil {
-		return ""
-	}
-	return block.Rendered
+	return renderchat.RenderReasoningPart(m.width, m.renderMd, m.toolsExpanded, reasoningDisplayPart(part), cfg)
 }
 
 func (m *Model) renderCurrentReasoningBlock() string {
@@ -259,8 +249,7 @@ func (m *Model) rerenderCommittedReasoningSegments() {
 	}
 	if changed {
 		m.tracker.Version++
-		m.viewCache.cachedCompletedContent = ""
-		m.viewCache.cachedTrackerVersion = 0
+		m.streamView.InvalidateCompleted()
 		m.viewCache.lastTrackerVersion = 0
 		m.bumpContentVersion()
 	}
@@ -280,8 +269,7 @@ func (m *Model) commitCurrentReasoningToStream() {
 	m.tracker.AddReasoningSegment(rendered, seg)
 	m.committedReasoning = append(m.committedReasoning, part)
 	m.resetActiveReasoning()
-	m.viewCache.cachedCompletedContent = ""
-	m.viewCache.cachedTrackerVersion = 0
+	m.streamView.InvalidateCompleted()
 	m.bumpContentVersion()
 }
 
@@ -294,7 +282,7 @@ func (m *Model) rerenderCompletedStreamFromTracker() {
 		return
 	}
 	m.resetAltScreenStreamingAppendCache()
-	m.viewCache.completedStream = ui.RenderSegmentsWithImageRenderer(completed, m.width, -1, m.renderMd, true, m.toolsExpanded, m.imageArtifactRenderer())
+	m.viewCache.completedStream = m.renderCompletedSegments(completed)
 	m.viewCache.lastSetContentAt = time.Time{}
 	m.bumpContentVersion()
 }

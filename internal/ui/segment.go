@@ -824,14 +824,16 @@ func RenderSegmentsWithLeading(leading *Segment, segments []*Segment, width int,
 // RenderSegmentsWithLeadingAndImageRenderer renders a list of segments, optionally
 // using a leading segment for initial spacing and renderer for image segments.
 func RenderSegmentsWithLeadingAndImageRenderer(leading *Segment, segments []*Segment, width int, wavePos int, renderMarkdown func(string, int) string, includeImages bool, expanded bool, renderer ImageArtifactRenderer) string {
-	return renderSegmentsWithLeadingState(leading, IsPlanChecklistSegment(leading), segments, width, wavePos, renderMarkdown, includeImages, expanded, renderer)
+	return renderSegmentsWithLeadingState(leading, IsPlanChecklistSegment(leading), segments, width, wavePos, renderMarkdown, includeImages, expanded, renderer, nil)
 }
 
-func renderSegmentsWithLeadingState(leading *Segment, leadingPlan bool, segments []*Segment, width int, wavePos int, renderMarkdown func(string, int) string, includeImages bool, expanded bool, renderer ImageArtifactRenderer) string {
+func renderSegmentsWithLeadingState(leading *Segment, leadingPlan bool, segments []*Segment, width int, wavePos int, renderMarkdown func(string, int) string, includeImages bool, expanded bool, renderer ImageArtifactRenderer, script *ScriptRenderOptions) string {
 	var b strings.Builder
 	lastType := SegmentText
 	lastPlan := false
 	hasPrev := false
+	line := 0
+	collectHits := script != nil && script.Hits != nil
 	if leading != nil {
 		lastType = leading.Type
 		lastPlan = leadingPlan
@@ -840,6 +842,7 @@ func renderSegmentsWithLeadingState(leading *Segment, leadingPlan bool, segments
 
 	for _, seg := range segments {
 		var rendered string
+		segExpanded := script.segmentExpanded(seg, expanded)
 		switch seg.Type {
 		case SegmentReasoning:
 			rendered = seg.Rendered
@@ -870,7 +873,7 @@ func renderSegmentsWithLeadingState(leading *Segment, leadingPlan bool, segments
 			}
 
 		case SegmentTool:
-			rendered = RenderToolSegment(seg, wavePos, width, expanded)
+			rendered = RenderToolSegment(seg, wavePos, width, segExpanded)
 			// Render subagent prompt and preview lines beneath spawn_agent tools.
 			subagentPreview := seg.SubagentPreview
 			if expanded && seg.SubagentExpandedPreview != nil {
@@ -934,7 +937,15 @@ func renderSegmentsWithLeadingState(leading *Segment, leadingPlan bool, segments
 
 		if rendered != "" {
 			if hasPrev {
-				b.WriteString(SegmentSeparatorAfter(lastType, seg.Type, lastPlan))
+				separator := SegmentSeparatorAfter(lastType, seg.Type, lastPlan)
+				b.WriteString(separator)
+				if collectHits {
+					line += strings.Count(separator, "\n")
+				}
+			}
+			if collectHits {
+				script.record(line, seg, rendered, segExpanded)
+				line += strings.Count(rendered, "\n")
 			}
 			b.WriteString(rendered)
 			lastType = seg.Type

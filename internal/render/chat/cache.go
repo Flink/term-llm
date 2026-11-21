@@ -16,6 +16,7 @@ type blockCacheKey struct {
 	toolsExpanded              bool
 	partsSignature             uint64
 	persistedSubagentSignature uint64
+	scriptExpansionSignature   uint64
 }
 
 // BlockCache is an LRU cache for rendered MessageBlocks.

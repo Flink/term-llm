@@ -19,6 +19,7 @@ const (
 	codeModeInlineBytes      = 16 << 10
 	codeModeInlineLines      = 64
 	codeModeMaxParts         = 256
+	codeModeDisclosureWidth  = 4 // Indicator, spaces and disclosure
 	codeModeStoppedIndicator = "\033[38;5;245m■\033[0m"
 )
 
@@ -504,7 +505,7 @@ func codeModeMainRow(seg *Segment, header string, width int, expanded bool, wave
 	if width == 1 || width == 2 {
 		return prefix
 	}
-	if width == 3 {
+	if width == codeModeDisclosureWidth-1 {
 		return prefix + " " + codeModeEllipsis(header, 1)
 	}
 	disclosure := "▸"
@@ -512,12 +513,12 @@ func codeModeMainRow(seg *Segment, header string, width int, expanded bool, wave
 		disclosure = "▾"
 	}
 	prefix += " " + disclosure + " "
-	if width == 4 {
+	if width == codeModeDisclosureWidth {
 		return prefix
 	}
 	contentWidth := codeModeInlineBytes
 	if width > 0 {
-		contentWidth = width - 4
+		contentWidth = width - codeModeDisclosureWidth
 	}
 	content := codeModeEllipsis(header, contentWidth)
 	if seg.ToolStatus == ToolPending {

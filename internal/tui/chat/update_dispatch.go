@@ -305,6 +305,10 @@ func (m *Model) dispatchConversationUpdate(message tea.Msg, cmds *[]tea.Cmd, flu
 
 	case sessionLoadedMsg:
 		if msg.sess != nil {
+			if m.SessionID() != msg.sess.ID {
+				m.streamView.Clear()
+				m.resetRetainedStreamTracker()
+			}
 			m.sess = msg.sess
 			m.messages = msg.messages
 			m.noteTranscriptRev(context.Background())

@@ -1780,8 +1780,7 @@ func (m *Model) invalidateViewCache() {
 	m.viewCache.historyValid = false
 	m.viewCache.historyLines = nil
 	m.viewCache.completedStream = ""
-	m.viewCache.cachedCompletedContent = ""
-	m.viewCache.cachedTrackerVersion = 0
+	m.streamView.InvalidateCompleted()
 	m.viewCache.lastTrackerVersion = 0
 	m.viewCache.lastWavePos = 0
 	m.viewCache.lastSetContentAt = time.Time{}

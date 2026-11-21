@@ -662,7 +662,7 @@ func (m *Model) invalidateImageViewportContent() {
 	}
 	m.viewCache.lastViewportView = ""
 	m.viewCache.lastSetContentAt = time.Time{}
-	m.viewCache.cachedTrackerVersion = 0
+	m.streamView.InvalidateCompleted()
 	m.resetAltScreenStreamingAppendCache()
 	m.bumpContentVersion()
 }

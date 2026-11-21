@@ -44,6 +44,7 @@ import (
 	"github.com/term-llm/term-llm/internal/termimage"
 	"github.com/term-llm/term-llm/internal/tooldiscovery"
 	"github.com/term-llm/term-llm/internal/tools"
+	"github.com/term-llm/term-llm/internal/tui/chat/streamview"
 	"github.com/term-llm/term-llm/internal/tui/inspector"
 	sessionsui "github.com/term-llm/term-llm/internal/tui/sessions"
 	worktreesui "github.com/term-llm/term-llm/internal/tui/worktrees"
@@ -569,10 +570,7 @@ type Model struct {
 		lastTrackerVersion           uint64 // Last seen tracker.Version (to detect content changes)
 		lastStreamingContent         string // Last rendered streaming tail in alt-screen mode
 		lastContentHistoryPlusStream bool   // Whether the rendered viewport is exactly history + streaming tail
-		// Caching for streaming segments to avoid re-rendering on every frame
-		cachedCompletedContent string // Rendered completed segments
-		cachedTrackerVersion   uint64 // Tracker version when cache was built
-		lastWavePos            int    // Last wave position for animation
+		lastWavePos                  int    // Last wave position for animation
 		// Selection cache for invalidation
 		lastSelection          Selection
 		lastContentStr         string // stored for lazy contentLines split
@@ -601,6 +599,9 @@ type Model struct {
 
 	// Per-history reasoning block click overrides, keyed by rendered reasoning ordinal.
 	reasoningExpansionOverrides map[int]bool
+
+	// Per-call script header state and render-derived click hits.
+	streamView streamview.State
 
 	// Mouse layout tracking for textarea click-to-cursor support
 	textareaBoundsValid    bool
@@ -1513,7 +1514,7 @@ func (m *Model) applyWindowSize(msg tea.WindowSizeMsg) {
 			// Keep the last rendered viewport available for the cheap resize frame.
 			// Bubble Tea erases the alt screen before delivering WindowSizeMsg; clearing
 			// this cache here would leave nothing to draw while a large history reflows.
-			m.viewCache.cachedTrackerVersion = 0
+			m.streamView.InvalidateCompleted()
 			// Preserve cleanup for every replacement-capable post-frame payload in
 			// this resize generation. The new renderer frame erases old placement
 			// anchors before this cleanup and the fresh upload/placement are written.
@@ -1600,8 +1601,7 @@ func (m *Model) resetTracker() {
 	m.tracker.TextMode = m.textMode
 	m.tracker.SetExpanded(m.toolsExpanded)
 	m.tracker.SetExpandHintShown(m.toolExpandHintShown)
-	m.viewCache.cachedCompletedContent = ""
-	m.viewCache.cachedTrackerVersion = 0
+	m.streamView.InvalidateCompleted()
 	m.viewCache.lastTrackerVersion = 0
 	m.viewCache.lastWavePos = 0
 }
@@ -1615,8 +1615,13 @@ func (m *Model) resetTracker() {
 // renderStreamingInline. Tool-initiated handovers continue the current engine
 // stream and must keep their tracker, so those callers skip this.
 func (m *Model) resetRetainedStreamTracker() {
-	if m.altScreen && m.tracker != nil {
-		m.resetTracker()
+	if !m.altScreen || m.tracker == nil {
+		return
+	}
+	m.resetTracker()
+	if m.viewCache.completedStream != "" {
+		m.viewCache.completedStream = ""
+		m.invalidateHistoryCache()
 	}
 }
 
@@ -1637,7 +1642,7 @@ func (m *Model) preserveStreamingContentOnError() {
 		return
 	}
 	m.resetAltScreenStreamingAppendCache()
-	m.viewCache.completedStream = ui.RenderSegmentsWithImageRenderer(completed, m.width, -1, m.renderMd, true, m.toolsExpanded, m.imageArtifactRenderer())
+	m.viewCache.completedStream = m.renderCompletedSegments(completed)
 }
 
 func (m *Model) renderStreamingContentOnErrorForScrollback() string {

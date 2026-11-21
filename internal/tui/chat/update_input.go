@@ -68,6 +68,12 @@ func (m *Model) handleMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.selection = Selection{}
 		return m, nil
 	}
+	// Script lifecycle headers are independent per-call toggles anchored to the
+	// rendered header span, still before drag-selection starts.
+	if m.handleScriptMouseClick(msg) {
+		m.selection = Selection{}
+		return m, nil
+	}
 	// Text selection in alt-screen viewport (before textarea handling)
 	if m.altScreen && m.handleSelectionMouse(msg) {
 		return m, nil

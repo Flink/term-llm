@@ -230,6 +230,7 @@ One line per root-module package, generated from package doc comments by `make d
 - `internal/tsgen` — generates the explicitly registered serve JSON contracts for the web UI.
 - `internal/tui/chat` — implements the interactive terminal chat TUI and its run lifecycle.
 - `internal/tui/chat/agentbarrier` — owns persisted TUI lifecycle delivery settlement.
+- `internal/tui/chat/streamview` — renders the chat streaming tail and tracks the script disclosures shared by the live and historical transcript.
 - `internal/tui/inspector` — implements the read-only conversation inspector overlay.
 - `internal/tui/mcp` — implements the interactive MCP server browser TUI.
 - `internal/tui/sessions` — implements the interactive session browser TUI.

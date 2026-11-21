@@ -488,6 +488,7 @@ func (m *Model) cmdClear() (tea.Model, tea.Cmd) {
 	m.setTextareaValue("")
 	m.clearFiles()
 	m.pasteChunks = nil
+	m.streamView.Clear()
 
 	// Reset engine state (compaction tracking, provider conversation IDs)
 	if m.engine != nil {

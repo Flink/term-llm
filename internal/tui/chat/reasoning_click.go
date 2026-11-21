@@ -95,8 +95,7 @@ func (m *Model) toggleCurrentReasoningBlock() bool {
 	}
 	next := !current
 	m.currentReasoningExpanded = &next
-	m.viewCache.cachedCompletedContent = ""
-	m.viewCache.cachedTrackerVersion = 0
+	m.streamView.InvalidateCompleted()
 	m.viewCache.lastTrackerVersion = 0
 	m.viewCache.lastSetContentAt = time.Time{}
 	m.resetAltScreenStreamingAppendCache()
@@ -122,8 +121,7 @@ func (m *Model) toggleTrackerReasoningSegment(segmentIndex int) bool {
 	seg.Text = rendered
 	seg.Rendered = rendered
 	m.tracker.Version++
-	m.viewCache.cachedCompletedContent = ""
-	m.viewCache.cachedTrackerVersion = 0
+	m.streamView.InvalidateCompleted()
 	m.viewCache.lastTrackerVersion = 0
 	m.viewCache.lastSetContentAt = time.Time{}
 	m.resetAltScreenStreamingAppendCache()
@@ -132,19 +130,12 @@ func (m *Model) toggleTrackerReasoningSegment(segmentIndex int) bool {
 	return true
 }
 
-func renderedHistoryLineCount(content string) int {
-	if content == "" {
-		return 0
-	}
-	return strings.Count(content, "\n")
-}
-
 func (m *Model) captureReasoningClickSnapshot() {
 	snapshot := reasoningClickSnapshot{}
 	if m.chatRenderer != nil {
 		snapshot.historyLineOrdinals = m.chatRenderer.ReasoningLineOrdinalsSnapshot()
 	}
-	historyLines := renderedHistoryLineCount(m.viewCache.historyContent)
+	historyLines := strings.Count(m.viewCache.historyContent, "\n")
 	snapshot.trackerSegmentIndexByLine = m.trackerReasoningLineSnapshot(historyLines)
 	if line, ok := m.currentReasoningLineSnapshot(historyLines); ok {
 		snapshot.currentReasoningLine = line
@@ -180,7 +171,8 @@ func (m *Model) trackerReasoningLineSnapshot(historyLines int) map[int]int {
 			}
 			leadingInitialized = true
 		}
-		rendered := ui.RenderSegmentsWithImageRenderer([]*ui.Segment{seg}, m.width, -1, m.renderMd, m.altScreen, trackerExpanded, m.imageArtifactRenderer())
+		script := m.streamView.ScriptOptions(m.width)
+		rendered := ui.RenderSegmentsWithScriptOptions([]*ui.Segment{seg}, m.width, -1, m.renderMd, m.altScreen, trackerExpanded, m.imageArtifactRenderer(), &script)
 		if rendered == "" {
 			continue
 		}
@@ -210,10 +202,12 @@ func (m *Model) currentReasoningLineSnapshot(historyLines int) (int, bool) {
 		return 0, false
 	}
 	completedContent := ""
+	completedVersion := uint64(0)
 	if m.tracker != nil {
-		completedContent = m.viewCache.cachedCompletedContent
-		if m.viewCache.cachedTrackerVersion != m.tracker.Version {
-			completedContent = m.tracker.RenderUnflushedWithImageRenderer(m.width, m.renderMd, m.altScreen, m.imageArtifactRenderer())
+		completedContent, completedVersion = m.streamView.Completed()
+		if completedVersion != m.tracker.Version {
+			script := m.streamView.ScriptOptions(m.width)
+			completedContent = m.tracker.RenderUnflushedWithImageRendererAndScripts(m.width, m.renderMd, m.altScreen, m.imageArtifactRenderer(), &script)
 		}
 	}
 	runningLines := strings.Count(completedContent, "\n")

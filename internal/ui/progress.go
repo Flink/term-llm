@@ -44,6 +44,12 @@ type StreamingIndicator struct {
 	Width          int                      // terminal width for markdown rendering
 	RenderMarkdown func(string, int) string // markdown renderer for text segments
 	ToolsExpanded  bool                     // render tool calls in expanded mode
+	// ScriptExpansion overrides script lifecycle expansion per tool-call ID;
+	// missing entries fall back to ToolsExpanded.
+	ScriptExpansion map[string]bool
+	// ScriptHits, when non-nil, receives clickable script header rows relative
+	// to the rendered indicator output.
+	ScriptHits *[]ScriptHeaderHit
 
 	// Flush state for leading spacing
 	HasFlushed      bool
@@ -60,7 +66,20 @@ func (s StreamingIndicator) Render(styles *Styles) string {
 		if s.HasFlushed {
 			b.WriteString(FlushSegmentSeparatorAfter(s.LastFlushedType, s.Segments[0].Type, s.LastFlushedPlan))
 		}
-		b.WriteString(RenderSegments(s.Segments, s.Width, s.WavePos, s.RenderMarkdown, false, s.ToolsExpanded))
+		var hits []ScriptHeaderHit
+		opts := ScriptRenderOptions{Width: s.Width, Expanded: s.ScriptExpansion}
+		baseLine := 0
+		if s.ScriptHits != nil {
+			opts.Hits = &hits
+			baseLine = strings.Count(b.String(), "\n")
+		}
+		b.WriteString(RenderSegmentsWithScriptOptions(s.Segments, s.Width, s.WavePos, s.RenderMarkdown, false, s.ToolsExpanded, nil, &opts))
+		if s.ScriptHits != nil {
+			for _, hit := range hits {
+				hit.Line += baseLine
+				*s.ScriptHits = append(*s.ScriptHits, hit)
+			}
+		}
 		// When tools are active, we don't show the spinner/phase line
 		// as the wave animation provides the progress feedback.
 	} else if !s.HideProgress {

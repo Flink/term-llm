@@ -649,6 +649,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			oldYOffset = m.viewport.YOffset()
 		}
 		m.toolsExpanded = !m.toolsExpanded
+		// Global detail toggling resets per-call script overrides so every row
+		// follows the new fallback in both inline and alt-screen modes.
+		m.streamView.Clear()
 		m.setReasoningDetailsExpanded(m.toolsExpanded)
 		if m.chatRenderer != nil {
 			m.chatRenderer.SetToolsExpanded(m.toolsExpanded)
@@ -658,8 +661,6 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.rerenderCommittedReasoningSegments()
 			m.rerenderCompletedStreamFromTracker()
 		}
-		m.viewCache.cachedCompletedContent = ""
-		m.viewCache.cachedTrackerVersion = 0
 		m.viewCache.lastTrackerVersion = 0
 		m.viewCache.lastSetContentAt = time.Time{}
 		m.resetAltScreenStreamingAppendCache()

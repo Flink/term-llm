@@ -246,8 +246,7 @@ func (m *Model) handleStreamAttemptDiscard(msg streamEventMsg, ev ui.StreamEvent
 	m.newlineCompactor = ui.NewStreamingNewlineCompactor(ui.MaxStreamingConsecutiveNewlines)
 	m.setRetryStatus("Interrupted response discarded; retrying...")
 	m.phase = "Retrying"
-	m.viewCache.cachedCompletedContent = ""
-	m.viewCache.cachedTrackerVersion = 0
+	m.streamView.InvalidateCompleted()
 	m.viewCache.lastViewportView = ""
 	m.resetAltScreenStreamingAppendCache()
 	// Discard is a rollback, not another append. Force the very next View to

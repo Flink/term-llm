@@ -588,6 +588,7 @@ func (m *Model) viewAltScreenSetContent(contentStr string, contentLines []string
 	}
 	m.viewCache.lastSetContentAt = setContentEnd
 	m.captureReasoningClickSnapshot()
+	m.captureScriptClicks()
 	m.viewCache.userMessageAnchors = m.chatRenderer.UserMessageAnchorsSnapshot()
 	m.viewCache.lastRenderedVersion = m.viewCache.contentVersion
 	// On first render (including resumed sessions), anchor at latest content.
@@ -1105,91 +1106,6 @@ func (m *Model) maybeFlushToScrollback() tea.Cmd {
 		return tea.Println(result.ToPrint)
 	}
 	return nil
-}
-
-// renderStreamingInline renders the streaming response for inline mode
-func (m *Model) renderStreamingInline() string {
-	var b strings.Builder
-
-	// Cache rendered completed segments - only rebuild when tracker.Version changes
-	// This avoids expensive re-rendering during wave animation
-	var content string
-	if m.tracker != nil && m.viewCache.cachedTrackerVersion == m.tracker.Version {
-		content = m.viewCache.cachedCompletedContent
-	} else if m.tracker != nil {
-		// Render completed segments (segment-based tracking handles what's already flushed)
-		// In alt screen mode, include images since we never flush to scrollback.
-		// The alt-screen image renderer keeps raw upload/control bytes out of the viewport.
-		content = m.tracker.RenderUnflushedWithImageRenderer(m.width, m.renderMd, m.altScreen, m.imageArtifactRenderer())
-		m.viewCache.cachedCompletedContent = content
-		m.viewCache.cachedTrackerVersion = m.tracker.Version
-	}
-
-	if content != "" {
-		b.WriteString(content)
-	}
-
-	if activeReasoning := m.renderCurrentReasoningBlock(); activeReasoning != "" {
-		if b.Len() > 0 && !strings.HasSuffix(b.String(), "\n\n") {
-			if strings.HasSuffix(b.String(), "\n") {
-				b.WriteString("\n")
-			} else {
-				b.WriteString("\n\n")
-			}
-		} else if b.Len() == 0 && m.tracker != nil && m.tracker.HasFlushed {
-			b.WriteString(m.tracker.FlushLeadingSeparator(ui.SegmentReasoning))
-		}
-		b.WriteString(strings.TrimLeft(activeReasoning, "\n"))
-	}
-
-	// Show the indicator with current phase, unless paused for external UI
-	if !m.pausedForExternalUI {
-		wavePos := 0
-		var active []*ui.Segment
-		if m.tracker != nil {
-			wavePos = m.tracker.WavePos
-			active = m.tracker.ActiveSegments()
-		}
-
-		hasContent := b.Len() > 0
-		if hasContent {
-			if len(active) > 0 && m.tracker != nil {
-				completed := m.tracker.CompletedSegments()
-				if len(completed) > 0 {
-					b.WriteString(ui.SegmentSeparatorBetween(completed[len(completed)-1], active[0]))
-				}
-			} else {
-				b.WriteString("\n")
-			}
-		}
-
-		indicator := ui.StreamingIndicator{
-			Spinner:         m.spinner.View(),
-			Phase:           m.phase,
-			Elapsed:         m.visibleStreamElapsed(),
-			Tokens:          m.currentTokens,
-			ShowCancel:      true,
-			HideProgress:    true, // progress shown in status line instead
-			Segments:        active,
-			WavePos:         wavePos,
-			Width:           m.width,
-			RenderMarkdown:  m.renderMd,
-			ToolsExpanded:   m.toolsExpanded,
-			HasFlushed:      !hasContent && m.tracker != nil && m.tracker.HasFlushed,
-			LastFlushedType: m.tracker.LastFlushedType,
-			LastFlushedPlan: m.tracker.LastFlushedPlan,
-		}
-		b.WriteString(indicator.Render(m.styles))
-		b.WriteString("\n")
-
-		// Retry status if present (shown as warning on separate line)
-		if m.retryStatus != "" {
-			b.WriteString(lipgloss.NewStyle().Foreground(m.styles.Theme().Warning).Render("⚠ " + m.retryStatus))
-			b.WriteString("\n")
-		}
-	}
-
-	return b.String()
 }
 
 // renderInputInline renders the input prompt for inline mode
@@ -2189,6 +2105,7 @@ func (m *Model) renderHistory() string {
 		Width:                       m.width,
 		Height:                      m.height,
 		ReasoningExpansionOverrides: m.reasoningExpansionOverrides,
+		ScriptExpansionOverrides:    m.streamView.Overrides(),
 		PersistedSubagents:          m.persistedSubagents,
 	}
 

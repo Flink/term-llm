@@ -68,6 +68,7 @@ type RenderState struct {
 	ShowStats                   bool
 	Error                       error // Display error if set
 	ReasoningExpansionOverrides map[int]bool
+	ScriptExpansionOverrides    map[string]bool
 	PersistedSubagents          map[string]subagentview.CompletedRun
 }
 
@@ -150,6 +151,7 @@ type Renderer struct {
 
 	lastReasoningLineOrdinals map[int]int
 	lastReasoningHeaderCount  int
+	lastScriptLineHits        map[int]ui.ScriptHeaderHit
 	lastUserMessageAnchors    []UserMessageAnchor
 
 	// Configuration
@@ -381,6 +383,7 @@ func (r *Renderer) renderAltScreen(state RenderState) string {
 func (r *Renderer) renderHistory(state RenderState) string {
 	r.lastReasoningLineOrdinals = make(map[int]int)
 	r.lastReasoningHeaderCount = 0
+	r.lastScriptLineHits = make(map[int]ui.ScriptHeaderHit)
 	r.lastUserMessageAnchors = nil
 	if len(state.Messages) == 0 {
 		return ""
@@ -425,7 +428,7 @@ func (r *Renderer) renderHistory(state RenderState) string {
 		if msg.Role != core.RoleUser && msg.Role != core.RoleAssistant && msg.Role != core.RoleEvent && !pathNote {
 			continue
 		}
-		block := r.getOrRenderBlock(msg, i, state.Messages, reasoningOrdinal, state.ReasoningExpansionOverrides, state.PersistedSubagents)
+		block := r.getOrRenderBlock(msg, i, state.Messages, reasoningOrdinal, state.ReasoningExpansionOverrides, state.ScriptExpansionOverrides, state.PersistedSubagents)
 		if block.Rendered != "" {
 			if hasPreviousRenderedSegment && block.HasSegmentTypes {
 				padding := ui.NewlinePadding(trailingNewlines, ui.SegmentBoundaryTrailingNewlines(previousLastType, block.FirstSegmentType))
@@ -451,6 +454,7 @@ func (r *Renderer) renderHistory(state RenderState) string {
 			for offsetIdx, offset := range block.ReasoningLineOffsets {
 				r.lastReasoningLineOrdinals[blockStartLine+offset] = reasoningOrdinal + offsetIdx
 			}
+			r.recordScriptBlockHeaders(block, blockStartLine)
 			b.WriteString(block.Rendered)
 			lineCursor += strings.Count(block.Rendered, "\n")
 			trailingNewlines = ui.CountTrailingNewlines(block.Rendered)
@@ -547,18 +551,19 @@ func (r *Renderer) CachedHistorySignature(messages []session.Message) uint64 {
 }
 
 // getOrRenderBlock gets a rendered block from cache or renders it.
-func (r *Renderer) getOrRenderBlock(msg *session.Message, index int, messages []session.Message, reasoningOrdinalBase int, reasoningOverrides map[int]bool, persistedSubagents map[string]subagentview.CompletedRun) *MessageBlock {
+func (r *Renderer) getOrRenderBlock(msg *session.Message, index int, messages []session.Message, reasoningOrdinalBase int, reasoningOverrides map[int]bool, scriptOverrides map[string]bool, persistedSubagents map[string]subagentview.CompletedRun) *MessageBlock {
 	projectionSignature := persistedSubagentSignature(msg, persistedSubagents)
 	cacheKey := r.blockCacheKey(msg, index, projectionSignature)
+	cacheKey.scriptExpansionSignature = scriptExpansionSignature(msg, scriptOverrides, r.toolsExpanded)
 	block := r.blockCache.Get(cacheKey)
 	if block == nil {
-		block = r.renderMessageBlock(msg, index, messages, persistedSubagents)
+		block = r.renderMessageBlockWithOverrides(msg, index, messages, 0, nil, scriptOverrides, persistedSubagents)
 		r.blockCache.Put(cacheKey, block)
 	}
 	if !reasoningOverridesAffectBlock(reasoningOrdinalBase, block.ReasoningCount, reasoningOverrides) {
 		return block
 	}
-	return r.renderMessageBlockWithReasoningOverrides(msg, index, messages, reasoningOrdinalBase, reasoningOverrides, persistedSubagents)
+	return r.renderMessageBlockWithOverrides(msg, index, messages, reasoningOrdinalBase, reasoningOverrides, scriptOverrides, persistedSubagents)
 }
 
 func reasoningOverridesAffectBlock(baseOrdinal, reasoningCount int, overrides map[int]bool) bool {
@@ -768,16 +773,12 @@ func writeUint64Hash(h uint64, v uint64) uint64 {
 	return h
 }
 
-// renderMessageBlock renders a single message to a block.
-func (r *Renderer) renderMessageBlock(msg *session.Message, index int, messages []session.Message, persistedSubagents map[string]subagentview.CompletedRun) *MessageBlock {
-	return r.renderMessageBlockWithReasoningOverrides(msg, index, messages, 0, nil, persistedSubagents)
-}
-
-func (r *Renderer) renderMessageBlockWithReasoningOverrides(msg *session.Message, index int, messages []session.Message, reasoningOrdinalBase int, reasoningOverrides map[int]bool, persistedSubagents map[string]subagentview.CompletedRun) *MessageBlock {
+func (r *Renderer) renderMessageBlockWithOverrides(msg *session.Message, index int, messages []session.Message, reasoningOrdinalBase int, reasoningOverrides map[int]bool, scriptOverrides map[string]bool, persistedSubagents map[string]subagentview.CompletedRun) *MessageBlock {
 	rb := NewMessageBlockRendererWithContext(r.width, r.markdownRenderer, messages, index, r.toolsExpanded)
 	rb.SetImageRenderer(r.imageRenderer)
 	rb.SetReasoningConfig(r.reasoningConfig)
 	rb.SetReasoningExpansionOverrides(reasoningOrdinalBase, reasoningOverrides)
+	rb.SetScriptExpansionOverrides(scriptOverrides)
 	rb.SetPersistedSubagents(persistedSubagents)
 	return rb.Render(msg)
 }

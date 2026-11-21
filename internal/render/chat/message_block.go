@@ -57,6 +57,10 @@ type MessageBlock struct {
 	// ReasoningLineOffsets are zero-based line offsets, relative to Rendered, for
 	// each actual reasoning/thought header rendered in this block.
 	ReasoningLineOffsets []int
+
+	// ScriptHeaders describe rendered script lifecycle headers, relative to
+	// Rendered, in render order. They anchor click targets to tool-call IDs.
+	ScriptHeaders []ui.ScriptHeaderHit
 }
 
 // MessageBlockRenderer renders session messages to MessageBlocks.
@@ -73,6 +77,8 @@ type MessageBlockRenderer struct {
 	reasoningExpandByIndex map[int]bool
 	reasoningRenderedCount int
 	reasoningLineOffsets   []int
+	scriptExpandByCallID   map[string]bool
+	scriptHeaders          []ui.ScriptHeaderHit
 	persistedSubagents     map[string]subagentview.CompletedRun
 	mediaByReference       map[string]core.MediaArtifact
 	firstSegmentType       ui.SegmentType
@@ -160,10 +166,17 @@ func (r *MessageBlockRenderer) SetReasoningExpansionOverrides(base int, override
 	r.reasoningExpandByIndex = overrides
 }
 
+// SetScriptExpansionOverrides configures optional per-call script lifecycle
+// expansion overrides. Keys are real tool-call IDs.
+func (r *MessageBlockRenderer) SetScriptExpansionOverrides(overrides map[string]bool) {
+	r.scriptExpandByCallID = overrides
+}
+
 // Render converts a session.Message to a MessageBlock.
 func (r *MessageBlockRenderer) Render(msg *session.Message) *MessageBlock {
 	r.reasoningRenderedCount = 0
 	r.reasoningLineOffsets = nil
+	r.scriptHeaders = nil
 	r.firstSegmentType = ui.SegmentText
 	r.lastSegmentType = ui.SegmentText
 	r.hasSegmentTypes = false
@@ -214,6 +227,7 @@ func (r *MessageBlockRenderer) Render(msg *session.Message) *MessageBlock {
 		HasSegmentTypes:      r.hasSegmentTypes,
 		ReasoningCount:       r.reasoningRenderedCount,
 		ReasoningLineOffsets: append([]int(nil), r.reasoningLineOffsets...),
+		ScriptHeaders:        append([]ui.ScriptHeaderHit(nil), r.scriptHeaders...),
 	}
 }
 
@@ -552,60 +566,7 @@ func (r *MessageBlockRenderer) renderAssistantMessage(msg *session.Message) stri
 					hasContent = true
 					continue
 				}
-				result := r.findToolResult(part.ToolCall.ID)
-				status := ui.ToolSuccess
-				if result != nil && result.IsError {
-					status = ui.ToolError
-				}
-				if rendered, ok := ui.RenderCodeModeToolCall(part.ToolCall, result, r.width, r.toolsExpanded, status); ok {
-					b.WriteString(rendered)
-				} else {
-					b.WriteString(ui.RenderToolCallFromPartWithStatus(part.ToolCall, r.width, r.toolsExpanded, status))
-				}
-				b.WriteString("\n")
-				r.noteRenderedSegment(ui.SegmentTool)
-				hasContent = true
-
-				if result != nil && len(result.Images) > 0 {
-					b.WriteString(r.renderToolMedia(core.NormalizeMedia(nil, result.Images)))
-					r.noteRenderedSegment(ui.SegmentImage)
-				}
-
-				// Render diffs for supported tool calls by looking up the tool result
-				switch part.ToolCall.Name {
-				case "edit_file", "unified_diff", "spawn_agent", "write_file":
-					if result != nil {
-						// Prefer structured Diffs (new sessions)
-						diffs := result.Diffs
-						if len(diffs) == 0 {
-							// Fall back to parsing markers from Display/Content (old sessions
-							// saved before structured Diffs were added). This fallback can be
-							// removed once no saved sessions contain __DIFF__ text markers.
-							content := result.Display
-							if content == "" {
-								content = result.Content
-							}
-							if part.ToolCall.Name == "spawn_agent" {
-								var res struct {
-									Output string `json:"output"`
-								}
-								if err := json.Unmarshal([]byte(content), &res); err == nil {
-									content = res.Output
-								}
-							}
-							diffs = ui.ParseDiffMarkers(content)
-						}
-
-						for _, diff := range diffs {
-							rendered := ui.RenderDiffSegmentWithOperation(diff.File, diff.Old, diff.New, r.width, diff.Line, diff.Operation)
-							if rendered != "" {
-								b.WriteString(rendered)
-								b.WriteString("\n")
-								r.noteRenderedSegment(ui.SegmentDiff)
-							}
-						}
-					}
-				}
+				r.renderAssistantToolCallPart(&b, part, &hasContent)
 			}
 			// Skip PartToolResult - they're in user messages and verbose
 		}
@@ -624,6 +585,74 @@ func (r *MessageBlockRenderer) renderAssistantMessage(msg *session.Message) stri
 	// Text parts append paragraph spacing above.
 
 	return b.String()
+}
+
+// renderAssistantToolCallPart renders one non-persisted tool-call part,
+// including script header hits, media, and structured diffs.
+func (r *MessageBlockRenderer) renderAssistantToolCallPart(b *strings.Builder, part core.Part, hasContent *bool) {
+	result := r.findToolResult(part.ToolCall.ID)
+	status := ui.ToolSuccess
+	if result != nil && result.IsError {
+		status = ui.ToolError
+	}
+	expanded := r.toolsExpanded
+	if ui.IsScriptTool(part.ToolCall.Name) {
+		if override, ok := r.scriptExpandByCallID[part.ToolCall.ID]; ok {
+			expanded = override
+		}
+	}
+	if rendered, ok := ui.RenderCodeModeToolCall(part.ToolCall, result, r.width, expanded, status); ok {
+		r.recordScriptHeader(b.String(), part.ToolCall.ID, rendered, expanded)
+		b.WriteString(rendered)
+	} else {
+		b.WriteString(ui.RenderToolCallFromPartWithStatus(part.ToolCall, r.width, r.toolsExpanded, status))
+	}
+	b.WriteString("\n")
+	r.noteRenderedSegment(ui.SegmentTool)
+	*hasContent = true
+
+	if result != nil && len(result.Images) > 0 {
+		b.WriteString(r.renderToolMedia(core.NormalizeMedia(nil, result.Images)))
+		r.noteRenderedSegment(ui.SegmentImage)
+	}
+
+	// Render diffs for supported tool calls by looking up the tool result.
+	switch part.ToolCall.Name {
+	case "edit_file", "unified_diff", "spawn_agent", "write_file":
+		if result != nil {
+			diffs := r.toolResultDiffs(part.ToolCall.Name, result)
+			for _, diff := range diffs {
+				rendered := ui.RenderDiffSegmentWithOperation(diff.File, diff.Old, diff.New, r.width, diff.Line, diff.Operation)
+				if rendered != "" {
+					b.WriteString(rendered)
+					b.WriteString("\n")
+					r.noteRenderedSegment(ui.SegmentDiff)
+				}
+			}
+		}
+	}
+}
+
+// toolResultDiffs prefers structured diffs and falls back to legacy markers
+// stored in Display/Content by sessions saved before structured diffs existed.
+func (r *MessageBlockRenderer) toolResultDiffs(toolName string, result *core.ToolResult) []core.DiffData {
+	diffs := result.Diffs
+	if len(diffs) != 0 {
+		return diffs
+	}
+	content := result.Display
+	if content == "" {
+		content = result.Content
+	}
+	if toolName == "spawn_agent" {
+		var res struct {
+			Output string `json:"output"`
+		}
+		if err := json.Unmarshal([]byte(content), &res); err == nil {
+			content = res.Output
+		}
+	}
+	return ui.ParseDiffMarkers(content)
 }
 
 func completedSubagentSegment(call *core.ToolCall, run subagentview.CompletedRun) ui.Segment {
