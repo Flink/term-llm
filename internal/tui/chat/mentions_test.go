@@ -711,6 +711,36 @@ func TestMentionPopupWithNoSelectionDoesNotConsumeSubmission(t *testing.T) {
 	}
 }
 
+func TestMentionIndexRefreshDoesNotSubmitWhileReplacingRows(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		streaming bool
+	}{{"idle", false}, {"streaming", true}} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestChatModel(false)
+			m.streaming = tt.streaming
+			const draft = "review @"
+			prepareMentionPopup(m, t.TempDir(), draft, testMentionCandidate("apple.txt"))
+			m.handleMentionMessage(mentionIndexReadyMsg{
+				root: m.mentionRoot, generation: m.mentionIndexGeneration,
+				snapshot: &mentions.Snapshot{Candidates: []mentions.Candidate{testMentionCandidate("berry.txt")}},
+			})
+			_, _ = m.handleKeyMsg(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if !m.mentionPopup.IsVisible() || m.textarea.Value() != draft || len(m.messages) != 0 || len(m.pendingSteering) != 0 {
+				t.Fatalf("Enter during refresh: popup=%v draft=%q messages=%d steering=%d", m.mentionPopup.IsVisible(), m.textarea.Value(), len(m.messages), len(m.pendingSteering))
+			}
+			m.handleMentionMessage(mentionMatchesMsg{
+				root: m.mentionRoot, generation: m.mentionIndexGeneration, request: m.mentionQueryRequest,
+				token: m.mentionPopup.token, cursor: len(draft), matches: []mentions.Match{{Candidate: 0}},
+			})
+			_, _ = m.handleKeyMsg(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if m.textarea.Value() != "review @berry.txt " || m.mentionPopup.IsVisible() {
+				t.Fatalf("Enter after refresh: popup=%v draft=%q", m.mentionPopup.IsVisible(), m.textarea.Value())
+			}
+		})
+	}
+}
+
 func TestMentionMatchesStayVisibleButBecomeInvalidWhenQueryChanges(t *testing.T) {
 	m := newTestChatModel(false)
 	m.width = 80
@@ -728,6 +758,9 @@ func TestMentionMatchesStayVisibleButBecomeInvalidWhenQueryChanges(t *testing.T)
 		t.Fatalf("results disappeared during debounce: %#v", m.mentionPopup.matches)
 	}
 	afterPopup := m.renderMentionPopup()
+	if strings.Contains(ui.StripANSI(afterPopup), "› ") {
+		t.Fatal("retained rows still look selectable during debounce")
+	}
 	if afterHeight := lipgloss.Height(afterPopup); afterHeight != beforeHeight {
 		t.Fatalf("popup height changed during debounce: %d -> %d\nbefore: %q\nafter:  %q", beforeHeight, afterHeight, ui.StripANSI(beforePopup), ui.StripANSI(afterPopup))
 	}
@@ -744,8 +777,17 @@ func TestMentionMatchesStayVisibleButBecomeInvalidWhenQueryChanges(t *testing.T)
 	}
 	updated, _ = m.handleKeyMsg(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(*Model)
-	if len(m.messages) == 0 || m.messages[len(m.messages)-1].TextContent != "review @typz" {
-		t.Fatalf("stale result rewrote or blocked submission: %#v", m.messages)
+	if len(m.messages) != 0 || m.textarea.Value() != "review @typz" || !m.mentionPopup.IsVisible() {
+		t.Fatalf("Enter on a retained row should wait for fresh results: draft=%q messages=%d popup=%v", m.textarea.Value(), len(m.messages), m.mentionPopup.IsVisible())
+	}
+	// Once the new query returns no matches, Enter can submit the literal draft.
+	m.handleMentionMessage(mentionMatchesMsg{
+		root: m.mentionRoot, generation: m.mentionIndexGeneration, request: m.mentionQueryRequest,
+		token: m.mentionPopup.token, cursor: len(m.textarea.Value()),
+	})
+	_, _ = m.handleKeyMsg(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(m.messages) != 1 || m.messages[0].TextContent != "review @typz" {
+		t.Fatalf("Enter after no matches did not send the original draft: %#v", m.messages)
 	}
 }
 
@@ -789,8 +831,8 @@ func TestMentionAcceptanceRejectsStaleIndexGeneration(t *testing.T) {
 	m.mentionIndexGeneration++
 
 	consumed, _ := m.handleMentionPopupKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if consumed {
-		t.Fatal("Enter consumed submission for a stale index selection")
+	if !consumed {
+		t.Fatal("Enter on a stale index selection fell through to submission")
 	}
 	if got := m.textarea.Value(); got != value {
 		t.Fatalf("stale index selection rewrote draft to %q", got)
@@ -1129,21 +1171,36 @@ func TestMentionQueryCancellationAndRootReset(t *testing.T) {
 	}
 }
 
-func TestBareMentionEnterDoesNotRewriteDraft(t *testing.T) {
-	m := newTestChatModel(false)
-	m.mentionEnabled = true
-	m.mentionIndex = &mentions.Snapshot{Candidates: []mentions.Candidate{{Path: "a.go", Kind: mentions.KindFile}}}
-	m.setTextareaValue("ping me @")
-	m.textarea.MoveToEnd()
-	token, ok := mentions.ActiveTokenAt(m.textarea.Value(), len(m.textarea.Value()))
-	if !ok {
-		t.Fatal("bare token did not parse")
-	}
-	m.mentionPopup = mentionPopupModel{visible: true, token: token, matches: []mentions.Match{{Candidate: 0}}}
-	before := m.textarea.Value()
-	consumed, cmd := m.handleMentionPopupKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if consumed || cmd != nil || m.textarea.Value() != before {
-		t.Fatalf("bare @ Enter consumed=%v value=%q", consumed, m.textarea.Value())
+func TestBareMentionEnterUsesHighlightedResult(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		key  rune
+		want string
+	}{
+		{"default row", 0, "review @apple.txt"},
+		{"second row", tea.KeyDown, "review @berry.txt"},
+		{"dismissed picker", tea.KeyEsc, "review @"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestChatModel(false)
+			prepareMentionPopup(m, t.TempDir(), "review @", testMentionCandidate("apple.txt"))
+			m.mentionIndex.Candidates = append(m.mentionIndex.Candidates, testMentionCandidate("berry.txt"))
+			m.mentionPopup.matches = append(m.mentionPopup.matches, mentions.Match{Candidate: 1})
+			if tt.key != 0 {
+				_, _ = m.handleKeyMsg(tea.KeyPressMsg{Code: tt.key})
+			}
+			enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+			if tt.key != tea.KeyEsc {
+				_, _ = m.handleKeyMsg(enter)
+				if m.mentionPopup.IsVisible() || len(m.messages) != 0 || m.textarea.Value() != tt.want+" " {
+					t.Fatalf("after selection: draft=%q, popup=%v, messages=%d", m.textarea.Value(), m.mentionPopup.IsVisible(), len(m.messages))
+				}
+			}
+			_, _ = m.handleKeyMsg(enter)
+			if len(m.messages) != 1 || m.messages[0].TextContent != tt.want {
+				t.Fatalf("submitted messages = %#v, want %q", m.messages, tt.want)
+			}
+		})
 	}
 }
 
