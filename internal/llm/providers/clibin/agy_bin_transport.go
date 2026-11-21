@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -158,8 +157,7 @@ func (p *AgyBinProvider) startAgyCommand(ctx context.Context, args []string, inp
 	// agents, rules, or MCP configuration. The term-llm agent has no default
 	// prompt sections, so the model never sees this neutral directory; the
 	// prompt names workspaceDir instead.
-	neutralCWD := filepath.Join(p.agyHome, "cwd")
-	cmd, err := newCLICommand(ctx, p.agyBinary, args, neutralCWD)
+	cmd, err := p.newAgyCommand(ctx, args)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("prepare agy command: %w", err)
 	}

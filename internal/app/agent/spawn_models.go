@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -63,10 +64,8 @@ func (c SpawnModelCatalog) ResolveSpawnModel(ctx context.Context, model string) 
 	provider, modelName, err := llm.ParseProviderModel(model, c.cfg)
 	if err == nil && !c.cfg.ProviderDisabled(provider) && (provider == "debug" || slices.Contains(enabled, provider)) {
 		pc := c.cfg.Providers[provider]
-		if _, configured := config.ModelConfigForProviderModel(c.cfg, provider, modelName); !configured &&
-			!slices.Contains(pc.Models, modelName) && pc.Model != modelName &&
-			config.InferProviderType(provider, pc.Type) == "agy-bin" {
-			modelName, err = clibin.NewAgyBinProvider(pc.Model, pc.Env).ResolveModelShorthand(ctx, modelName)
+		if config.InferProviderType(provider, pc.Type) == config.ProviderTypeAgyBin && clibin.IsAgyModelShorthand(modelName) {
+			modelName, err = c.resolveAgyShorthand(ctx, provider, modelName, pc)
 			if err != nil {
 				return "", fmt.Errorf("model %q: %w", model, err)
 			}
@@ -87,6 +86,25 @@ func (c SpawnModelCatalog) ResolveSpawnModel(ctx context.Context, model string) 
 	suggestions, example := spawnModelSuggestions(enabled, c.cfg.DefaultProvider)
 	return "", fmt.Errorf("model %q: %s; use one of %s (for example %q), or omit model to use the agent's default",
 		model, reason, suggestions, example+":<model>")
+}
+
+func (c SpawnModelCatalog) resolveAgyShorthand(ctx context.Context, provider, model string, pc config.ProviderConfig) (string, error) {
+	if _, configured := config.ModelConfigForProviderModel(c.cfg, provider, model); configured ||
+		slices.Contains(pc.Models, model) || pc.Model == model {
+		return model, nil
+	}
+
+	// Match model listing and child launch without changing the shared config:
+	// credential resolution expands both maps in place.
+	pc.Env = maps.Clone(pc.Env)
+	pc.Headers = maps.Clone(pc.Headers)
+	if err := pc.ResolveCredentials(provider); err != nil {
+		return "", fmt.Errorf("resolve provider %q credentials: %w", provider, err)
+	}
+	if err := pc.ResolveForInference(); err != nil {
+		return "", fmt.Errorf("resolve provider %q configuration: %w", provider, err)
+	}
+	return clibin.NewAgyBinProvider(pc.Model, pc.Env).ResolveModelShorthand(ctx, model)
 }
 
 const maxSpawnProviderSuggestions = 3

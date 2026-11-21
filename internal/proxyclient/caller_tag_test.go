@@ -46,8 +46,8 @@ func TestNativeStateDirIgnoresCallerTag(t *testing.T) {
 		"agy":    AgyNativeStateDir,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if name == "agy" && runtime.GOOS != "linux" {
-				t.Skip("agy native state is Linux-only")
+			if name == "agy" && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+				t.Skip("requires a supported native worker platform")
 			}
 			plain, err := stateDir(root, secret)
 			if err != nil {

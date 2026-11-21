@@ -7,12 +7,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/config"
 	"github.com/term-llm/term-llm/internal/proxyclient"
 )
+
+var errAgyLauncherPlatform = errors.New("the standalone Antigravity proxy launcher requires Linux; on macOS use the bound agy-bin provider (no direct fallback)")
 
 var agyClient = clientSpec{"Antigravity", "agy", proxyclient.AgyNativeKind, proxyclient.ValidateAgyNativeToken, agyConfiguredConnection}
 
@@ -40,6 +43,9 @@ func ResolveConfiguredAgyConnection(cfg *config.Config) (Connection, bool, error
 // Native stderr is discarded because the child environment embeds the scoped
 // token; failures never fall back to the installed agy login.
 func AgySharedOutput(ctx context.Context, connection Connection, binary string, args ...string) ([]byte, error) {
+	if runtime.GOOS != "linux" {
+		return nil, errAgyLauncherPlatform
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -94,6 +100,9 @@ func RunAgy(ctx context.Context, opts Options) error {
 	root, token, err := agyClient.resolve(opts)
 	if err != nil {
 		return err
+	}
+	if runtime.GOOS != "linux" {
+		return errAgyLauncherPlatform
 	}
 	stateDir, err := proxyclient.AgyNativeStateDir(root, token)
 	if err != nil {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/cache"
@@ -209,7 +208,7 @@ func (p *AgyBinProvider) boundAgyModels(ctx context.Context, binding *agyBoundRo
 		return nil, err
 	}
 	defer func() { retErr = errors.Join(retErr, finish()) }()
-	cmd, err := newCLICommand(ctx, worker.agyBinary, []string{"models"}, filepath.Join(worker.agyHome, "cwd"))
+	cmd, err := worker.newAgyCommand(ctx, []string{"models"})
 	if err != nil {
 		return nil, err
 	}

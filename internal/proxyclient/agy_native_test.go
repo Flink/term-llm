@@ -15,9 +15,10 @@ import (
 )
 
 func TestAgyNativeBootstrapRequiresExactVaultPolicy(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux-only native storage")
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("requires a supported native worker platform")
 	}
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	ca := claudeNativeTestCA(t, func(cert *x509.Certificate) {
 		cert.PermittedDNSDomains = agyNativePolicy.hosts
@@ -77,9 +78,10 @@ func TestAgyNativeBootstrapRequiresExactVaultPolicy(t *testing.T) {
 }
 
 func TestAgyNativeRejectsRemoteHTTPBeforeBootstrap(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux-only native storage")
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("requires a supported native worker platform")
 	}
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	if _, err := AgyNativeStateDir("http://remote.example.test/agy", claudeNativeTestToken); err == nil || !strings.Contains(err.Error(), "requires HTTPS") {
 		t.Fatalf("remote plaintext proxy not rejected: %v", err)

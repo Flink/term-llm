@@ -216,10 +216,10 @@ launcher does not use them and never edits your Claude settings.
 ## Run personal Antigravity through the proxy
 
 This setup is for the **Antigravity personal subscription**, not Antigravity
-Enterprise and not the Gemini API key preset. The launcher requires Linux and
-`agy 1.5.12` or newer. Version `1.5.12` was tested in isolation against synthetic
-Google endpoints. Live subscription acceptance and macOS credential isolation
-have not been verified. Use HTTPS for remote proxy URLs; plain HTTP is accepted
+Enterprise and not the Gemini API key preset. Operator sign-in and the standalone
+`term-llm proxy run agy` launcher require Linux and `agy 1.5.12` or newer.
+The bound `agy-bin` provider also runs on macOS with `agy 1.5.13` or newer and
+`/usr/bin/sandbox-exec`. Use HTTPS for remote proxy URLs; plain HTTP is accepted
 only on loopback.
 
 1. Choose **Providers → Add provider → Antigravity personal subscription**, then
@@ -254,11 +254,17 @@ providers:
 ```
 
 Use the worker’s route URL and scoped proxy token, not the bare proxy origin or
-a Google credential. After saving this block, launch the worker with:
+a Google credential. Once the operator has completed sign-in, run a prompt
+through the bound provider on Linux or macOS:
 
 ```sh
-term-llm proxy run agy
+term-llm ask -p agy-bin 'Hello'
 ```
+
+On macOS, the child uses a private OAuth file and can only connect over IP to
+loopback, where term-llm runs its rewrite proxy and tool bridge. It does not
+use your login Keychain. On Linux you can also run `term-llm proxy run agy`
+to start a standalone native worker.
 
 The launcher isolates native credential state from normal `agy` use. The proxy
 handles the operator’s OAuth exchange and refresh through its provider-scoped
@@ -269,7 +275,7 @@ endpoint `GET /oauth2/v2/userinfo` on `www.googleapis.com`. It does not proxy
 arbitrary Google APIs or browser traffic. See [Forwarding behavior](#forwarding-behavior) for the worker
 isolation requirements.
 
-`term-llm usage -p agy-bin` runs agy's read-only `/usage` command through the
+On Linux, `term-llm usage -p agy-bin` runs agy's read-only `/usage` command through the
 same binding, as a shared worker in a fresh private profile. It reports the
 shared subscription's quota and does not fall back to your local agy login.
 
@@ -1089,9 +1095,9 @@ capture off.
 Synthetic upstreams, native-binary fixtures and client/browser fixtures cover scoped
 routing, the launcher environment, CA handling, vault placeholders, token exchange
 and refresh, cancellation, consent and charts. They do not prove live vendor
-issuance, subscription acceptance, live native sign-in, billing or non-Linux
-compatibility. In particular, Antigravity was tested with an isolated Linux
-`agy 1.5.12` and synthetic OAuth, not with a real Google account. Cursor, Vibe and
+issuance, subscription acceptance, live native sign-in or billing. The
+Antigravity fixtures use synthetic OAuth and Google endpoints, not a real
+Google account. Cursor, Vibe and
 exact custom-URL mappings remain gated. No invoice/refund, FX, plan-quota or hard financial-limit
 support is claimed.
 

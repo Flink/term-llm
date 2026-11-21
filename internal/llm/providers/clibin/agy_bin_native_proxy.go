@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 
 	"github.com/term-llm/term-llm/internal/cliwire"
 	"github.com/term-llm/term-llm/internal/proxyclient"
@@ -89,7 +91,12 @@ func (p *AgyBinProvider) setupNativeProxyRuntime(ctx context.Context, ambient []
 	p.proxyEnv = proxyclient.AgyNativeEnvironment(ambient, p.agyHome, proxyclient.AgyNativeProxy{
 		ProxyURL: local["HTTPS_PROXY"], CAFile: local["SSL_CERT_FILE"],
 	})
-	return proxyclient.CheckAgyNativeVersion(ctx, p.agyBinary, filepath.Join(p.agyHome, "cwd"), p.proxyEnv)
+	if runtime.GOOS == "darwin" {
+		// agy selects file-based OAuth storage in SSH sessions. Do not
+		// inherit real SSH metadata; supply only the local storage signal.
+		p.proxyEnv = append(p.proxyEnv, "SSH_CLIENT=term-llm-private-home")
+	}
+	return proxyclient.CheckAgyNativeWorkerVersion(ctx, p.agyBinary, filepath.Join(p.agyHome, "cwd"), p.proxyEnv)
 }
 
 func clearAgyProxyWorkerIdentity(home string) error {
@@ -97,4 +104,14 @@ func clearAgyProxyWorkerIdentity(home string) error {
 		return fmt.Errorf("clear Antigravity worker identity: %w", err)
 	}
 	return nil
+}
+
+// newAgyCommand applies the mandatory worker sandbox only to bound launches.
+// The direct provider keeps its separate login and rewrite proxy setup.
+func (p *AgyBinProvider) newAgyCommand(ctx context.Context, args []string) (*exec.Cmd, error) {
+	binary := p.agyBinary
+	if p.proxyEnv != nil {
+		binary, args = proxyclient.AgyNativeWorkerInvocation(binary, args)
+	}
+	return newCLICommand(ctx, binary, args, filepath.Join(p.agyHome, "cwd"))
 }

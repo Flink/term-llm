@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,16 +23,22 @@ import (
 )
 
 // This opt-in installed-binary check refuses external egress and never uses a
-// real Google login. Run with a loopback-only network namespace and an explicit
-// absolute TERM_LLM_TEST_AGY_BINARY path.
+// real Google login. Set an explicit absolute TERM_LLM_TEST_AGY_BINARY path.
+// Linux requires a loopback-only network namespace and exercises native login;
+// macOS exercises only shared workers through the production sandbox launcher.
 func TestAntigravityNativeBinary(t *testing.T) {
 	binary := os.Getenv("TERM_LLM_TEST_AGY_BINARY")
-	if binary == "" || runtime.GOOS != "linux" {
-		t.Skip("set TERM_LLM_TEST_AGY_BINARY on an isolated Linux client")
+	if binary == "" || runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("set TERM_LLM_TEST_AGY_BINARY on an isolated Linux client or macOS")
 	}
-	interfaces, err := net.Interfaces()
-	if err != nil || len(interfaces) != 1 || interfaces[0].Flags&net.FlagLoopback == 0 || !filepath.IsAbs(binary) {
-		t.Fatal("native compatibility test requires an absolute binary path and a loopback-only network namespace")
+	if !filepath.IsAbs(binary) {
+		t.Fatal("native compatibility test requires an absolute binary path")
+	}
+	if runtime.GOOS == "linux" {
+		interfaces, err := net.Interfaces()
+		if err != nil || len(interfaces) != 1 || interfaces[0].Flags&net.FlagLoopback == 0 {
+			t.Fatal("native compatibility test requires a loopback-only network namespace")
+		}
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -45,10 +52,27 @@ func TestAntigravityNativeBinary(t *testing.T) {
 	launchRoot := root + "/agy"
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	var stdout, stderr bytes.Buffer
-	err = proxyrun.RunAgy(ctx, proxyrun.Options{URL: launchRoot, Token: operator, Command: binary, Args: []string{"acp", "--login", "--disable-telemetry"}, In: strings.NewReader("fixture-code\n"), Out: &stdout, Err: &stderr})
-	if err != nil || !strings.Contains(stdout.String(), "Logged in as fixture@example.invalid") {
-		t.Fatalf("isolated native login: %v, stdout %s, stderr %s", err, stdout.String(), stderr.String())
+	if runtime.GOOS == "linux" {
+		var stdout, stderr bytes.Buffer
+		err := proxyrun.RunAgy(ctx, proxyrun.Options{URL: launchRoot, Token: operator, Command: binary, Args: []string{"acp", "--login", "--disable-telemetry"}, In: strings.NewReader("fixture-code\n"), Out: &stdout, Err: &stderr})
+		if err != nil || !strings.Contains(stdout.String(), "Logged in as fixture@example.invalid") {
+			t.Fatalf("isolated native login: %v, stdout %s, stderr %s", err, stdout.String(), stderr.String())
+		}
+	} else {
+		// Standalone proxy run (including operator --login) remains Linux-only.
+		// Seed custody through the fixture's CONNECT client, never an agy child.
+		bootstrap := agyTestDiscover(t, root, operator, http.StatusOK)
+		client := agyTestHTTPClient(t, root, operator, bootstrap)
+		status, body := agyTestOAuth(t, client, url.Values{
+			"grant_type": {"authorization_code"}, "code": {"fixture-code"},
+			"code_verifier": {"fixture-verifier"}, "redirect_uri": {"https://antigravity.google/oauth-callback"},
+		})
+		var login claudeVaultReply
+		if status != http.StatusOK || json.Unmarshal([]byte(body), &login) != nil ||
+			!strings.HasPrefix(login.AccessToken, agyProxyProvider.accessPrefix) ||
+			strings.Contains(body, agyTestAccess) || strings.Contains(body, agyTestRefresh) {
+			t.Fatalf("synthetic shared enrollment: %d %s", status, body)
+		}
 	}
 	// Use a new local profile and new grant. The worker never runs --login.
 	workerHome := t.TempDir()
@@ -57,6 +81,14 @@ func TestAntigravityNativeBinary(t *testing.T) {
 	token := caller(t, proxy, "agy")
 	if err := proxyclient.Register([]proxyclient.Binding{{Root: launchRoot, Token: token, Kind: "agy-bin"}}); err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "darwin" {
+		// Fail before any child (including --version) when production support is
+		// unavailable. All agy execution below must use the bound provider's
+		// sandbox-exec path, not a test-only wrapper or the standalone launcher.
+		if _, err := proxyclient.AgyNativeStateDir(launchRoot, token); err != nil {
+			t.Fatalf("macOS shared worker sandbox support is required before executing agy: %v", err)
+		}
 	}
 	provider := clibin.NewAgyBinProvider("gemini-2.5-pro", map[string]string{"TERM_LLM_AGY_PROXY_ROOT": launchRoot})
 	models, err := provider.ListModels(ctx)

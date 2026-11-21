@@ -10,12 +10,23 @@ import (
 	"github.com/term-llm/term-llm/internal/llm/core"
 )
 
+// IsAgyModelShorthand reports whether a selector names a supported Claude
+// family rather than a versioned Antigravity model ID.
+func IsAgyModelShorthand(selector string) bool {
+	family, _ := parseAgyEffort(selector)
+	return isAgyShorthandFamily(family)
+}
+
+func isAgyShorthandFamily(family string) bool {
+	return strings.EqualFold(family, "opus") || strings.EqualFold(family, "sonnet")
+}
+
 // ResolveModelShorthand resolves the supported Claude family nicknames against
 // this Antigravity account's live catalog. Exact IDs need no discovery, and a
 // failed lookup never falls back to another account or a curated model list.
 func (p *AgyBinProvider) ResolveModelShorthand(ctx context.Context, selector string) (string, error) {
-	family, effort := parseAgyEffort(strings.ToLower(selector))
-	if family != "opus" && family != "sonnet" {
+	family, effort := parseAgyEffort(selector)
+	if !isAgyShorthandFamily(family) {
 		return selector, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -24,7 +35,7 @@ func (p *AgyBinProvider) ResolveModelShorthand(ctx context.Context, selector str
 	if err != nil {
 		return "", fmt.Errorf("could not look up Antigravity shorthand %q: %w; use an exact model ID to skip lookup", selector, err)
 	}
-	return resolveAgyFamily(models, selector, family, effort)
+	return resolveAgyFamily(models, selector, strings.ToLower(family), effort)
 }
 
 func resolveAgyFamily(models []core.ModelInfo, selector, family, effort string) (string, error) {
@@ -59,14 +70,12 @@ func selectAgyFamilyEffort(model core.ModelInfo, effort string) (string, error) 
 		switch {
 		case len(efforts) == 0:
 			return model.ID, nil
-		case slices.Contains(efforts, model.DefaultReasoningEffort):
-			effort = model.DefaultReasoningEffort
 		case slices.Contains(efforts, "medium"):
 			effort = "medium"
 		case len(efforts) == 1:
 			effort = efforts[0]
 		default:
-			return "", fmt.Errorf("%s has no default or medium effort; choose one of %s", model.ID, strings.Join(efforts, ", "))
+			return "", fmt.Errorf("%s has no medium effort; choose one of %s", model.ID, strings.Join(efforts, ", "))
 		}
 	}
 	if !slices.Contains(efforts, effort) {

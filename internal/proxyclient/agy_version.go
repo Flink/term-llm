@@ -54,16 +54,20 @@ func AgyVersionAtLeast(version string, wantMajor, wantMinor, wantPatch int) bool
 // CheckAgyNativeVersion checks the binary under the same isolated routing and
 // credential namespace as the main launch. Never include its output in an error.
 func CheckAgyNativeVersion(ctx context.Context, binary, dir string, env []string) error {
+	return checkAgyNativeVersion(ctx, binary, []string{"--version"}, dir, env, 12, AgyNativeMinimumVersion)
+}
+
+func checkAgyNativeVersion(ctx context.Context, binary string, args []string, dir string, env []string, minPatch int, minimum string) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, "--version")
+	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env, cmd.Dir, cmd.WaitDelay = env, dir, time.Second
 	out, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("check agy proxy version: %w", err)
 	}
-	if !AgyVersionAtLeast(string(out), 1, 5, 12) {
-		return errors.New("Antigravity native proxy requires agy " + AgyNativeMinimumVersion + " or newer (no direct fallback)")
+	if !AgyVersionAtLeast(string(out), 1, 5, minPatch) {
+		return errors.New("Antigravity native proxy requires agy " + minimum + " (or newer; no direct fallback)")
 	}
 	return nil
 }

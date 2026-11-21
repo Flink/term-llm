@@ -174,11 +174,27 @@ func TestResolveSpawnModelUsesAgyCatalogBeforeCheckingAllowlist(t *testing.T) {
 	bin := t.TempDir()
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	if err := os.WriteFile(filepath.Join(bin, "agy"), []byte("#!/bin/sh\n[ \"$1\" = models ] || exit 1\nprintf 'claude-opus-5-5-medium\\tClaude Opus 5.5 (Medium)\\nclaude-opus-5-5-high\\tClaude Opus 5.5 (High)\\n'\n"), 0o700); err != nil {
+	t.Setenv("TERM_LLM_AGY_PROXY_ROOT", "")
+	t.Setenv("AGY_TEST_ACCOUNT", "configured-account")
+	profile := filepath.Join(t.TempDir(), "profile")
+	if err := os.WriteFile(profile, []byte("configured-profile"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+[ "$1" = models ] || exit 1
+[ "$AGY_TEST_SELECTED_ACCOUNT" = configured-account ] || exit 2
+[ "$AGY_TEST_PROFILE" = configured-profile ] || exit 3
+printf 'claude-opus-5-5-medium\tClaude Opus 5.5 (Medium)\nclaude-opus-5-5-high\tClaude Opus 5.5 (High)\n'
+`
+	if err := os.WriteFile(filepath.Join(bin, "agy"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	catalog := configDiscoveryCatalog()
-	catalog.cfg.Providers["agy-bin"] = config.ProviderConfig{AllowedModels: []string{"claude-opus-5-5-medium"}}
+	pc := config.ProviderConfig{
+		AllowedModels: []string{"claude-opus-5-5-medium"},
+		Env:           map[string]string{"AGY_TEST_SELECTED_ACCOUNT": "${AGY_TEST_ACCOUNT}", "AGY_TEST_PROFILE": "file://" + profile},
+	}
+	catalog.cfg.Providers["agy-bin"] = pc
 	got, err := catalog.ResolveSpawnModel(context.Background(), "agy-bin:opus")
 	if err != nil || got != "agy-bin:claude-opus-5-5-medium" {
 		t.Fatalf("default shorthand = %q, %v", got, err)
@@ -188,5 +204,21 @@ func TestResolveSpawnModelUsesAgyCatalogBeforeCheckingAllowlist(t *testing.T) {
 	}
 	if got, err := catalog.ResolveSpawnModel(context.Background(), "claude-bin:opus"); err != nil || got != "claude-bin:opus" {
 		t.Fatalf("Claude Code alias = %q, %v", got, err)
+	}
+	if got := pc.Env["AGY_TEST_SELECTED_ACCOUNT"]; got != "${AGY_TEST_ACCOUNT}" {
+		t.Errorf("shorthand resolution mutated the shared account reference: %q", got)
+	}
+	if got := pc.Env["AGY_TEST_PROFILE"]; got != "file://"+profile {
+		t.Errorf("shorthand resolution mutated the shared profile reference: %q", got)
+	}
+	if err := os.Remove(profile); err != nil {
+		t.Fatal(err)
+	}
+	const exact = "agy-bin:claude-opus-5-5-medium"
+	if got, err := catalog.ResolveSpawnModel(context.Background(), exact); err != nil || got != exact {
+		t.Fatalf("exact ID should skip discovery even with a missing profile: %q, %v", got, err)
+	}
+	if _, err := catalog.ResolveSpawnModel(context.Background(), "agy-bin:opus"); err == nil || !strings.Contains(err.Error(), "env.AGY_TEST_PROFILE") {
+		t.Fatalf("shorthand should fail on an unresolved profile: %v", err)
 	}
 }

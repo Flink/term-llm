@@ -15,9 +15,10 @@ import (
 )
 
 func TestAgyBoundStreamAndModelsFailBeforeAnySubprocess(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux fallback fixture")
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("requires a supported native worker platform")
 	}
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv("TERM_LLM_CLI_WIRE_TRACE", "")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

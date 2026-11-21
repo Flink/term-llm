@@ -49,8 +49,8 @@ func ResolveAgyNativeBinding(root string) (Binding, error) {
 // AgyNativeStateDir is shared by the native launcher and worker for one
 // exact root and scoped caller. It never points at the installed agy home.
 func AgyNativeStateDir(root, token string) (string, error) {
-	if runtime.GOOS != "linux" {
-		return "", errors.New("Antigravity native proxy is only supported on Linux; private credential storage is not verified on this platform (no direct fallback)")
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		return "", errors.New("Antigravity proxy workers are only supported on Linux and macOS (no direct fallback)")
 	}
 	canonical, err := canonicalRoot(root)
 	if err != nil {

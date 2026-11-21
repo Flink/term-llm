@@ -55,8 +55,8 @@ func TestAgySharedDiscoveryAliases(t *testing.T) {
 }
 
 func TestAgySharedSeedNativeEnvelope(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux-only native storage")
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("requires a supported native worker platform")
 	}
 	home, err := os.MkdirTemp(t.TempDir(), "private-")
 	if err != nil {
