@@ -10,7 +10,17 @@ import (
 	"github.com/term-llm/term-llm/internal/sqliteutil"
 )
 
-const schemaVersion = 9
+const schemaVersion = 10
+
+// SQLite secondary indexes already carry the rowid (seq) as a tie-breaker.
+const requestFilterIndexesV10 = `
+CREATE INDEX requests_method ON requests(method);
+CREATE INDEX requests_outcome ON requests(outcome);
+CREATE INDEX requests_paths ON requests(
+ (CASE WHEN substr(path,1,1)='/' THEN path ELSE '/'||path END),
+ (COALESCE(CASE WHEN json_valid(data) THEN json_extract(data,'$.local_prefix') END,'')||ltrim(path,'/'))
+);
+`
 
 const emptyProviderConfig = `{"routes":[],"providers":{}}`
 
@@ -64,6 +74,10 @@ var migrations = []sqliteutil.Migration{{
 }}, {Version: 8, Description: "account-owned native subscription credentials", Up: migrateSharedNativeAccounts},
 	{Version: 9, Description: "stored provider families and unbound secrets", Up: func(tx sqliteutil.Executor) error {
 		return migrateProviderFamilies(tx, nil)
+	}},
+	{Version: 10, Description: "index request method, outcome and path filters", Up: func(tx sqliteutil.Executor) error {
+		_, err := tx.Exec(requestFilterIndexesV10)
+		return err
 	}},
 }
 

@@ -97,7 +97,9 @@ type Segment struct {
 	LastFlushedRaw         string // Raw markdown of last flushed chunk (for stitched rendering)
 	LastFlushedRenderedLen int    // Byte length of rendered LastFlushedRaw
 
-	// Subagent stats (for spawn_agent tools only)
+	// Child lifecycle metadata is separate from the spawn tool call status.
+	SubagentID              string
+	SubagentStatus          string
 	SubagentToolCalls       int            // Number of tool calls made by subagent
 	SubagentTotalTokens     int            // Total tokens used by subagent
 	SubagentHasProgress     bool           // True if we have progress from this subagent
@@ -303,12 +305,12 @@ func renderToolSegmentBase(seg *Segment, wavePos int, width int, expanded bool) 
 		renderWidth = 0
 	}
 
+	circle := toolStatusCircle(seg.ToolName, seg.ToolStatus, seg.SubagentStatus)
+	if seg.ToolName == tools.SpawnAgentToolName && seg.SubagentHasProgress {
+		return appendToolExpandHint(circle+" "+renderSpawnAgentStats(info, seg.SubagentToolCalls, seg.SubagentTotalTokens, seg.SubagentStartTime, seg.SubagentEndTime, terminaltext.SanitizeSingleLine(seg.SubagentProvider), terminaltext.SanitizeSingleLine(seg.SubagentModel)), seg, expanded)
+	}
 	switch seg.ToolStatus {
 	case ToolPending:
-		// spawn_agent tools with progress show stats instead of wave animation
-		if seg.ToolName == "spawn_agent" && seg.SubagentHasProgress {
-			return appendToolExpandHint(PendingCircle()+" "+renderSpawnAgentStats(info, seg.SubagentToolCalls, seg.SubagentTotalTokens, seg.SubagentStartTime, seg.SubagentEndTime, terminaltext.SanitizeSingleLine(seg.SubagentProvider), terminaltext.SanitizeSingleLine(seg.SubagentModel)), seg, expanded)
-		}
 		// Wave animation for other pending tools
 		activeText := ""
 		if expandedShellInfo != "" {
@@ -335,29 +337,14 @@ func renderToolSegmentBase(seg *Segment, wavePos int, width int, expanded bool) 
 				}
 			}
 		}
-		return appendToolExpandHint(PendingCircle()+" "+RenderWaveText(activeText, wavePos), seg, expanded)
-	case ToolSuccess:
-		// spawn_agent shows final stats on success
-		if seg.ToolName == "spawn_agent" && seg.SubagentHasProgress {
-			return appendToolExpandHint(SuccessCircle()+" "+renderSpawnAgentStats(info, seg.SubagentToolCalls, seg.SubagentTotalTokens, seg.SubagentStartTime, seg.SubagentEndTime, terminaltext.SanitizeSingleLine(seg.SubagentProvider), terminaltext.SanitizeSingleLine(seg.SubagentModel)), seg, expanded)
-		}
+		return appendToolExpandHint(circle+" "+RenderWaveText(activeText, wavePos), seg, expanded)
+	case ToolSuccess, ToolError:
 		// Tool name normal, params slightly muted (with space before info if present)
 		info = truncateToolInfo(toolName, info, renderWidth)
 		if info != "" {
-			return appendToolExpandHint(SuccessCircle()+" "+toolName+" "+paramStyle.Render(info), seg, expanded)
+			return appendToolExpandHint(circle+" "+toolName+" "+paramStyle.Render(info), seg, expanded)
 		}
-		return appendToolExpandHint(SuccessCircle()+" "+toolName, seg, expanded)
-	case ToolError:
-		// spawn_agent shows stats even on error
-		if seg.ToolName == "spawn_agent" && seg.SubagentHasProgress {
-			return appendToolExpandHint(ErrorCircle()+" "+renderSpawnAgentStats(info, seg.SubagentToolCalls, seg.SubagentTotalTokens, seg.SubagentStartTime, seg.SubagentEndTime, terminaltext.SanitizeSingleLine(seg.SubagentProvider), terminaltext.SanitizeSingleLine(seg.SubagentModel)), seg, expanded)
-		}
-		// Tool name normal, params slightly muted (with space before info if present)
-		info = truncateToolInfo(toolName, info, renderWidth)
-		if info != "" {
-			return appendToolExpandHint(ErrorCircle()+" "+toolName+" "+paramStyle.Render(info), seg, expanded)
-		}
-		return appendToolExpandHint(ErrorCircle()+" "+toolName, seg, expanded)
+		return appendToolExpandHint(circle+" "+toolName, seg, expanded)
 	}
 	return ""
 }
@@ -428,13 +415,7 @@ func RenderToolCallFromPartWithStatus(tc *core.ToolCall, width int, expanded boo
 		}
 	}
 
-	circle := SuccessCircle()
-	switch status {
-	case ToolPending:
-		circle = PendingCircle()
-	case ToolError:
-		circle = ErrorCircle()
-	}
+	circle := toolStatusCircle(tc.Name, status, "")
 
 	toolName := terminaltext.SanitizeSingleLine(tc.Name)
 	if expanded && tc.Name == "shell" && len(tc.Arguments) > 0 {

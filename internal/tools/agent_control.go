@@ -9,6 +9,7 @@ import (
 
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/session"
+	"github.com/term-llm/term-llm/internal/tools/agentrun"
 	"github.com/term-llm/term-llm/internal/tools/agentwait"
 )
 
@@ -188,13 +189,7 @@ func (t *agentControlTool) wait(ctx context.Context, parent string, a agentContr
 	return out
 }
 
-func agentTerminal(status string) bool {
-	switch status {
-	case "completed", "turn_limit", "cancelled", "interrupted", "failed":
-		return true
-	}
-	return false
-}
+func agentTerminal(status string) bool { return agentrun.Terminal(status) }
 
 func (t *agentControlTool) cancel(ctx context.Context, parent string, a agentControlArgs) core.ToolOutput {
 	m := t.spawn.manager

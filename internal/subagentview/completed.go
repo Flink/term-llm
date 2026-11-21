@@ -3,6 +3,7 @@
 package subagentview
 
 import (
+	"cmp"
 	"encoding/json"
 	"hash/fnv"
 	"strconv"
@@ -39,6 +40,8 @@ type Activity struct {
 type CompletedRun struct {
 	ParentCallID   string
 	ChildSessionID string
+	AgentID        string
+	SubagentStatus string // Lifecycle of the agent, distinct from the child session Status.
 	AgentName      string
 	Prompt         string
 	Output         string
@@ -76,6 +79,8 @@ func Build(call *core.ToolCall, result *core.ToolResult, parsed tools.SpawnAgent
 		ErrorType:      parsed.Type,
 		DurationMs:     parsed.Duration,
 		ChildSessionID: strings.TrimSpace(parsed.SessionID),
+		AgentID:        cmp.Or(strings.TrimSpace(parsed.AgentID), strings.TrimSpace(parsed.SessionID)),
+		SubagentStatus: parsed.Status,
 		Partial:        parsed.Error != "" && parsed.Output != "",
 	}
 	if call != nil {
@@ -176,6 +181,15 @@ func Build(call *core.ToolCall, result *core.ToolResult, parsed tools.SpawnAgent
 	return run
 }
 
+// WithSubagentStatus updates the row lifecycle and its history cache key together.
+func (run CompletedRun) WithSubagentStatus(status string) CompletedRun {
+	if run.SubagentStatus != status {
+		run.SubagentStatus = status
+		run.Fingerprint = fingerprint(run)
+	}
+	return run
+}
+
 func outputPreviewLines(output string, limit int) []string {
 	output = strings.ReplaceAll(output, "\r\n", "\n")
 	lines := strings.Split(strings.TrimSpace(output), "\n")
@@ -261,6 +275,8 @@ func fingerprint(run CompletedRun) uint64 {
 	write := func(value string) { _, _ = h.Write([]byte(value)); _, _ = h.Write([]byte{0}) }
 	write(run.ParentCallID)
 	write(run.ChildSessionID)
+	write(run.AgentID)
+	write(run.SubagentStatus)
 	write(run.AgentName)
 	write(run.Prompt)
 	write(run.Output)

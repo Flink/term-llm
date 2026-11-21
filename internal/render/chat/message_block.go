@@ -681,6 +681,7 @@ func completedSubagentSegment(call *core.ToolCall, run subagentview.CompletedRun
 	segment := ui.Segment{
 		Type: ui.SegmentTool, ToolName: tools.SpawnAgentToolName, ToolInfo: info,
 		ToolCallID: run.ParentCallID, ToolStatus: status, Complete: true,
+		SubagentID: run.AgentID, SubagentStatus: run.SubagentStatus,
 		SubagentHasProgress: true, SubagentToolCalls: run.ToolCalls,
 		SubagentTotalTokens: run.InputTokens + run.OutputTokens,
 		SubagentProvider:    run.Provider, SubagentModel: run.Model,

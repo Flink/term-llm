@@ -10,6 +10,7 @@ import (
 
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/session"
+	"github.com/term-llm/term-llm/internal/tools/agentrun"
 )
 
 // PendingAgentBarrier returns unobserved terminal generations only when all
@@ -143,11 +144,11 @@ func agentRunStoresMatch(local session.AgentRunStore, store session.AgentRunDeli
 }
 
 func agentRunOwnerGone(record session.AgentRun) bool {
-	if record.OwnerInstanceID == processAgentOwner() {
+	if record.OwnerInstanceID == agentrun.CurrentOwner() {
 		_, live := processAgentEntries.Load(record.ID)
 		return !live
 	}
-	return ownerTerminated(record.OwnerInstanceID)
+	return agentrun.OwnerTerminated(record.OwnerInstanceID)
 }
 
 func agentEventPending(record session.AgentRun) bool {

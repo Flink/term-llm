@@ -1,7 +1,9 @@
 package chat
 
 import (
+	"cmp"
 	"context"
+	"maps"
 	"strings"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"github.com/term-llm/term-llm/internal/session"
 	"github.com/term-llm/term-llm/internal/subagentview"
 	"github.com/term-llm/term-llm/internal/tools"
+	"github.com/term-llm/term-llm/internal/tools/agentrun"
 )
 
 type persistedSubagentSource struct {
@@ -62,12 +65,14 @@ func discoverPersistedSubagents(messages []session.Message) []persistedSubagentS
 		}
 		sources = append(sources, persistedSubagentSource{call: calls[callID], result: result, parsed: parsed})
 	}
+	resolveTranscriptStatuses(messages, sources)
 	return sources
 }
 
 func persistedSubagentMatchesSource(run subagentview.CompletedRun, result tools.SpawnAgentResult) bool {
 	childID := strings.TrimSpace(result.SessionID)
-	if childID != run.ChildSessionID || result.Output != run.Output || result.Error != run.Error || result.Type != run.ErrorType || result.Duration != run.DurationMs {
+	agentID := cmp.Or(strings.TrimSpace(result.AgentID), childID)
+	if agentID != run.AgentID || result.Status != run.SubagentStatus || childID != run.ChildSessionID || result.Output != run.Output || result.Error != run.Error || result.Type != run.ErrorType || result.Duration != run.DurationMs {
 		return false
 	}
 	return childID == "" || run.ChildAvailable
@@ -84,38 +89,37 @@ func (m *Model) loadPersistedSubagentsCmd() tea.Cmd {
 	sources := discoverPersistedSubagents(append([]session.Message(nil), m.messages...))
 	m.messagesMu.Unlock()
 	store := m.store
-	existing := make(map[string]subagentview.CompletedRun, len(m.persistedSubagents))
-	for callID, run := range m.persistedSubagents {
-		existing[callID] = run
-	}
+	runStore := session.AsAgentRunStore(store)
+	existing := maps.Clone(m.persistedSubagents)
 	// Parent result parsing is local and cheap. Install fallback cards now so the
 	// first frame after resume already shows durable output; the command below
 	// upgrades them with validated child activity.
 	fallback := make(map[string]subagentview.CompletedRun, len(sources))
 	for i := range sources {
 		source := &sources[i]
+		if cached := existing[source.call.ID]; preserveTerminalStatus(cached, cmp.Or(strings.TrimSpace(source.parsed.AgentID), strings.TrimSpace(source.parsed.SessionID)), source.parsed.Status) {
+			source.parsed.Status = cached.SubagentStatus
+		}
 		if cached, ok := existing[source.call.ID]; ok && persistedSubagentMatchesSource(cached, source.parsed) {
 			fallback[source.call.ID] = cached
 			continue
 		}
 		fallback[source.call.ID] = subagentview.Build(&source.call, &source.result, source.parsed, nil, nil)
 	}
-	m.persistedSubagents = fallback
+	// The hydration command owns fallback. Live/watch updates only touch the UI copy.
+	m.persistedSubagents = maps.Clone(fallback)
 	m.invalidateHistoryCache()
 	rootCtx := m.rootContext()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(rootCtx, 5*time.Second)
 		defer cancel()
-		runs := make(map[string]subagentview.CompletedRun, len(fallback))
-		for callID, run := range fallback {
-			runs[callID] = run
-		}
+		runs := maps.Clone(fallback)
 		for i := range sources {
 			if ctx.Err() != nil {
 				break
 			}
 			source := &sources[i]
-			if cached, ok := existing[source.call.ID]; ok && persistedSubagentMatchesSource(cached, source.parsed) {
+			if cached, ok := existing[source.call.ID]; ok && !agentrun.Active(source.parsed.Status) && persistedSubagentMatchesSource(cached, source.parsed) {
 				runs[source.call.ID] = cached
 				continue
 			}
@@ -131,7 +135,8 @@ func (m *Model) loadPersistedSubagentsCmd() tea.Cmd {
 					}
 				}
 			}
-			runs[source.call.ID] = subagentview.Build(&source.call, &source.result, source.parsed, child, childMessages)
+			run := subagentview.Build(&source.call, &source.result, source.parsed, child, childMessages)
+			runs[source.call.ID] = resolveDurableStatus(ctx, runStore, sessionID, run)
 		}
 		return persistedSubagentsLoadedMsg{sessionID: sessionID, generation: generation, runs: runs}
 	}
@@ -141,6 +146,16 @@ func (m *Model) applyPersistedSubagents(msg persistedSubagentsLoadedMsg) {
 	if m == nil || m.sess == nil || msg.sessionID != m.sess.ID || msg.generation != m.persistedSubagentGeneration {
 		return
 	}
+	// A watcher may have closed the row while this hydration was in flight.
+	for callID, run := range msg.runs {
+		if cached := m.persistedSubagents[callID]; preserveTerminalStatus(cached, run.AgentID, run.SubagentStatus) {
+			msg.runs[callID] = run.WithSubagentStatus(cached.SubagentStatus)
+		}
+	}
 	m.persistedSubagents = msg.runs
 	m.invalidateHistoryCache()
+}
+
+func preserveTerminalStatus(cached subagentview.CompletedRun, id, status string) bool {
+	return id != "" && id == cached.AgentID && agentrun.Active(status) && agentrun.Terminal(cached.SubagentStatus)
 }

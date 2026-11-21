@@ -55,8 +55,8 @@ type StreamEvent struct {
 	ToolInfo    string
 	ToolArgs    json.RawMessage
 	ToolSuccess bool
-	// Script receipts are forwarded only for the asynchronous script family.
-	// Other tools must not retain their potentially large output on UI events.
+	// Script observations and compact agent lifecycle receipts only. Other
+	// tools must not retain their potentially large output on UI events.
 	ToolOutput       string
 	ToolContentParts []core.ToolContentPart
 

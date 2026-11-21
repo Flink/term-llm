@@ -706,7 +706,7 @@ func (t *ToolTracker) FlushStreamingText(threshold int, width int, renderMd func
 	blockedByPendingBarrier := false
 	for i := 0; i < segIdx; i++ {
 		s := &t.Segments[i]
-		if s.Type == SegmentTool && s.ToolStatus == ToolPending {
+		if s.blocksLiveFlush() {
 			blockedByPendingBarrier = true
 			break
 		}
@@ -972,7 +972,7 @@ func (t *ToolTracker) FlushToScrollback(
 		if seg.Flushed {
 			return false // already flushed
 		}
-		if seg.Type == SegmentTool && seg.ToolStatus == ToolPending {
+		if seg.blocksLiveFlush() {
 			return false // pending tools can't be flushed
 		}
 		if seg.Type == SegmentText && !seg.Complete {
@@ -985,7 +985,7 @@ func (t *ToolTracker) FlushToScrollback(
 	var unflushedCount int
 	for i := range t.Segments {
 		seg := &t.Segments[i]
-		if seg.Type == SegmentTool && seg.ToolStatus == ToolPending {
+		if seg.blocksLiveFlush() {
 			break
 		}
 		if isFlushable(seg) {
@@ -1003,7 +1003,7 @@ func (t *ToolTracker) FlushToScrollback(
 		hasUnflushedSpecial := false
 		for i := range t.Segments {
 			seg := &t.Segments[i]
-			if seg.Type == SegmentTool && seg.ToolStatus == ToolPending {
+			if seg.blocksLiveFlush() {
 				break
 			}
 			if (seg.Type == SegmentImage || seg.Type == SegmentDiff) && !seg.Flushed {
@@ -1022,7 +1022,7 @@ func (t *ToolTracker) FlushToScrollback(
 	unflushedSeen := 0
 	for i := range t.Segments {
 		seg := &t.Segments[i]
-		if seg.Type == SegmentTool && seg.ToolStatus == ToolPending {
+		if seg.blocksLiveFlush() {
 			break
 		}
 		if !isFlushable(seg) {
@@ -1194,7 +1194,7 @@ func (t *ToolTracker) FlushCompletedNow(
 		if seg.Flushed {
 			continue
 		}
-		if seg.Type == SegmentTool && seg.ToolStatus == ToolPending {
+		if seg.blocksLiveFlush() {
 			break
 		}
 		if seg.Type == SegmentText && !seg.Complete {
@@ -1262,7 +1262,7 @@ func (t *ToolTracker) FlushBeforeExternalUI(
 	// First count unflushed completed segments up to the first pending tool barrier.
 	for i := range t.Segments {
 		seg := &t.Segments[i]
-		if seg.Type == SegmentTool && seg.ToolStatus == ToolPending {
+		if seg.blocksLiveFlush() {
 			break
 		}
 		if !seg.Flushed {
@@ -1274,7 +1274,7 @@ func (t *ToolTracker) FlushBeforeExternalUI(
 	seen := 0
 	for i := range t.Segments {
 		seg := &t.Segments[i]
-		if seg.Type == SegmentTool && seg.ToolStatus == ToolPending {
+		if seg.blocksLiveFlush() {
 			break
 		}
 		if seg.Flushed {

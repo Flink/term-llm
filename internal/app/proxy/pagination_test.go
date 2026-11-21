@@ -148,6 +148,10 @@ func TestNumberedRequestFilterTotals(t *testing.T) {
 		{"path=/local/v1/", 60},
 		{"path=/v1/item-001", 1},
 		{"caller=even&route=three&outcome=failed", 5},
+		{"route=three&outcome=complete", 15},
+		{"caller=even&method=POST", 30},
+		{"since=1021&until=1030&outcome=complete", 8},
+		{"id=page-022&method=POST", 1},
 	} {
 		t.Run(test.query, func(t *testing.T) {
 			q, err := url.ParseQuery(test.query)

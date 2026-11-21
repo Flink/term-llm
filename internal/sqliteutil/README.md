@@ -88,3 +88,8 @@ Unknown unversioned schemas fail closed with a structural description and recove
   required a sign-in per device need one new operator sign-in after upgrade.
   Stop older writers before upgrading and restore a protected v7 backup to
   downgrade.
+
+- Proxy v10 adds indexes for request method and outcome and a covering index for path
+  substring filters, without changing stored rows. The v9 binary rejects the
+  newer marker; stop older writers before upgrading and restore a protected v9
+  backup to downgrade.

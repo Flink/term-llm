@@ -102,7 +102,13 @@ func (m *Model) handleStreamToolEnd(msg streamEventMsg, ev ui.StreamEvent, state
 	if m.tracker != nil {
 		m.tracker.HandleToolEndWithResult(ev.ToolCallID, ev.ToolSuccess, ev.ToolInfo, ev.ToolOutput, ev.ToolContentParts)
 
-		// Remove from subagent tracker when spawn_agent completes
+		if ev.ToolName == tools.SpawnAgentToolName {
+			if cmd := m.observeActiveSpawnRows(); cmd != nil {
+				state.cmds = append(state.cmds, cmd)
+			}
+		}
+
+		// The tool's progress preview ends independently of its child's status.
 		if m.subagentTracker != nil {
 			m.subagentTracker.Remove(ev.ToolCallID)
 		}

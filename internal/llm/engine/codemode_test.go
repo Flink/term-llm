@@ -224,3 +224,34 @@ func TestCodeModeResultLimitHonestOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCodeModeSpawnAgentReceiptSurvivesOutputRedaction(t *testing.T) {
+	e := newCodeEngine()
+	receipt := core.SpawnAgentReceipt{ID: "child", Status: "running"}
+	if err := e.RegisterTool(codeTestTool{name: "spawn_agent", run: func(context.Context, json.RawMessage) (core.ToolOutput, error) {
+		return core.ToolOutput{Content: "private", SpawnAgentReceipt: &receipt, ContentParts: []core.ToolContentPart{{Type: core.ToolContentPartText, Text: "private"}}}, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	events := make(chan core.Event, 8)
+	c, err := e.admitCodeCell(ctx, "outer", corestream.NewSender(ctx, events))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.Call(ctx, "spawn_agent", json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	close(events)
+	for ev := range events {
+		if ev.Type != core.EventToolExecEnd {
+			continue
+		}
+		if ev.ParentToolCallID != "outer" || ev.SpawnAgentReceipt == nil || *ev.SpawnAgentReceipt != receipt || ev.ToolOutput != "" || len(ev.ToolContentParts) != 0 {
+			t.Fatalf("unexpected nested terminal event: %+v", ev)
+		}
+		return
+	}
+	t.Fatal("missing nested terminal event")
+}

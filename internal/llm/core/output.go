@@ -157,9 +157,16 @@ func NormalizeMedia(media []MediaArtifact, images []string) []MediaArtifact {
 	return out
 }
 
+// SpawnAgentReceipt identifies the child returned by the built-in spawn tool for row presentation.
+type SpawnAgentReceipt struct {
+	ID     string
+	Status string
+}
+
 // ToolOutput is the structured return type from Tool.Execute().
 // Most tools only populate Content. Edit/media tools also populate Diffs/Media.
 type ToolOutput struct {
+	SpawnAgentReceipt      *SpawnAgentReceipt             `json:"-"` // Local display metadata, never provider content.
 	ChildCalls             []CodeModeCallOutcome          `json:"-"` // Bounded nested audit, not provider content.
 	Content                string                         // Text result (sent to LLM)
 	ContentParts           []ToolContentPart              `json:"content_parts,omitempty"` // Structured multimodal tool content for provider formatting
@@ -250,8 +257,9 @@ type ToolExecutionResponse struct {
 
 // Event represents a streamed output update.
 type Event struct {
-	Type EventType
-	Text string
+	SpawnAgentReceipt *SpawnAgentReceipt `json:"-"` // Local display metadata, never provider content.
+	Type              EventType
+	Text              string
 	// TerminationReason is the raw provider finish/stop reason (or terminal
 	// status for protocols such as Responses). Empty means not supplied.
 	TerminationReason string

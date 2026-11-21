@@ -9,6 +9,7 @@ import (
 	"github.com/term-llm/term-llm/internal/llm"
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/session"
+	"github.com/term-llm/term-llm/internal/subagentview"
 	"github.com/term-llm/term-llm/internal/ui"
 )
 
@@ -451,5 +452,19 @@ func TestMessageBlockRenderer_IsolatedSkillResultRendersMarkdown(t *testing.T) {
 	})).Rendered)
 	if !strings.Contains(running, invocation) {
 		t.Fatalf("running invocation event = %q", running)
+	}
+}
+
+func TestHistoricalSpawnSegmentCarriesLifecycleAlongsideToolError(t *testing.T) {
+	for _, tc := range []struct {
+		status, err string
+		want        ui.ToolStatus
+	}{
+		{"running", "", ui.ToolSuccess}, {"completed", "receipt failed", ui.ToolError}, {"", "", ui.ToolSuccess},
+	} {
+		seg := completedSubagentSegment(nil, subagentview.CompletedRun{AgentID: "child", SubagentStatus: tc.status, Error: tc.err})
+		if seg.SubagentID != "child" || seg.SubagentStatus != tc.status || seg.ToolStatus != tc.want {
+			t.Fatalf("status %q/error %q => %+v", tc.status, tc.err, seg)
+		}
 	}
 }

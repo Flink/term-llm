@@ -142,9 +142,16 @@ func (s *store) reconcileMoneyHistory(ctx context.Context, since, until int64) e
 	}
 	defer tx.Rollback()
 	moneyStmt := tx.StmtContext(ctx, s.moneyStmt)
-	var after int64
+	// Sequence numbers are positive, but requests need not arrive in timestamp
+	// order. Seek through the existing time index, including ties at a batch edge.
+	afterStarted, afterSeq := since, int64(0)
 	for {
-		rows, err := tx.QueryContext(ctx, `SELECT r.seq,r.id,r.started,r.caller,r.route,r.data FROM requests r LEFT JOIN money_history m ON m.request_id=r.id WHERE r.seq>? AND r.started>=? AND r.started<=? AND m.request_id IS NULL ORDER BY r.seq LIMIT 128`, after, since, until)
+		rows, err := tx.QueryContext(ctx, `
+			SELECT r.seq,r.id,r.started,r.caller,r.route,r.data
+			FROM requests r INDEXED BY requests_time
+			WHERE (r.started,r.seq)>(?,?) AND r.started<=?
+			  AND NOT EXISTS (SELECT 1 FROM money_history m WHERE m.request_id=r.id)
+			ORDER BY r.started,r.seq LIMIT 128`, afterStarted, afterSeq, until)
 		if err != nil {
 			return err
 		}
@@ -152,10 +159,11 @@ func (s *store) reconcileMoneyHistory(ctx context.Context, since, until int64) e
 		for rows.Next() {
 			var rec Record
 			var raw string
-			if err = rows.Scan(&after, &rec.ID, &rec.Started, &rec.CallerID, &rec.Route, &raw); err != nil {
+			if err = rows.Scan(&afterSeq, &rec.ID, &afterStarted, &rec.CallerID, &rec.Route, &raw); err != nil {
 				rows.Close()
 				return err
 			}
+			rec.Started = afterStarted
 			fallback := rec
 			if json.Unmarshal([]byte(raw), &rec) != nil {
 				rec = fallback
@@ -188,7 +196,7 @@ func (s *store) reconcileMoneyHistory(ctx context.Context, since, until int64) e
 			break
 		}
 	}
-	if err = backfillMoneyUsage(tx, since, until); err != nil {
+	if err = backfillMoneyUsage(ctx, tx, since, until); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -196,9 +204,27 @@ func (s *store) reconcileMoneyHistory(ctx context.Context, since, until int64) e
 
 type usageBackfill struct{ id, data string }
 
-func backfillMoneyUsage(tx sqliteutil.Executor, since, until int64) error {
+// Drive the lookup from the money time range and reject rows with any exact
+// "usage" key (even JSON null) before probing requests. Keep Go as the final
+// decoder: encoding/json accepts case-folded request keys (including long s)
+// and resolves duplicates in input order, unlike a single SQLite JSON path.
+// SQLite's nesting limit is lower than Go's; invalid SQLite JSON falls back
+// to the Go decoder instead of being dropped as corrupt.
+const moneyUsageBackfillQuery = `
+	SELECT m.request_id,m.data,r.data
+	FROM money_history m CROSS JOIN requests r ON r.id=m.request_id
+	WHERE m.started>=? AND m.started<=?
+	  AND CASE WHEN json_valid(m.data) THEN
+	    json_type(m.data)='object' AND json_type(m.data,'$.usage') IS NULL
+	  ELSE 1 END
+	  AND CASE WHEN json_valid(r.data) THEN EXISTS (
+	    SELECT 1 FROM json_each(r.data) j
+	    WHERE j.type='object' AND replace(lower(j.key),'ſ','s')='usage'
+	  ) ELSE 1 END`
+
+func backfillMoneyUsage(ctx context.Context, tx *sql.Tx, since, until int64) error {
 	// Preserve unknown/future fields and the exact frozen Money JSON fragment.
-	backfillRows, err := tx.Query(`SELECT m.request_id,m.data,r.data FROM money_history m JOIN requests r ON r.id=m.request_id WHERE m.started>=? AND m.started<=?`, since, until)
+	backfillRows, err := tx.QueryContext(ctx, moneyUsageBackfillQuery, since, until)
 	if err != nil {
 		return err
 	}
@@ -219,7 +245,7 @@ func backfillMoneyUsage(tx sqliteutil.Executor, since, until int64) error {
 	}
 	backfillRows.Close()
 	for _, update := range updates {
-		if _, err = tx.Exec("UPDATE money_history SET data=? WHERE request_id=?", update.data, update.id); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE money_history SET data=? WHERE request_id=?", update.data, update.id); err != nil {
 			return err
 		}
 	}

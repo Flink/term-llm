@@ -94,7 +94,7 @@ func seedClaudeV8(t *testing.T, st *store) string {
 	return authority
 }
 
-func openProxyV9(t *testing.T, opts Options) *Service {
+func openMigratedProxy(t *testing.T, opts Options) *Service {
 	t.Helper()
 	s, err := Open(opts)
 	if err != nil {
@@ -107,9 +107,9 @@ func openProxyV9(t *testing.T, opts Options) *Service {
 func TestProviderMigrationV9StoresIdentityAndPreservesClaudeGrant(t *testing.T) {
 	st, opts := newProxyV8Fixture(t, legacyClaudeConfig)
 	authority := seedClaudeV8(t, st)
-	s := openProxyV9(t, opts)
+	s := openMigratedProxy(t, opts)
 	store := s.store
-	if v := proxyCount(t, store, "PRAGMA user_version"); v != 9 {
+	if v := proxyCount(t, store, "PRAGMA user_version"); v != schemaVersion {
 		t.Fatalf("user_version = %d", v)
 	}
 	if s.snap.revision != 42 || len(s.snap.routes) != 2 {
@@ -230,7 +230,7 @@ secrets:
 	if err := os.WriteFile(opts.ConfigFile, []byte(convertedClaudeFile), 0600); err != nil {
 		t.Fatal(err)
 	}
-	s = openProxyV9(t, opts)
+	s = openMigratedProxy(t, opts)
 	assertMigratedClaudeGrant(t, s, authority)
 	var raw string
 	if err := s.store.db.QueryRow("SELECT data FROM configuration WHERE id=1").Scan(&raw); err != nil || raw != emptyProviderConfig {
@@ -267,7 +267,7 @@ func TestProviderMigrationV9RollsBack(t *testing.T) {
 			}
 			execProxySQL(t, st, "UPDATE configuration SET data=? WHERE id=1", legacyClaudeConfig)
 			execProxySQL(t, st, "UPDATE money_settings SET data=? WHERE id=1", oldClaudeRate)
-			if v := proxyCount(t, openProxyV9(t, opts).store, "PRAGMA user_version"); v != 9 {
+			if v := proxyCount(t, openMigratedProxy(t, opts).store, "PRAGMA user_version"); v != schemaVersion {
 				t.Fatalf("retry did not upgrade fixed v8 fixture: version=%d", v)
 			}
 		})
@@ -279,7 +279,7 @@ func TestProviderMigrationV9StructuralOnly(t *testing.T) {
 	if err := st.initialize(); err != nil {
 		t.Fatal("schema migration attempted upstream resolution or secret lookup", err)
 	}
-	if v := proxyCount(t, st, "PRAGMA user_version"); v != 9 {
+	if v := proxyCount(t, st, "PRAGMA user_version"); v != schemaVersion {
 		t.Fatalf("structural validation did not publish marker: %d", v)
 	}
 }

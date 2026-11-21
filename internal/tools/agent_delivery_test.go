@@ -9,6 +9,7 @@ import (
 
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/session"
+	"github.com/term-llm/term-llm/internal/tools/agentrun"
 )
 
 func TestAgentCompletionCollectionSuppressesWakeAndPreservesMedia(t *testing.T) {
@@ -70,7 +71,7 @@ func TestPendingAgentEventsRecoverSameProcessReloadWithoutResumingChild(t *testi
 		t.Fatal(err)
 	}
 	defer store.Close()
-	record := session.AgentRun{ID: "reloaded-child", ParentSessionID: "parent", AgentName: "developer", Status: "running", NotifyOrigin: QueueAgentOriginWeb, OwnerInstanceID: processAgentOwner(), UpdatedAt: time.Now()}
+	record := session.AgentRun{ID: "reloaded-child", ParentSessionID: "parent", AgentName: "developer", Status: "running", NotifyOrigin: QueueAgentOriginWeb, OwnerInstanceID: agentrun.CurrentOwner(), UpdatedAt: time.Now()}
 	if err := store.PutAgentRun(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}

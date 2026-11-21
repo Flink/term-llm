@@ -408,6 +408,18 @@ func (a *StreamAdapter) processToolCall(ctx context.Context, event core.Event) b
 	return true
 }
 
+// Nested rows may use the built-in spawn receipt, never raw child output.
+func agentRowOutput(event core.Event) string {
+	if r := event.SpawnAgentReceipt; event.ToolName == tools.SpawnAgentToolName && r != nil && r.ID != "" && knownSubagentStatus(r.Status) {
+		data, _ := json.Marshal(agentRowReceipt{ID: r.ID, Status: r.Status})
+		return string(data)
+	}
+	if event.ParentToolCallID != "" {
+		return ""
+	}
+	return compactAgentToolOutput(event.ToolName, event.ToolOutput)
+}
+
 func (a *StreamAdapter) processToolExecEnd(ctx context.Context, event core.Event) bool {
 	// Skip if already seen. If toolCallID is empty, don't dedupe - treat as unique.
 	if event.ToolCallID != "" {
@@ -420,6 +432,8 @@ func (a *StreamAdapter) processToolExecEnd(ctx context.Context, event core.Event
 	if event.ToolName == tools.CodeExecToolName || event.ToolName == tools.CodeWaitToolName || event.ToolName == tools.CodeCancelToolName {
 		uiEvent.ToolOutput = event.ToolOutput
 		uiEvent.ToolContentParts = codeModePresentationParts(event.ToolContentParts)
+	} else {
+		uiEvent.ToolOutput = agentRowOutput(event)
 	}
 	if !a.emit(ctx, uiEvent) {
 		return false

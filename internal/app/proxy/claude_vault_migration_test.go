@@ -20,7 +20,7 @@ func TestNativeVaultSchema4Migration(t *testing.T) {
 	token := caller(t, s, route.Name)
 	// Faithful version-4 schema: native vault did not exist; pairing receipts
 	// and managed route records did. Ordinary clients and grants are unchanged.
-	if _, err := s.store.db.Exec(removeProxyV7 + removeProxyV6 + "" + legacyConnectSchemaV4 + " PRAGMA user_version=4;"); err != nil {
+	if _, err := s.store.db.Exec(removeProxyV10 + removeProxyV7 + removeProxyV6 + "" + legacyConnectSchemaV4 + " PRAGMA user_version=4;"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.store.db.Exec("INSERT INTO connect_requests VALUES('old','hash','peer','pending',1,2,0,'{}')"); err != nil {
@@ -78,7 +78,7 @@ func TestNativeVaultSchema8DiscardsCallerLoginsAndPreservesGrants(t *testing.T) 
 	ctx := context.Background()
 	// Start from the current canonical store but reconstruct the table and
 	// account rows that a real v7 proxy would have on disk.
-	execProxySQL(t, s.store, claudeVaultSchema+`PRAGMA user_version=7;`)
+	execProxySQL(t, s.store, removeProxyV10+claudeVaultSchema+`PRAGMA user_version=7;`)
 	// Build and grant the routes with current runtime kinds, then put the
 	// historical Claude kind on disk before running the frozen v8 migration.
 	kinds := []string{claudeProxyProvider.kind, agyProxyProvider.kind}

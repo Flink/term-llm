@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/term-llm/term-llm/internal/session"
+	"github.com/term-llm/term-llm/internal/tools/agentrun"
 )
 
 type agentWaitObserverKey struct{}
@@ -17,18 +18,10 @@ func WithObserver(ctx context.Context, observer func(session.AgentRun)) context.
 }
 
 func Observe(ctx context.Context, record session.AgentRun, waited bool) {
-	if !waited || record.ID == "" || terminal(record.Status) || ctx.Err() != nil {
+	if !waited || record.ID == "" || agentrun.Terminal(record.Status) || ctx.Err() != nil {
 		return
 	}
 	if observer, ok := ctx.Value(agentWaitObserverKey{}).(func(session.AgentRun)); ok && observer != nil {
 		observer(record)
 	}
-}
-
-func terminal(status string) bool {
-	switch status {
-	case "completed", "turn_limit", "cancelled", "interrupted", "failed":
-		return true
-	}
-	return false
 }

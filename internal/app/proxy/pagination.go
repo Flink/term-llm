@@ -6,9 +6,18 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+
+	"github.com/term-llm/term-llm/internal/app/proxy/requesthistory"
 )
 
 const defaultRequestPageSize int64 = 25
+
+// Rank narrow sequence IDs first, so a date-range sort or a deep OFFSET
+// doesn't carry request JSON through rows that won't be returned.
+func requestPageQuery(where string) string {
+	return "SELECT seq,data FROM requests WHERE seq IN (SELECT seq FROM requests WHERE " + where +
+		" ORDER BY seq DESC LIMIT ? OFFSET ?) ORDER BY seq DESC"
+}
 
 // requestPage keeps numbered metadata mandatory, including for an empty history.
 // Next remains a sequence cursor for compatibility with cursor-based readers.
@@ -60,7 +69,7 @@ func (s *store) recordsPage(ctx context.Context, q url.Values, page, size int64)
 	if page < 1 || size < 1 || size > 100 || q.Has("before") {
 		return out, fmt.Errorf("invalid numbered pagination")
 	}
-	where, args, err := requestWhere(q)
+	where, args, err := requesthistory.Where(q)
 	if err != nil {
 		return out, err
 	}
@@ -69,7 +78,11 @@ func (s *store) recordsPage(ctx context.Context, q url.Values, page, size int64)
 		return out, fmt.Errorf("begin request page: %w", err)
 	}
 	defer tx.Rollback()
-	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM requests WHERE "+where, args...).Scan(&out.Total); err != nil {
+	countQuery := "SELECT count(*) FROM requests"
+	if where != "1=1" {
+		countQuery += " WHERE " + where
+	}
+	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&out.Total); err != nil {
 		return out, fmt.Errorf("count requests: %w", err)
 	}
 	last := int64(1)
@@ -82,7 +95,7 @@ func (s *store) recordsPage(ctx context.Context, q url.Values, page, size int64)
 	// Clamp before multiplication: even a MaxInt64 page cannot overflow OFFSET.
 	offset := (out.Page - 1) * size
 	args = append(args, size, offset)
-	rows, err := tx.QueryContext(ctx, "SELECT seq,data FROM requests WHERE "+where+" ORDER BY seq DESC LIMIT ? OFFSET ?", args...)
+	rows, err := tx.QueryContext(ctx, requestPageQuery(where), args...)
 	if err != nil {
 		return out, fmt.Errorf("query request page: %w", err)
 	}

@@ -1365,7 +1365,7 @@ func (m *Model) attachMainRun(sessionID string) tea.Cmd {
 			m.applyLoadedScrollback(loaded, compactionIdx)
 		}
 	}
-	return m.listenForMainRunEvents()
+	return tea.Batch(m.listenForMainRunEvents(), m.observeActiveSpawnRows())
 }
 
 func (m *Model) detachMainRun() {

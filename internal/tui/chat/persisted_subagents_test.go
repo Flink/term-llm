@@ -162,3 +162,82 @@ func TestPersistedSubagentHydrationRejectsWrongParent(t *testing.T) {
 		t.Fatalf("foreign child was accepted or fallback lost: %#v", run)
 	}
 }
+
+func TestPersistedDetachedReceiptRefreshesCachedStatusWithoutCollecting(t *testing.T) {
+	m, store := newTurnLeaseTestModel(t)
+	child := "detached-child"
+	m.messages = persistedSpawnFixture(m.sess.ID, child, "spawn", "original output")
+	result := m.messages[1].Parts[0].ToolResult
+	// Detached receipts may identify the child before a child session exists.
+	result.Content = `{"agent_id":"detached-child","status":"running","output":"original output"}`
+	first := m.loadPersistedSubagentsCmd()
+	if got := m.persistedSubagents["spawn"].SubagentStatus; got != "running" {
+		t.Fatalf("first paint = %q", got)
+	}
+	row := putBarrierChild(t, store, m.sess.ID, child, "running")
+	m.applyPersistedSubagents(first().(persistedSubagentsLoadedMsg))
+	running := m.persistedSubagents["spawn"]
+	row.Status = "turn_limit"
+	if err := store.PutAgentRun(t.Context(), row); err != nil {
+		t.Fatal(err)
+	}
+	m.applyPersistedSubagents(m.loadPersistedSubagentsCmd()().(persistedSubagentsLoadedMsg))
+	got := m.persistedSubagents["spawn"]
+	if got.AgentID != child || got.SubagentStatus != "turn_limit" || got.Fingerprint == running.Fingerprint || got.Output != "original output" {
+		t.Fatalf("resolved row = %+v", got)
+	}
+	stored, err := store.GetAgentRun(t.Context(), child)
+	if err != nil || !stored.CollectedAt.IsZero() || !stored.NotifiedAt.IsZero() {
+		t.Fatalf("hydration consumed receipt: %+v, %v", stored, err)
+	}
+}
+
+func TestPersistedDetachedReceiptRejectsForeignAgentRun(t *testing.T) {
+	m, store := newTurnLeaseTestModel(t)
+	putBarrierChild(t, store, "another-parent", "child", "completed")
+	m.messages = persistedSpawnFixture(m.sess.ID, "child", "spawn", "")
+	m.messages[1].Parts[0].ToolResult.Content = `{"session_id":"child","status":"queued"}`
+	got := m.loadPersistedSubagentsCmd()().(persistedSubagentsLoadedMsg).runs["spawn"]
+	if got.SubagentStatus != "queued" || got.AgentID != "child" {
+		t.Fatalf("foreign row altered receipt: %+v", got)
+	}
+}
+
+func TestPersistedDetachedReceiptClosedByLaterMatchingLifecycleResult(t *testing.T) {
+	m := newTestChatModel(true)
+	spawn := persistedSpawnFixture(m.sess.ID, "child", "spawn", "")
+	spawn[1].Parts[0].ToolResult.Content = `{"agent_id":"child","status":"running"}`
+	receipt := func(tool, body string) session.Message {
+		return *session.NewMessage(m.sess.ID, core.ToolResultMessage("result", tool, body, nil), 0)
+	}
+	m.messages = append([]session.Message{receipt(tools.CancelAgentToolName, `{"agent_id":"child","status":"cancelled"}`)}, spawn...)
+	m.messages = append(m.messages, receipt(tools.WaitAgentToolName, `[{"agent_id":"other","status":"failed"},{"agent_id":"child","status":"turn_limit"}]`), receipt(tools.ContinueAgentToolName, `{"agent_id":"child","status":"completed"}`))
+	m.loadPersistedSubagentsCmd()
+	if got := m.persistedSubagents["spawn"].SubagentStatus; got != "turn_limit" {
+		t.Fatalf("status = %q", got)
+	}
+}
+
+func TestPersistedHydrationCannotReopenClosedRow(t *testing.T) {
+	m := newTestChatModel(true)
+	m.messages = persistedSpawnFixture(m.sess.ID, "child", "spawn", "")
+	m.messages[1].Parts[0].ToolResult.Content = `{"session_id":"child","status":"running"}`
+	load := m.loadPersistedSubagentsCmd()
+	m.persistedSubagents["spawn"] = m.persistedSubagents["spawn"].WithSubagentStatus("cancelled")
+	m.persistedSubagents["unrelated"] = m.persistedSubagents["spawn"]
+	snapshot := load().(persistedSubagentsLoadedMsg)
+	if _, aliased := snapshot.runs["unrelated"]; aliased {
+		t.Fatal("hydration command shared its fallback map with the model")
+	}
+	m.applyPersistedSubagents(snapshot)
+	if got := m.persistedSubagents["spawn"].SubagentStatus; got != "cancelled" {
+		t.Fatalf("late hydration reopened row: %q", got)
+	}
+	load = m.loadPersistedSubagentsCmd()
+	if got := m.persistedSubagents["spawn"].SubagentStatus; got != "cancelled" {
+		t.Fatalf("old receipt reopened first paint: %q", got)
+	}
+	if got := load().(persistedSubagentsLoadedMsg).runs["spawn"].SubagentStatus; got != "cancelled" {
+		t.Fatalf("old receipt reopened refreshed row: %q", got)
+	}
+}

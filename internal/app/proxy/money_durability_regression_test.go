@@ -154,7 +154,7 @@ func TestMoneyMigrationPreservesCorruptLegacyRowAsUnknown(t *testing.T) {
 	if _, err := s.store.db.Exec("INSERT INTO requests(id,started,caller,route,method,path,outcome,data) VALUES('corrupt-legacy',?,'device','route','POST','/','unknown','not JSON')", now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.store.db.Exec(removeProxyV7 + removeProxyV6 + "DROP TABLE accounts; DROP TABLE money_history; DROP TABLE money_settings; PRAGMA user_version=2"); err != nil {
+	if _, err := s.store.db.Exec(removeProxyV10 + removeProxyV7 + removeProxyV6 + "DROP TABLE accounts; DROP TABLE money_history; DROP TABLE money_settings; PRAGMA user_version=2"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.store.initialize(); err != nil {

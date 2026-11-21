@@ -1,6 +1,6 @@
 //go:build !linux && !windows && !js
 
-package tools
+package agentrun
 
 import (
 	"errors"

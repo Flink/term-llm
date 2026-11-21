@@ -7,10 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +17,7 @@ import (
 	"github.com/term-llm/term-llm/internal/restart"
 	"github.com/term-llm/term-llm/internal/runtimeoutput"
 	"github.com/term-llm/term-llm/internal/session"
+	"github.com/term-llm/term-llm/internal/tools/agentrun"
 	"github.com/term-llm/term-llm/internal/tools/spawnmodel"
 )
 
@@ -84,54 +82,7 @@ func AgentCancelled(ctx context.Context) bool {
 }
 
 func newAgentManager(config SpawnConfig) *agentManager {
-	return &agentManager{agents: make(map[string]*agentEntry), slots: make(chan struct{}, config.MaxParallel), owner: processAgentOwner(), remainingDepth: config.MaxDepth}
-}
-
-var processStartedAt = time.Now().UnixNano()
-
-func processAgentOwner() string {
-	host, _ := os.Hostname()
-	start := strconv.FormatInt(processStartedAt, 10)
-	if runtime.GOOS == "linux" {
-		if stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", os.Getpid())); err == nil {
-			if i := strings.LastIndexByte(string(stat), ')'); i >= 0 {
-				fields := strings.Fields(string(stat)[i+1:])
-				if len(fields) > 19 {
-					start = fields[19]
-				} // field 22 (starttime), after pid and comm.
-			}
-		}
-	}
-	return fmt.Sprintf("%s:%d:%s", host, os.Getpid(), start)
-}
-
-// ownerTerminated requires proof: never infer death from a stale timestamp.
-func ownerTerminated(owner string) bool {
-	host, _ := os.Hostname()
-	parts := strings.Split(owner, ":")
-	if len(parts) != 3 || parts[0] != host {
-		return false
-	}
-	pid, err := strconv.Atoi(parts[1])
-	if err != nil || pid <= 0 {
-		return false
-	}
-	if runtime.GOOS != "linux" {
-		return ownerPIDTerminated(pid)
-	} // Non-Linux Unix can prove ESRCH, but not process start identity.
-	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if errors.Is(err, os.ErrNotExist) {
-		return true
-	}
-	if err != nil {
-		return false
-	}
-	i := strings.LastIndexByte(string(stat), ')')
-	if i < 0 {
-		return false
-	}
-	fields := strings.Fields(string(stat)[i+1:])
-	return len(fields) > 19 && fields[19] != parts[2]
+	return &agentManager{agents: make(map[string]*agentEntry), slots: make(chan struct{}, config.MaxParallel), owner: agentrun.CurrentOwner(), remainingDepth: config.MaxDepth}
 }
 
 func (m *agentManager) save(record session.AgentRun) bool {
@@ -418,6 +369,10 @@ func (m *agentManager) finish(e *agentEntry, result SpawnAgentRunResult, err err
 }
 
 func (m *agentManager) get(ctx context.Context, id, parent string) (session.AgentRun, *agentEntry, error) {
+	return lookupAgentRun(ctx, m.store, m.owner, id, parent)
+}
+
+func lookupAgentRun(ctx context.Context, store session.AgentRunStore, owner, id, parent string) (session.AgentRun, *agentEntry, error) {
 	var e *agentEntry
 	if value, ok := processAgentEntries.Load(id); ok {
 		e = value.(*agentEntry)
@@ -430,9 +385,9 @@ func (m *agentManager) get(ctx context.Context, id, parent string) (session.Agen
 		record.Media = append([]core.MediaArtifact(nil), e.media...)
 		e.manager.mu.Unlock()
 	}
-	if e == nil && m.store != nil {
+	if e == nil && store != nil {
 		var err error
-		record, err = m.store.GetAgentRun(ctx, id)
+		record, err = store.GetAgentRun(ctx, id)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return record, nil, fmt.Errorf("agent not found")
@@ -444,7 +399,7 @@ func (m *agentManager) get(ctx context.Context, id, parent string) (session.Agen
 		return record, nil, fmt.Errorf("agent not found for this parent session")
 	}
 	if e == nil && (record.Status == "queued" || record.Status == "running" || record.Status == "awaiting_approval") {
-		if record.OwnerInstanceID == m.owner || ownerTerminated(record.OwnerInstanceID) {
+		if record.OwnerInstanceID == owner || agentrun.OwnerTerminated(record.OwnerInstanceID) {
 			record.Status = "interrupted"
 			record.StopReason = "host_restarted"
 		} else {

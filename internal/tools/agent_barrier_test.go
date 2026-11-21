@@ -13,6 +13,7 @@ import (
 
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/session"
+	"github.com/term-llm/term-llm/internal/tools/agentrun"
 )
 
 func barrierStore(t *testing.T) *session.SQLiteStore {
@@ -40,7 +41,7 @@ func TestPendingAgentBarrier(t *testing.T) {
 		{"parent_stopped", func(r *session.AgentRun) { r.StopReason = "parent_stopped" }, 0},
 		{"unknown_owner", func(r *session.AgentRun) { r.Status = "running"; r.OwnerInstanceID = "remote-host:1:1" }, 0},
 		{"dead_owner", func(r *session.AgentRun) { r.Status = "running"; r.OwnerInstanceID = host + ":99999999:1" }, 1},
-		{"same_process_orphan", func(r *session.AgentRun) { r.Status = "queued"; r.OwnerInstanceID = processAgentOwner() }, 1},
+		{"same_process_orphan", func(r *session.AgentRun) { r.Status = "queued"; r.OwnerInstanceID = agentrun.CurrentOwner() }, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := barrierStore(t)

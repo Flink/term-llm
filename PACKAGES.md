@@ -35,6 +35,7 @@ One line per root-module package, generated from package doc comments by `make d
 - `internal/app/proxy/ledger` — commits proxy request and money-history row pairs together.
 - `internal/app/proxy/legacyconfig` — converts v8 credential-proxy configuration into stored providers.
 - `internal/app/proxy/moneytimeline` — builds chart responses and calendar buckets for proxy usage.
+- `internal/app/proxy/requesthistory` — builds indexed query predicates for proxy request history.
 - `internal/app/proxy/usagetap` — observes bounded provider response events without I/O or retaining response bodies.
 - `internal/app/proxyconnect` — provides local-only undo of legacy Claude Code settings enrollment, preserving unrelated edits and native credentials.
 - `internal/app/proxyrun` — launches a native client with a process-local credential-proxy binding.
@@ -222,6 +223,7 @@ One line per root-module package, generated from package doc comments by `make d
 - `internal/tooldiscovery/evalcmd` — runs tool-discovery evaluations against fixture MCP servers and catalogues.
 - `internal/tooldiscovery/evalfixture` — provides the deterministic ten-server, 200-tool MCP federation and its single-server aggregate used to evaluate deferred tool discovery with real transports.
 - `internal/tools` — provides a permission-aware local tool system for term-llm.
+- `internal/tools/agentrun` — classifies child run statuses and their process owners.
 - `internal/tools/agentwait` — carries exact, generation-scoped child wait evidence for host turn finalization.
 - `internal/tools/gitidentity` — validates checkout membership before sharing a Git approval identity.
 - `internal/tools/spawnmodel` — checks the spawn_agent model argument.

@@ -13,10 +13,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/term-llm/term-llm/internal/app/proxy/requesthistory"
 	"github.com/term-llm/term-llm/internal/fileprivacy"
 	"github.com/term-llm/term-llm/internal/sqliteutil"
 	_ "modernc.org/sqlite"
@@ -32,8 +32,8 @@ CREATE TABLE requests (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT
 CREATE INDEX requests_time ON requests(started,seq);
 CREATE INDEX requests_caller ON requests(caller,seq);
 CREATE INDEX requests_route ON requests(route,seq);
-` + accountSchema + moneySchema + adminKeySchemaV6 + claudeSharedSchema + `
-PRAGMA user_version=9;`
+` + requestFilterIndexesV10 + accountSchema + moneySchema + adminKeySchemaV6 + claudeSharedSchema + `
+PRAGMA user_version=10;`
 
 func openStore(dir string, fileConfig ...*Config) (*store, error) {
 	if err := fileprivacy.MkdirAll(dir); err != nil {
@@ -280,7 +280,7 @@ func (s *store) finish(r Record) error {
 	return s.finishRequestAndMoney(ctx, r, b)
 }
 func (s *store) records(q url.Values, limit int) ([]Record, int64, error) {
-	where, args, err := requestWhere(q)
+	where, args, err := requesthistory.Where(q)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -318,57 +318,13 @@ func readRequestRecords(rows *sql.Rows, limit int) ([]Record, int64, error) {
 	}
 	return out, next, rows.Err()
 }
+
+const retainRequestsQuery = "DELETE FROM requests WHERE seq IN (SELECT seq FROM requests WHERE started<? ORDER BY started,seq LIMIT 500)"
+
 func (s *store) retain(ctx context.Context, days int) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM requests WHERE seq IN (SELECT seq FROM requests WHERE started<? ORDER BY seq LIMIT 500)", time.Now().Add(-time.Duration(days)*24*time.Hour).UnixMilli())
+	_, err := s.db.ExecContext(ctx, retainRequestsQuery, time.Now().Add(-time.Duration(days)*24*time.Hour).UnixMilli())
 	if err != nil {
 		return err
 	}
 	return s.retainMoney(ctx)
-}
-
-func requestWhere(q url.Values) (string, []any, error) {
-	where := []string{"1=1"}
-	args := []any{}
-	for _, f := range []struct{ key, col string }{{"id", "id"}, {"caller", "caller"}, {"route", "route"}, {"method", "method"}, {"outcome", "outcome"}} {
-		if v := q.Get(f.key); v != "" {
-			if f.key == "outcome" && v == "active" {
-				v = "unknown"
-			}
-			where = append(where, f.col+"=?")
-			args = append(args, v)
-		}
-	}
-	if outcome := q.Get("outcome"); outcome == "active" || outcome == "unknown" {
-		ids := q["_active"]
-		if len(ids) > 0 {
-			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-			clause := "id IN (" + placeholders + ")"
-			if outcome == "unknown" {
-				clause = "NOT (" + clause + ")"
-			}
-			where = append(where, clause)
-			for _, id := range ids {
-				args = append(args, id)
-			}
-		} else if outcome == "active" {
-			where = append(where, "0=1")
-		}
-	}
-	for _, f := range []struct{ key, clause string }{{"before", "seq < ?"}, {"since", "started >= ?"}, {"until", "started <= ?"}} {
-		if v := q.Get(f.key); v != "" {
-			n, err := strconv.ParseInt(v, 10, 64)
-			if err != nil {
-				return "", nil, fmt.Errorf("invalid filter")
-			}
-			if n > 0 {
-				where = append(where, f.clause)
-				args = append(args, n)
-			}
-		}
-	}
-	if v := q.Get("path"); v != "" {
-		where = append(where, "(instr(CASE WHEN substr(path,1,1)='/' THEN path ELSE '/'||path END,?)>0 OR instr(COALESCE(json_extract(data,'$.local_prefix'),'')||ltrim(path,'/'),?)>0)")
-		args = append(args, v, v)
-	}
-	return strings.Join(where, " AND "), args, nil
 }

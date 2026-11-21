@@ -595,6 +595,7 @@ func (t *SpawnAgentTool) Execute(ctx context.Context, args json.RawMessage) (cor
 	record, _, _ := t.manager.get(context.Background(), entry.record.ID, entry.record.ParentSessionID)
 	agentwait.Observe(ctx, record, budget > 0)
 	out := t.manager.deliver(ctx, record, entry)
+	out.SpawnAgentReceipt = &core.SpawnAgentReceipt{ID: record.ID, Status: record.Status}
 	if sessionless {
 		out = withoutLifecycleHints(out)
 	}

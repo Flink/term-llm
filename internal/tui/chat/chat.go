@@ -234,6 +234,7 @@ type Model struct {
 	persistedSubagents          map[string]subagentview.CompletedRun
 	mediaByReference            map[string]core.MediaArtifact
 	persistedSubagentGeneration uint64
+	observingSpawnRows          map[spawnRowKey]bool
 
 	// Persist-as-we-go: row ID and latest per-turn snapshot of the in-progress
 	// assistant message. Written from engine callbacks on a non-UI goroutine;
@@ -2510,9 +2511,12 @@ func (m *Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	if switched, ok := msg.(sessionSwitchedMsg); ok {
 		return m.handleSessionSwitched(switched)
 	}
+	if observed, ok := msg.(spawnRowObservedMsg); ok {
+		return m, m.applySpawnRowObservation(observed)
+	}
 	if loaded, ok := msg.(persistedSubagentsLoadedMsg); ok {
 		m.applyPersistedSubagents(loaded)
-		return m, nil
+		return m, m.observeActiveSpawnRows()
 	}
 	if handled, mentionCmd := m.handleMentionMessage(msg); handled {
 		return m, mentionCmd

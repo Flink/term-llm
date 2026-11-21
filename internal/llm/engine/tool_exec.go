@@ -401,6 +401,7 @@ func (e *Engine) executeSingleToolCallOutcome(ctx context.Context, call core.Too
 		ToolInfo:                   info,
 		ToolSuccess:                !output.TimedOut && !output.IsError,
 		ToolOutput:                 eventOutput.Content,
+		SpawnAgentReceipt:          eventOutput.SpawnAgentReceipt,
 		ToolContentParts:           eventOutput.ContentParts,
 		ToolDiffs:                  output.Diffs,
 		ToolFileChanges:            output.FileChanges,

@@ -3,7 +3,7 @@ package ui
 import "github.com/term-llm/term-llm/internal/llm/core"
 
 // HandleToolEndWithResult preserves the normal tool completion semantics and
-// attaches a bounded script observation only to the exact lifecycle family.
+// attaches display metadata from matched script and agent lifecycle receipts.
 // Receipt status is display metadata: yielded cells do not leave this tool call
 // pending, and successful cancellation does not change ToolStatus semantics.
 // Like the generic status updater, receipts target the newest matching pending
@@ -25,6 +25,8 @@ func (t *ToolTracker) HandleToolEndWithResult(callID string, success bool, info,
 		seg := &t.Segments[pending]
 		if isCodeModeTool(seg.ToolName) {
 			seg.CodeMode = codeModeResultReceipt(seg.ToolName, output, parts)
+		} else {
+			t.applyAgentToolResult(seg, output)
 		}
 	}
 }
