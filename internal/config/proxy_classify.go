@@ -38,9 +38,16 @@ func (p ClassifyProviderConfig) CredentialsConfigured() bool {
 	return p.Key().Configured() && (p.Type != ClassifyProviderCloudflare || p.AccountIDRef().Configured())
 }
 
-func (c *ClassifyConfig) bindProxy(root, token string, requested []string, catalog *proxyDiscoveryCatalog) ([]proxyclient.Binding, error) {
-	// An omitted list means proxy-all for other integrations. Classifiers
-	// require their exact profile ID in the list and do not use route aliases.
+func (c *ClassifyConfig) bindProxy(root, token string, requested []string, catalog *proxyDiscoveryCatalog, direct map[string]bool, served map[proxyDiscoveredDefault]proxyprofile.Profile) ([]proxyclient.Binding, error) {
+	if requested == nil {
+		// Discover only granted classifier routes. Explicit selections also
+		// bind missing routes so they fail closed rather than using local keys.
+		for id, provider := range catalog.Providers {
+			if provider.Family == "classification" && !direct[id] && len(provider.Routes) > 0 {
+				requested = append(requested, id)
+			}
+		}
+	}
 	c.proxyBindings = nil
 	var bindings []proxyclient.Binding
 	for _, id := range requested {
@@ -58,6 +65,7 @@ func (c *ClassifyConfig) bindProxy(root, token string, requested []string, catal
 			}
 			b.endpoint = (discoveredProxyRoute{route: r}).endpoint(root)
 			b.token = token
+			served[proxyDiscoveredDefault{Provider: p.ID, Route: r.Name}] = p
 			bindings = append(bindings, proxyclient.Binding{Root: b.endpoint, Token: token, Kind: "classification:" + p.ID})
 		}
 		if c.proxyBindings == nil {

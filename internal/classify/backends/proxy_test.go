@@ -27,7 +27,7 @@ func loadClassifyProxy(t *testing.T, selection, providers, local string) (*confi
 			http.NotFound(w, r)
 			return
 		}
-		if r.Header.Get(proxyprofile.ClassificationDiscoveryHeader) != proxyprofile.ClassificationDiscoveryCapability ||
+		if r.Header.Get(proxyprofile.ClassificationDiscoveryHeader) != proxyprofile.ClassificationDiscoveryCapability+", "+proxyprofile.ClassificationDefaultCapability ||
 			r.Header.Get("Authorization") != "Bearer "+classifyProxyTestToken {
 			t.Error("classification discovery omitted capability or authentication")
 		}
@@ -136,15 +136,19 @@ func TestResolveMissingAndUnselectedClassifiers(t *testing.T) {
 	if _, err := Resolve(p, Overrides{}); err == nil || !strings.Contains(err.Error(), "not enabled and granted") {
 		t.Fatalf("ungranted classifier resolution: %v", err)
 	}
-	for _, selection := range []string{"", "  direct: [typesafe]\n", "  providers: [openai]\n"} {
-		cfg, _ := loadClassifyProxy(t, selection, classifyProxyProviders, "")
+	for _, tc := range []struct{ selection, advertised string }{
+		{"", "[]"},
+		{"  direct: [typesafe, openai-decisions]\n", classifyProxyProviders},
+		{"  providers: [openai]\n", classifyProxyProviders},
+	} {
+		cfg, _ := loadClassifyProxy(t, tc.selection, tc.advertised, "")
 		p, err := cfg.Classify.ResolveProvider("typesafe")
 		if err != nil {
 			t.Fatal(err)
 		}
 		conn, err := Resolve(p, Overrides{})
 		if err != nil || conn.BaseURL != config.DefaultTypeSafeBaseURL || conn.APIKey != "direct-typesafe-key" {
-			t.Fatalf("unselected classifier did not stay direct for selection %q: %v", selection, err)
+			t.Fatalf("unselected classifier did not stay direct for selection %q: %v", tc.selection, err)
 		}
 		decisions, err := cfg.Classify.ResolveProvider("openai")
 		if err != nil {

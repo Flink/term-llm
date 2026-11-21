@@ -134,7 +134,8 @@ func fetchProxyProvidersHTTP(root, token string) (*proxyDiscoveryCatalog, error)
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Accept", "application/json")
 		if version == "v2" {
-			req.Header.Set(proxyprofile.ClassificationDiscoveryHeader, proxyprofile.ClassificationDiscoveryCapability)
+			req.Header.Set(proxyprofile.ClassificationDiscoveryHeader,
+				proxyprofile.ClassificationDiscoveryCapability+", "+proxyprofile.ClassificationDefaultCapability)
 		}
 		return client.Do(req)
 	}

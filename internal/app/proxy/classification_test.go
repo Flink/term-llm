@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -67,7 +68,7 @@ func TestClassificationProviderCreationAndState(t *testing.T) {
 			t.Errorf("wrong provider state: %+v", provider)
 		}
 		root := "classify.providers." + p.ClassifyProvider
-		if route.Profile != id || !slices.Equal(route.Serves, []string{root + ".api_key", root + ".base_url"}) || route.Usage != "off" || route.Billing != "unspecified" {
+		if route.Profile != id || !slices.Equal(route.Serves, []string{root + ".api_key", root + ".base_url", "classify: " + p.ClassifyProvider}) || route.Usage != "off" || route.Billing != "unspecified" {
 			t.Errorf("wrong route state: %+v", route)
 		}
 		if preset.Family != "classification" || !slices.Equal(preset.Allow, p.Allow) || preset.Upstream != p.Upstream || preset.Usage != "off" {
@@ -128,7 +129,7 @@ func TestClassificationDiscoveryNegotiatesWithoutChangingGrants(t *testing.T) {
 		}
 		cfg.Routes = append(cfg.Routes, r)
 	}
-	cfg.Defaults = map[string]string{"search": "exa"}
+	cfg.Defaults = map[string]string{"search": "exa", "classify": "typesafe"}
 	configure(t, s, cfg, nil)
 
 	client, token, err := s.store.createCaller("mixed client", []string{"openai", "exa", "typesafe"}, s.snap)
@@ -139,7 +140,7 @@ func TestClassificationDiscoveryNegotiatesWithoutChangingGrants(t *testing.T) {
 	if err := s.store.changeProviderGrants(t.Context(), client.ID, map[string]string{"cloudflare-clef": s.snap.routes[4].authority}); err != nil {
 		t.Fatal(err)
 	}
-	query := func(token string, capabilities []string, wantStatus int, wantIDs []string) {
+	query := func(token string, capabilities []string, wantStatus int, wantIDs []string, wantClassifyDefault bool) {
 		t.Helper()
 		r := httptest.NewRequest(http.MethodGet, "/_proxy/client/v2/providers", nil)
 		r.Header.Set("Authorization", "Bearer "+token)
@@ -165,20 +166,25 @@ func TestClassificationDiscoveryNegotiatesWithoutChangingGrants(t *testing.T) {
 				t.Errorf("bad classifier projection: %+v", p)
 			}
 		}
-		if !slices.Equal(ids, wantIDs) || len(out.Defaults) != 1 || out.Defaults["search"] != (clientProviderDefault{"exa", "exa"}) {
+		wantDefaults := map[string]clientProviderDefault{"search": {"exa", "exa"}}
+		if wantClassifyDefault {
+			wantDefaults["classify"] = clientProviderDefault{"typesafe", "typesafe"}
+		}
+		if !slices.Equal(ids, wantIDs) || !maps.Equal(out.Defaults, wantDefaults) {
 			t.Fatalf("wrong discovery for %q: %+v", capabilities, out)
 		}
 	}
 	legacy := []string{"exa", "openai"}
 	optedIn := []string{"exa", "openai", "typesafe"}
-	query(token, nil, 200, legacy)
-	query(token, []string{"classification-v2, unclassification"}, 200, legacy)
-	query(token, []string{"future", " other, classification "}, 200, optedIn)
-	query("wrong-token", []string{"classification"}, 401, nil)
+	query(token, nil, 200, legacy, false)
+	query(token, []string{"classification-v2, unclassification"}, 200, legacy, false)
+	query(token, []string{"future", " other, classification "}, 200, optedIn, false)
+	query(token, []string{"classification, classification-default"}, 200, optedIn, true)
+	query("wrong-token", []string{"classification"}, 401, nil, false)
 	if err := s.store.changeProviderGrants(t.Context(), client.ID, map[string]string{"typesafe": ""}); err != nil {
 		t.Fatal(err)
 	}
-	query(token, []string{"classification"}, 200, legacy)
+	query(token, []string{"classification, classification-default"}, 200, legacy, false)
 
 	// An unprofiled custom inference provider keeps its old family and is not
 	// hidden simply because its name now also appears in the preset catalog.
@@ -190,7 +196,7 @@ func TestClassificationDiscoveryNegotiatesWithoutChangingGrants(t *testing.T) {
 	configure(t, s, cfg, nil)
 	custom := caller(t, s, "exa", "openai-decisions")
 	for _, capabilities := range [][]string{nil, {"classification"}} {
-		query(custom, capabilities, 200, []string{"exa", "openai-decisions"})
+		query(custom, capabilities, 200, []string{"exa", "openai-decisions"}, false)
 	}
 }
 
@@ -216,6 +222,7 @@ func TestClassificationBackendsThroughProxy(t *testing.T) {
 			if err := addPresetProvider(&cfg, providerCreateInput{Name: tc.id, Preset: tc.id, Secret: "key", Routes: []providerRouteInput{{Name: tc.id, Upstream: up.URL + tc.base, AllowHTTP: true}}}); err != nil {
 				t.Fatal(err)
 			}
+			cfg.Defaults = map[string]string{"classify": tc.id}
 			configure(t, s, cfg, map[string]material{"key": {Value: "vendor-" + tc.id}})
 			server := httptest.NewServer(s)
 			defer server.Close()
@@ -281,13 +288,12 @@ func loadManagedClassifier(t *testing.T, id, proxyURL, token, directURL string) 
 	body := fmt.Sprintf(`proxy:
   url: %s
   token: %s
-  providers: [%s]
 classify:
   providers:
     %s:
       base_url: %s
       api_key: unused-direct-key
-`, proxyURL, token, id, p.ClassifyProvider, directURL)
+`, proxyURL, token, p.ClassifyProvider, directURL)
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +301,7 @@ classify:
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider, err := cfg.Classify.ResolveProvider(p.ClassifyProvider)
+	provider, err := cfg.Classify.ResolveProvider("")
 	if err != nil {
 		t.Fatal(err)
 	}

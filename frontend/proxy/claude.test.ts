@@ -538,7 +538,7 @@ it('uses a native Claude launcher and curl examples for mixed provider approvals
   ]);
   expect(root.querySelector('pre:not(:has(code))')).toHaveTextContent('curl -H');
   expect(root.querySelector('pre code')?.textContent).toBe(
-    `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token\n  providers: [claude-plan, openai-api]`,
+    `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token`,
   );
   expect(root.textContent).toContain(
     'For curl examples, set TOKEN in your shell to this client token, not the administrator token.',

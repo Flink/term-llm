@@ -41,6 +41,7 @@ const state: ProxyState = {
     route('jina', 'jina-reader', ['fetch: jina']),
     route('openai-copy', 'openai-copy', ['providers.openai-copy.base_url']),
     route('openai', 'openai', ['image: openai', 'embed: openai']),
+    route('typesafe', 'typesafe', ['classify: typesafe']),
   ],
 };
 
@@ -58,23 +59,29 @@ const context: UIContext = {
 it('replaces the defaults map using route names, including cross-family fetch', async () => {
   const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('{"revision":13}'));
   const view = clientDefaults(state, new ProxyClient(fetcher), context);
-  expect(view.querySelectorAll('select')).toHaveLength(6);
+  expect(view.querySelectorAll('select')).toHaveLength(7);
   const search = getByLabelText(view, 'Search') as HTMLSelectElement;
   const fetchSelect = getByLabelText(view, 'Fetch') as HTMLSelectElement;
+  const classifySelect = getByLabelText(view, 'Classification') as HTMLSelectElement;
   expect(search).toHaveValue('exa');
   expect(search.options[2].text).toBe('exa · exa_mcp');
   expect(fetchSelect.options[2].text).toBe('jina · jina');
+  expect(classifySelect.options[1].text).toBe('typesafe · typesafe');
   expect(getByLabelText(view, 'Image').querySelector('option[value="openai-copy"]')).toBeNull();
   expect(queryByLabelText(view, 'Embed')).toBeNull();
   fireEvent.change(search, { target: { value: '' } });
   fireEvent.change(fetchSelect, { target: { value: 'jina-reader' } });
+  fireEvent.change(classifySelect, { target: { value: 'typesafe' } });
   fireEvent.submit(getByRole(view, 'button', { name: 'Save defaults' }).closest('form')!);
   await waitFor(() =>
     expect(fetcher).toHaveBeenCalledWith(
       '/_proxy/api/defaults',
       expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({ revision: 12, defaults: { fetch: 'jina-reader' } }),
+        body: JSON.stringify({
+          revision: 12,
+          defaults: { fetch: 'jina-reader', classify: 'typesafe' },
+        }),
       }),
     ),
   );

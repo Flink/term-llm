@@ -19,13 +19,13 @@ function yamlProviderID(id: string): string {
  */
 export function termLLMProxyYAML(
   origin: string,
-  providerIDs: readonly string[],
+  providerIDs?: readonly string[],
   token?: string,
 ): string {
-  const ids = [...new Set(providerIDs.filter(Boolean))];
+  const ids = [...new Set(providerIDs?.filter(Boolean))];
   const tokenLine = token === undefined ? DEFAULT_TOKEN_REF : yamlSingleQuote(token);
   const lines = [`proxy:`, `  url: ${origin}`, `  token: ${tokenLine}`];
-  if (ids.length) lines.push(`  providers: [${ids.map(yamlProviderID).join(', ')}]`);
+  if (providerIDs !== undefined) lines.push(`  providers: [${ids.map(yamlProviderID).join(', ')}]`);
   return lines.join('\n');
 }
 
@@ -110,7 +110,10 @@ export function termLLMConfigSection(
   const ids = [...new Set(groups.map((group) => group.id).filter(Boolean))];
   if (!ids.length) return undefined;
 
-  const safeYAML = termLLMProxyYAML(origin, ids);
+  // Omit providers so the client discovers every granted, advertised integration,
+  // including classifiers. An explicit list remains available via termLLMProxyYAML.
+  const listed = undefined;
+  const safeYAML = termLLMProxyYAML(origin, listed);
   const code = el('code', safeYAML);
   const pre = el('pre', code);
 
@@ -139,7 +142,7 @@ export function termLLMConfigSection(
     const copyReady = copyButton('Copy with token', context, {
       getText: () => {
         const value = readToken();
-        return value ? termLLMProxyYAML(origin, ids, value) : undefined;
+        return value ? termLLMProxyYAML(origin, listed, value) : undefined;
       },
       copiedAnnouncement:
         'term-llm config.yaml snippet with client token copied. Keep config.yaml private.',
@@ -158,10 +161,8 @@ export function termLLMConfigSection(
   );
   head.className = 'config-snippet-head';
 
-  const mergeHint =
-    ids.length === 1
-      ? ` (or add ${ids[0]} to an existing proxy.providers list)`
-      : ' (or merge these IDs into an existing proxy.providers list)';
+  const mergeIDs = ids.map(yamlProviderID).join(', ');
+  const providerHint = `If you already have a proxy.providers list, keep it and add ${mergeIDs}. Without a list, the client discovers providers approved for its token, but unapproved integrations may be unavailable, including local ones like Ollama. To keep specific integrations direct without a list, use proxy.direct.`;
   const tokenHint = options.getToken
     ? ' Point token at a private file, ${TERM_LLM_PROXY_TOKEN}, or use Copy with token.'
     : ' Change the file reference to the private file where you saved this client token.';
@@ -169,7 +170,7 @@ export function termLLMConfigSection(
     'p',
     'Paste into ',
     el('code', '~/.config/term-llm/config.yaml'),
-    `${mergeHint}. Other providers stay direct.${tokenHint}`,
+    `. ${providerHint}${tokenHint}`,
   );
   hint.className = 'config-snippet-hint';
 
@@ -188,7 +189,7 @@ export function termLLMConfigSection(
     seenVision.add(key);
     const note = el(
       'p',
-      `${groups.length === 1 ? 'This provider' : group.label} routes vision via ${visionRef}. Approve ${visionProvider} and include it in proxy.providers if clients use image inputs.`,
+      `${groups.length === 1 ? 'This provider' : group.label} routes vision via ${visionRef}. Approve ${visionProvider} if clients use image inputs. If you use an explicit proxy.providers list, add it there too.`,
     );
     note.className = 'config-snippet-note';
     section.append(note);

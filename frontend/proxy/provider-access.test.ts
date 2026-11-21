@@ -365,14 +365,14 @@ it('creates a provider-scoped client, shows the token once, and guards dismissal
   fireEvent.click(getByRole(root, 'button', { name: 'Copy YAML' }));
   await waitFor(() =>
     expect(writeText).toHaveBeenCalledWith(
-      `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token\n  providers: [openai]`,
+      `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token`,
     ),
   );
 
   fireEvent.click(getByRole(root, 'button', { name: 'Copy with token' }));
   await waitFor(() =>
     expect(writeText).toHaveBeenCalledWith(
-      `proxy:\n  url: ${location.origin}\n  token: 'sk-tlp-once-only'\n  providers: [openai]`,
+      `proxy:\n  url: ${location.origin}\n  token: 'sk-tlp-once-only'`,
     ),
   );
 
@@ -434,9 +434,9 @@ it.each([
     const root = await issueProviderToken(selected, label);
     expect(getByRole(root, 'heading', { name: 'term-llm client configuration' })).toBeVisible();
     expect(root.querySelector('pre code')?.textContent).toBe(
-      `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token\n  providers: [${selected.name}]`,
+      `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token`,
     );
-    expect(root).toHaveTextContent('Other providers stay direct.');
+    expect(root).toHaveTextContent('unapproved integrations may be unavailable');
     expect(root).toHaveTextContent(`Base URL: ${location.origin}${selected.local_prefix}`);
     expect(root.querySelector('pre:not(:has(code))')).toHaveTextContent('$TOKEN');
     expect(root.textContent).not.toContain('sk-tlp-route-scoped');
@@ -450,7 +450,8 @@ it.each([
   { ...chatgptRoute, upstream: 'https://custom.example/codex' },
 ])('uses stored IDs even for noncanonical $name ($local_prefix → $upstream)', async (selected) => {
   const root = await issueProviderToken(selected);
-  expect(root.querySelector('pre code')).toHaveTextContent(`providers: [${selected.name}]`);
+  expect(root.querySelector('pre code')?.textContent).not.toContain('providers:');
+  expect(root).toHaveTextContent(`keep it and add ${selected.name}`);
   expect(root).toHaveTextContent(`Base URL: ${location.origin}${selected.local_prefix}`);
   expect(root.querySelector('pre:not(:has(code))')).toHaveTextContent('$TOKEN');
 });

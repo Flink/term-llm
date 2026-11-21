@@ -208,7 +208,8 @@ export interface ProxyParsedProviderConfig {
 export type ProxyProviderFamily =
   'inference' | 'classification' | 'search' | 'media' | 'embeddings';
 export type ProxyProviderStatus = 'green' | 'orange' | 'red' | 'grey';
-export type ProxyDefaultSlot = 'search' | 'fetch' | 'image' | 'audio' | 'music' | 'transcription';
+export type ProxyDefaultSlot =
+  'search' | 'fetch' | 'image' | 'audio' | 'music' | 'transcription' | 'classify';
 export type ProxyDefaults = Partial<Record<ProxyDefaultSlot, string>>;
 
 export interface ProxyStoredProvider {

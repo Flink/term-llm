@@ -75,6 +75,8 @@ func hasSlotBinding(p Profile, slot, selector string) bool {
 	}
 	namespace := slot
 	switch slot {
+	case "classify":
+		return p.ClassifyProvider == selector
 	case "fetch":
 		namespace = "search" // Both fetch and search live under SearchConfig.
 	case "search", "embed", "image", "audio", "music", "transcription":

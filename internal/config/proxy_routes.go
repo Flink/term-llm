@@ -50,7 +50,7 @@ func (c *Config) bindDiscoveredProxy(root, token string, catalog *proxyDiscovery
 	if err != nil {
 		return nil, err
 	}
-	classification, err := c.Classify.bindProxy(root, token, c.Proxy.Providers, catalog)
+	classification, err := c.Classify.bindProxy(root, token, c.Proxy.Providers, catalog, direct, served)
 	if err != nil {
 		return nil, err
 	}

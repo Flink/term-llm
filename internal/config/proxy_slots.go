@@ -4,7 +4,7 @@ import "github.com/term-llm/term-llm/internal/proxyprofile"
 
 func defaultProxySlot(slot string) bool {
 	switch slot {
-	case "search", "fetch", "image", "audio", "music", "transcription":
+	case "search", "fetch", "image", "audio", "music", "transcription", "classify":
 		return true
 	}
 	return false
@@ -20,6 +20,7 @@ func (c *Config) resolveProxySlots(file *fileSettings, defaults map[string]proxy
 		{"image", "image.provider", DefaultImageProvider, &c.Image.Provider},
 		{"audio", "audio.provider", DefaultAudioProvider, &c.Audio.Provider},
 		{"music", "music.provider", DefaultMusicProvider, &c.Music.Provider},
+		{"classify", "classify.default_provider", ClassifyProviderTypeSafe, &c.Classify.DefaultProvider},
 		{"transcription", "transcription.provider", DefaultTranscriptionProvider, &c.Transcription.Provider},
 	} {
 		if file != nil && file.has(slot.key) || file == nil && *slot.selector != "" && *slot.selector != slot.builtin {

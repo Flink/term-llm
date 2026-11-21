@@ -52,6 +52,12 @@ describe('termLLMProxyYAML', () => {
     );
   });
 
+  it('distinguishes automatic discovery from an explicit empty allowlist', () => {
+    const origin = 'https://proxy.example.test';
+    expect(termLLMProxyYAML(origin)).not.toContain('providers:');
+    expect(termLLMProxyYAML(origin, [])).toContain('providers: []');
+  });
+
   it('single-quotes literal tokens and unsafe YAML provider IDs safely', () => {
     expect(
       termLLMProxyYAML('https://proxy.example.test', ['cdck-frontier', 'team:api'], "sk'123"),
@@ -91,19 +97,13 @@ describe('termLLMConfigSection', () => {
         'proxy:',
         '  url: https://proxy.example.test',
         '  token: file:///run/secrets/proxy-client-token',
-        '  providers: [exa]',
       ].join('\n'),
     );
 
     fireEvent.click(getByRole(section, 'button', { name: 'Copy with token' }));
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith(
-        [
-          'proxy:',
-          '  url: https://proxy.example.test',
-          "  token: 'sk-tlp-live-secret'",
-          '  providers: [exa]',
-        ].join('\n'),
+        ['proxy:', '  url: https://proxy.example.test', "  token: 'sk-tlp-live-secret'"].join('\n'),
       ),
     );
     expect(fallback).not.toHaveBeenCalled();
@@ -116,6 +116,26 @@ describe('termLLMConfigSection', () => {
       expect(announce).toHaveBeenLastCalledWith('Client token is no longer available.'),
     );
     expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it('uses automatic discovery for classifiers and mixed approvals by default', () => {
+    const { context } = uiContext();
+    const classifier = termLLMConfigSection(
+      'https://proxy.example.test',
+      [group('typesafe', { family: 'classification' })],
+      context,
+    )!;
+    expect(classifier.querySelector('pre code')?.textContent).not.toContain('providers:');
+    expect(classifier).toHaveTextContent('the client discovers providers approved for its token');
+    expect(classifier).toHaveTextContent('keep it and add typesafe.');
+
+    const mixed = termLLMConfigSection(
+      'https://proxy.example.test',
+      [group('openai'), group('typesafe', { family: 'classification' })],
+      context,
+    )!;
+    expect(mixed.querySelector('pre code')?.textContent).not.toContain('providers:');
+    expect(mixed).toHaveTextContent('keep it and add openai, typesafe.');
   });
 
   it('falls back cleanly when clipboard access is unavailable', async () => {
@@ -134,7 +154,7 @@ describe('termLLMConfigSection', () => {
         'Clipboard unavailable. Copy the selected YAML manually.',
       ),
     );
-    expect(window.getSelection()?.toString()).toContain('providers: [exa]');
+    expect(window.getSelection()?.toString()).toBe(section.querySelector('pre code')?.textContent);
 
     fireEvent.click(getByRole(section, 'button', { name: 'Copy with token' }));
     await waitFor(() =>

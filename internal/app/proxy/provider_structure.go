@@ -86,7 +86,7 @@ func validateConfigStructure(c Config) error {
 		r := names[name]
 		p, ok := proxyprofile.ByID(r.Profile)
 		switch slot {
-		case "search", "fetch", "image", "audio", "music", "transcription":
+		case "search", "fetch", "image", "audio", "music", "transcription", "classify":
 			if ok && r.Provider == proxyprofile.CanonicalParent(p.ID) && p.Slots[slot] != "" {
 				continue
 			}

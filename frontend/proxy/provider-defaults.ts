@@ -13,6 +13,7 @@ const slots: [ProxyDefaultSlot, string][] = [
   ['audio', 'Audio'],
   ['music', 'Music'],
   ['transcription', 'Transcription'],
+  ['classify', 'Classification'],
 ];
 
 export function clientDefaults(

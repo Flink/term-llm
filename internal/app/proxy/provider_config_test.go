@@ -229,6 +229,8 @@ func TestEndToEndClientDiscoversProviderFromLiveProxyService(t *testing.T) {
 
 	routes := []Route{
 		{Name: "cdck_deepseek", LocalPrefix: "/cdck_deepseek/", Upstream: "https://snorlax1b.dub2.discourse.cloud:34567/v1", Enabled: true, CallerAuth: Auth{Header: "Authorization", Prefix: "Bearer "}},
+		{Name: "cdck_qwen", LocalPrefix: "/cdck_qwen/", Upstream: "https://qwen.example.test/v1", Enabled: true},
+		{Name: "not_approved", LocalPrefix: "/not_approved/", Upstream: "https://hidden.example.test/v1", Enabled: true},
 	}
 	res := proxyResponse[map[string]int64](t, adminRequest(s, "PUT", "config", map[string]any{
 		"revision": s.snap.revision,
@@ -239,7 +241,7 @@ func TestEndToEndClientDiscoversProviderFromLiveProxyService(t *testing.T) {
 	}, cookie, csrf), http.StatusOK)
 	issued := proxyResponse[issuedBrowserCaller](t, adminRequest(s, "POST", "callers", map[string]any{
 		"name":      "e2e-client",
-		"providers": []string{"cdck_deepseek"},
+		"providers": []string{"cdck_deepseek", "cdck_qwen"},
 		"revision":  res["revision"],
 	}, cookie, csrf), http.StatusCreated)
 
@@ -252,7 +254,7 @@ func TestEndToEndClientDiscoversProviderFromLiveProxyService(t *testing.T) {
 	if err := os.MkdirAll(cfgDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	clientYAML := "default_provider: cdck_deepseek\nproxy:\n  url: " + srv.URL + "\n  token: " + issued.Token + "\n  providers: [cdck_deepseek]\n"
+	clientYAML := "default_provider: cdck_deepseek\nproxy:\n  url: " + srv.URL + "\n  token: " + issued.Token + "\n"
 	if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(clientYAML), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -267,6 +269,12 @@ func TestEndToEndClientDiscoversProviderFromLiveProxyService(t *testing.T) {
 	}
 	if pc.BaseURL != srv.URL+"/cdck_deepseek" || pc.ProxyBinding != srv.URL+"/cdck_deepseek" {
 		t.Fatalf("unexpected e2e base URL: %+v", pc)
+	}
+	if got := cfg.Providers["cdck_qwen"].ProxyBinding; got != srv.URL+"/cdck_qwen" {
+		t.Fatalf("second approved provider not discovered: %q", got)
+	}
+	if _, ok := cfg.Providers["not_approved"]; ok {
+		t.Fatal("unapproved provider was discovered")
 	}
 	if got := config.DisplayModelForProviderModel(cfg, "cdck_deepseek", "deepseek-ai/DeepSeek-V4-Flash-high"); got != "deepseek-v4-flash-high" {
 		t.Fatalf("DisplayModelForProviderModel = %q", got)

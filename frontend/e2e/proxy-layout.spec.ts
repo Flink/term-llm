@@ -562,7 +562,7 @@ test('Clients creates one client for approved providers without per-route contro
     page.getByRole('heading', { name: 'term-llm client configuration', exact: true }),
   ).toBeVisible();
   await expect(page.locator('.config-snippet pre code')).toHaveText(
-    'proxy:\n  url: http://proxy.test\n  token: file:///run/secrets/proxy-client-token\n  providers: [alpha]',
+    'proxy:\n  url: http://proxy.test\n  token: file:///run/secrets/proxy-client-token',
   );
   await expect(page.getByRole('button', { name: 'Copy YAML', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Copy with token', exact: true })).toBeVisible();

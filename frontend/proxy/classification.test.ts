@@ -48,7 +48,11 @@ const presets: ProxyPreset[] = [
 ];
 
 const typesafeRoute: ProxyAdminRoute = {
-  serves: ['classify.providers.typesafe.base_url', 'classify.providers.typesafe.api_key'],
+  serves: [
+    'classify.providers.typesafe.base_url',
+    'classify.providers.typesafe.api_key',
+    'classify: typesafe',
+  ],
   profile: 'typesafe',
   provider: 'typesafe',
   name: 'typesafe',
@@ -243,7 +247,10 @@ it('renders a Classification provider section without client inference config', 
   expect(settings).toHaveTextContent('GET exactly /v1/models');
 
   const defaults = root.querySelector<HTMLElement>('[data-focus="client-defaults"]')!;
-  expect(defaults).not.toHaveTextContent('typesafe');
+  const classifier = within(defaults).getByLabelText('Classification');
+  expect(within(classifier).getByRole('option', { name: 'typesafe · typesafe' })).toHaveValue(
+    'typesafe',
+  );
 });
 
 it('keeps exact allow entries in the editor and saves them unchanged', async () => {

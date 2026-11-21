@@ -12,6 +12,9 @@ const ClassificationDiscoveryHeader = "X-Term-LLM-Proxy-Capabilities"
 // ClassificationDiscoveryCapability opts in to the classification provider family.
 const ClassificationDiscoveryCapability = "classification"
 
+// ClassificationDefaultCapability allows the classify slot in discovery defaults.
+const ClassificationDefaultCapability = "classification-default"
+
 // Binding names a configuration API root and its corresponding credential.
 // An empty Key means the integration uses a delegated account or no vendor key.
 type Binding struct{ Root, Key string }
@@ -140,16 +143,19 @@ func All() []Profile {
 		},
 		{
 			ID: "typesafe", Family: "classification", Label: "TypeSafe (Jev)", ClassifyProvider: "typesafe",
+			Slots:    map[string]string{"classify": "typesafe"},
 			Upstream: "https://api.typesafe.ai", Header: "Authorization", Prefix: "Bearer ", Billing: "unspecified",
 			Allow: []string{"POST =/v1/systemone", "GET =/v1/models"},
 		},
 		{
 			ID: "openai-decisions", Family: "classification", Label: "OpenAI Decisions", ClassifyProvider: "openai",
+			Slots:    map[string]string{"classify": "openai"},
 			Upstream: "https://api.openai.com/v1", Header: "Authorization", Prefix: "Bearer ", Billing: "unspecified",
 			Allow: []string{"POST =/decisions"},
 		},
 		{
 			ID: "cloudflare-clef", Family: "classification", Label: "Cloudflare Workers AI Clef", ClassifyProvider: "cloudflare",
+			Slots:  map[string]string{"classify": "cloudflare"},
 			Header: "Authorization", Prefix: "Bearer ", Billing: "unspecified",
 			Allow: []string{"POST =/@cf/cloudflare/clef", "POST =/@cf/cloudflare/clef-flash"},
 		},

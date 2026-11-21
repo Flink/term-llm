@@ -162,7 +162,7 @@ describe('provider-wide client approval', () => {
     expect(root).not.toHaveTextContent(`${location.origin}/venice/`);
     expect(getByRole(root, 'heading', { name: 'term-llm client configuration' })).toBeVisible();
     expect(root.querySelector('pre code')?.textContent).toBe(
-      `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token\n  providers: [chatgpt]`,
+      `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token`,
     );
     expect(root.textContent).not.toContain('sk-tlp-provider');
     expect(root.querySelector('pre:not(:has(code))')).toHaveTextContent('$TOKEN');
@@ -191,14 +191,14 @@ describe('provider-wide client approval', () => {
     expect(root).toHaveTextContent('~/.config/term-llm/config.yaml');
     expect(root.textContent).not.toContain('sk-tlp-multi-secret');
     expect(root.querySelector('pre code')?.textContent).toBe(
-      `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token\n  providers: [chatgpt, venice]`,
+      `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token`,
     );
 
     const copyYAML = getByRole(root, 'button', { name: 'Copy YAML' });
     fireEvent.click(copyYAML);
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith(
-        `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token\n  providers: [chatgpt, venice]`,
+        `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token`,
       ),
     );
     expect(copyYAML.textContent).toBe('Copied ✓');
@@ -210,7 +210,7 @@ describe('provider-wide client approval', () => {
     fireEvent.click(copyWithToken);
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith(
-        `proxy:\n  url: ${location.origin}\n  token: 'sk-tlp-multi-secret'\n  providers: [chatgpt, venice]`,
+        `proxy:\n  url: ${location.origin}\n  token: 'sk-tlp-multi-secret'`,
       ),
     );
     expect(copyWithToken.textContent).toBe('Copied ✓');

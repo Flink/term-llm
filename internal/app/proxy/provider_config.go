@@ -53,14 +53,15 @@ func mergeProviderConfigUpdates(providers map[string]Provider, updates map[strin
 func (s *Service) serveClientProviders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Vary", proxyprofile.ClassificationDiscoveryHeader)
 	s.serveClientQuery(w, r, func(w http.ResponseWriter, caller Caller) {
-		s.clientProviders(w, caller, supportsClassificationDiscovery(r.Header))
+		s.clientProviders(w, caller, supportsDiscoveryCapability(r.Header, proxyprofile.ClassificationDiscoveryCapability),
+			supportsDiscoveryCapability(r.Header, proxyprofile.ClassificationDefaultCapability))
 	})
 }
 
-func supportsClassificationDiscovery(h http.Header) bool {
+func supportsDiscoveryCapability(h http.Header, capability string) bool {
 	for _, value := range h.Values(proxyprofile.ClassificationDiscoveryHeader) {
 		for token := range strings.SplitSeq(value, ",") {
-			if strings.TrimSpace(token) == proxyprofile.ClassificationDiscoveryCapability {
+			if strings.TrimSpace(token) == capability {
 				return true
 			}
 		}
@@ -70,7 +71,7 @@ func supportsClassificationDiscovery(h http.Header) bool {
 
 // clientProviders serves caller-token-authenticated discovery for granted
 // providers and their optional term-llm client_config metadata.
-func (s *Service) clientProviders(w http.ResponseWriter, caller Caller, classification bool) {
+func (s *Service) clientProviders(w http.ResponseWriter, caller Caller, classification, classificationDefault bool) {
 	c := s.snap.config
 	groups := providerRoutes(c)
 	granted := make(map[string]string)
@@ -100,7 +101,7 @@ func (s *Service) clientProviders(w http.ResponseWriter, caller Caller, classifi
 	}
 	defaults := make(map[string]clientProviderDefault)
 	for slot, name := range c.Defaults {
-		if provider, ok := granted[name]; ok {
+		if provider, ok := granted[name]; ok && (slot != "classify" || classificationDefault) {
 			defaults[slot] = clientProviderDefault{provider, name}
 		}
 	}

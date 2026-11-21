@@ -453,23 +453,26 @@ Gateway Workers AI root ending in `/workers-ai`. Fill in the IDs on the proxy;
 leave off the model path. The bearer token stored on the proxy must be accepted
 by the chosen endpoint.
 
-On the client, explicitly list the proxy provider IDs you want, along with any
-other integrations to keep proxied. Omitting `providers` (proxy-all mode) does
-**not** change classifier traffic or defaults.
+For a new client configuration, set the proxy URL and token and omit
+`proxy.providers` to discover approved classifiers. If you already have a
+`proxy.providers` allowlist, keep it and add the proxy provider ID from the
+table above. The IDs bind built-in classify selectors, not chat providers or
+custom classifier aliases. To keep a classifier direct in automatic mode,
+list its proxy ID in `proxy.direct` (for example, `openai-decisions`, not
+`openai`). Local model, timeout, and image-format settings still apply.
 
-```yaml
-proxy:
-  url: https://proxy.example.test
-  token: file:///run/secrets/proxy-client-token
-  providers: [typesafe, openai-decisions, cloudflare-clef]
-```
+To choose a default centrally, set **Client defaults → Classification** (or
+`defaults.classify` in the proxy YAML). This is opt-in and doesn't change the
+TypeSafe default just because another classifier is approved. See
+[Client defaults](#client-defaults) for precedence.
 
-These IDs bind the built-in classify selectors in the table, not chat or custom
-classification aliases. `classify.default_provider` and any local model, timeout,
-or image-format settings still apply. Term-llm uses the approved route and scoped
-token instead of local classifier endpoints, keys, or extra headers. A missing
-or revoked grant does not fall back to the vendor; `--base-url` cannot override
-a managed route.
+While a classifier is bound to the proxy, it uses the scoped token instead of
+local keys or headers, and `--base-url` cannot override its endpoint. Revocation
+blocks access on the proxy immediately. After restart, automatic discovery won't
+bind the revoked route, so local credentials may be used if configured. An
+explicitly listed classifier with a missing or revoked grant fails closed even
+after restart. If you're upgrading a client in automatic mode and want to keep
+an already-approved classifier direct, add its proxy ID to `proxy.direct`.
 
 Smoke-test TypeSafe with `term-llm classify models -p typesafe` and a classification
 request using synthetic input. OpenAI Decisions and Clef list models locally,
@@ -553,7 +556,6 @@ proxy:
   url: https://proxy.example.test
   token: file:///run/secrets/proxy-client-token
   tag: laptop
-  providers: [claude-bin, chatgpt, exa]
 ```
 
 - `proxy.tag` is an optional label for this client, useful when clients share a
@@ -561,15 +563,22 @@ proxy:
   chart and **Requests** list. Use 1–64 letters, digits, dots (`.`), underscores
   (`_`), or hyphens (`-`), starting with a letter or digit. A tag requires a normal
   `sk-tlp-` client token.
-- `proxy.providers` is an allowlist. A provider name selects its granted routes,
+- Omit `proxy.providers` to discover all providers advertised for the client token,
+  including granted classifiers. No grant means automatic discovery does not bind
+  that classifier. The token still limits which routes the client can use. In this
+  mode, some unapproved integrations are unavailable instead of staying direct,
+  including local providers such as Ollama. If you already use an allowlist,
+  keep it and add new provider IDs. Use `proxy.direct` for exceptions in automatic mode.
+  Restart the client to pick up changes to its approved providers.
+- When set, `proxy.providers` is an allowlist. A provider name selects its granted routes,
   including companions: `exa` covers Exa REST and MCP; `chatgpt` covers its chat,
   usage, dictation, embeddings and realtime routes. To use only ChatGPT, set
   `providers: [chatgpt]`. For media or embeddings, list the provider name, such
   as `flux` or `jina`. A named inference provider such as `chatgpt-work` does
   not bind global feature settings such as `image.chatgpt.*`.
 - Unlisted integrations stay direct. `providers: []` selects nothing in the
-  top-level block. Omit `providers` for **proxy-all** mode; use `proxy.direct`
-  in that mode to keep named integrations direct. A nonempty `proxy.direct`
+  top-level block. With `providers` omitted (**proxy-all** mode), use
+  `proxy.direct` to keep named integrations direct. A nonempty `proxy.direct`
   conflicts with any explicit `proxy.providers` list, even an empty one.
 - Parent names in `proxy.providers` and `proxy.direct` also cover their built-in
   companions when routes are missing. For example, if you list `exa` and only
@@ -595,27 +604,34 @@ that provider direct.
 The canonical Claude route is `/claude-bin/`. With a top-level binding, term-llm
 uses the granted route URL from discovery. If your launcher uses a different
 token or route URL, use that exact URL and token in `providers.claude-bin.proxy`
-instead, and omit `claude-bin` from the top-level allowlist. Run
+instead. If you also have a top-level `proxy` block, give it an explicit
+`providers` list that leaves out `claude-bin`. Run
 `term-llm proxy run claude` without flags to use the binding already in your config.
 
 ### Client defaults
 
 The proxy can set one default **route** per slot: `search`, `fetch`, `image`,
-`audio`, `music` or `transcription`. Use **Client defaults**, or set `defaults`
-in the proxy YAML, for example `defaults: {search: exa-mcp, fetch: jina-reader}`.
+`audio`, `music`, `transcription` or `classify`. Use **Client defaults**, or set
+`defaults` in the proxy YAML, for example `defaults: {search: exa-mcp, fetch: jina-reader, classify: typesafe}`.
 The route must belong to a canonically named provider and its profile must serve
 that slot. Naming a route distinguishes Exa REST from Exa MCP.
 
 An explicit client selector such as `search.provider` or `search.fetch_provider`
-wins. Otherwise, the operator's default applies only if the client is granted
-and binds that route. Without an applicable proxy default, search and fetch use
-the sole bound selector if there is one; otherwise they keep the built-in
-selectors (`exa_mcp` and `jina`, respectively). For example, with both Exa routes
-bound, search defaults to Exa MCP; with only Brave bound, it selects Brave.
-Media slots keep their built-in selectors unless there is an applicable operator
-default. An unavailable route or a direct fallback does not count as bound for
-this choice. There is no proxy default for `embed.provider`, and inference
-providers are selected by name, not by a slot default.
+wins. Classification follows the same precedence: command-line `-p`, then local
+`classify.default_provider`, then an applicable proxy `defaults.classify` route,
+then the existing TypeSafe default. The proxy default applies only if the client
+is approved for and binds that classifier. Guardian, live voice, and grep
+reranking also use the classifier default when their own
+[provider settings](/guides/classify/#through-the-credential-proxy) are unset.
+The other operator defaults apply only
+if the client is granted and binds those routes. Without an applicable proxy
+default, search and fetch use the sole bound selector if there is one; otherwise
+they keep the built-in selectors (`exa_mcp` and `jina`, respectively). For example,
+with both Exa routes bound, search defaults to Exa MCP; with only Brave bound, it
+selects Brave. Media slots keep their built-in selectors unless there is an
+applicable operator default. An unavailable route or a direct fallback does not
+count as bound for this choice. There is no proxy default for `embed.provider`,
+and inference providers are selected by name, not by a slot default.
 
 ### Client discovery
 
@@ -630,7 +646,10 @@ Revocation itself takes effect on the proxy without a client restart.
 Discovery clients that send `X-Term-LLM-Proxy-Capabilities: classification`
 can also receive the `classification` family. Without that header, v2 omits
 classification providers so older clients can still discover their other routes.
-This does not change route grants or prevent using a classification route manually.
+To receive `defaults.classify` as well, a discovery client must send both
+`classification` and `classification-default`. Older clients that only send
+`classification` can still use explicitly listed classifier routes, but won't
+receive the Classification default. Neither capability grants route access.
 
 Discovery v1 (`/_proxy/client/v1/providers`) returns `410 Gone`. If v2 returns a
 status other than `200 OK`, the client checks v1: a v1 `200 OK` identifies an

@@ -213,6 +213,8 @@ it('shows term-llm discovery snippet and vision_via hint when creating a client 
   fireEvent.input(getByLabelText(view, 'Client name'), { target: { value: 'laptop' } });
   fireEvent.click(getByRole(view, 'button', { name: 'Create client' }));
 
-  await waitFor(() => expect(view.textContent).toContain('providers: [cdck_deepseek]'));
+  await waitFor(() =>
+    expect(view.querySelector('pre code')?.textContent).not.toContain('providers:'),
+  );
   expect(view.textContent).toContain('routes vision via cdck_qwen');
 });

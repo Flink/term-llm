@@ -47,17 +47,41 @@ last error is returned instead of retrying early. Redirects are not followed.
 ### Through the credential proxy
 
 The [credential proxy](/guides/credential-proxy/#classification-presets) can hold
-the vendor key for all three built-in providers. Add the appropriate preset,
-approve the client, and include `typesafe`, `openai-decisions`, or
-`cloudflare-clef` in the client's `proxy.providers` list. For `classify -p`,
-still use `typesafe`, `openai`, or `cloudflare`, respectively. This opt-in also
-applies when Guardian, live voice or grep reranking selects the same built-in
-classifier. It does not change their provider selection, affect custom aliases,
-or apply automatically in proxy-all mode.
+classifier keys. Add the preset on the proxy and approve the client. In a new
+client config, the proxy URL and client token are enough for automatic
+classifier discovery. If you already use a `proxy.providers` allowlist, keep it
+and add the classifier's proxy ID:
 
-The managed route replaces the local API endpoint, API key and extra headers.
-`--base-url` is not allowed on a managed classifier. If access is missing or
-revoked, term-llm does not fall back to the vendor.
+| Proxy ID (`proxy.providers` or `proxy.direct`) | `classify -p` |
+| --- | --- |
+| `typesafe` | `typesafe` |
+| `openai-decisions` | `openai` |
+| `cloudflare-clef` | `cloudflare` |
+
+Use the proxy ID with `proxy.direct` to leave a classifier direct in discovery
+mode. For example, `proxy.direct: [openai-decisions]` exempts Decisions;
+`proxy.direct: [openai]` exempts OpenAI chat, not Decisions. Custom classifier
+aliases are not bound automatically.
+
+`-p` overrides local `classify.default_provider`, which overrides
+**Client defaults → Classification** on the proxy. A proxy default applies
+only if the client is approved for its route and binds it. Otherwise, the
+built-in default is TypeSafe, even when only one other classifier is advertised.
+When Guardian, live voice, or grep reranking uses classification without its
+own provider, it uses the same configured default. Their local overrides are
+`guardian.classify.provider`, `live.classify.provider`, and
+`tools.grep_rerank.provider`.
+
+A managed binding uses the approved proxy endpoint and scoped token instead of
+local vendor keys, endpoints, or extra headers. `--base-url` cannot override it.
+If a grant is revoked, the proxy rejects requests immediately. With automatic
+discovery, a fresh client process will not bind a missing or revoked route and
+can use local credentials if configured. An ID explicitly listed in
+`proxy.providers` fails closed instead, even after restart.
+
+Update the client for automatic classifier binding and proxy-selected defaults.
+Older clients that support classifier routes still require an explicit list and
+ignore the proxy's Classification default.
 
 ### TypeSafe
 

@@ -29,7 +29,7 @@ export function providerForm(
       name,
       name.readOnly
         ? 'Clients use this fixed provider name.'
-        : 'Clients use this name in proxy.providers. It cannot be renamed.',
+        : 'This is the name clients discover. It cannot be renamed.',
     ),
     field('Label', label),
   );

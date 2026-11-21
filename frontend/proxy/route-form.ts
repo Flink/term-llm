@@ -681,7 +681,7 @@ export function routeForm(
       field(
         'Provider YAML (optional)',
         clientConfigYAML,
-        'Discovered automatically by term-llm clients listing this provider under proxy.providers. Paste a full local term-llm provider block and click Import pasted term-llm YAML to pre-fill name, upstream URL and client config.',
+        'Discovered automatically by authorized term-llm clients unless filtered by proxy.providers. Paste a full local term-llm provider block and click Import pasted term-llm YAML to pre-fill name, upstream URL and client config.',
       ),
       importNotice,
       actions(importButton),
