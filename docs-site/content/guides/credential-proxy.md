@@ -708,8 +708,8 @@ browser origin, not an SRV URL.
 
 ## Usage and spending
 
-**Usage → Quota matrix** shows upstream subscription limits when the proxy has a
-supported provider configured. The matrix reads quotas from Antigravity, Claude,
+The **Usage** tab shows limits reported by your configured providers. It reads
+subscription usage from Antigravity, Claude,
 ChatGPT, Grok, and OpenCode Go, and can show an OpenRouter key's spending limit.
 It uses the proxy's configured account or key, not a local CLI login. Each
 reported window gets its own row, grouped by provider and model group. For
@@ -731,7 +731,7 @@ binding's last reading stale. The proxy may refresh an expiring OAuth token
 even when no inference is running. A quota endpoint denying access does not
 invalidate the token used for inference.
 
-Unlike the matrix, **Home** measures activity that passed through this proxy,
+Unlike **Usage**, **Home** measures activity that passed through this proxy,
 not the upstream account's allowance.
 
 Home opens on **30 days of cost by model**. Choose **Cost** or **Tokens**, a range

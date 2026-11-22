@@ -228,7 +228,7 @@ function providerRows(
 
 export function usageView(state: ProxyState, api: ProxyClient, context: UIContext) {
   const view = styled('div', 'usage-view');
-  const heading = el('h2', 'Quota matrix');
+  const heading = el('h2', 'Usage limits');
   heading.tabIndex = -1;
   const count = styled('p', 'usage-count');
   const status = styled('p', 'usage-status');
@@ -271,7 +271,7 @@ export function usageView(state: ProxyState, api: ProxyClient, context: UIContex
   const scroll = styled('div', 'usage-table-scroll', table);
   scroll.tabIndex = 0;
   scroll.setAttribute('role', 'region');
-  scroll.setAttribute('aria-label', 'Quota matrix table');
+  scroll.setAttribute('aria-label', 'Usage limits table');
   const matrix = styled('div', 'usage-matrix', legend, scroll);
   const foot = styled(
     'p',

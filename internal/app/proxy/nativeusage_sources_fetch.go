@@ -88,6 +88,9 @@ func (s *Service) requestNativeUsage(ctx context.Context, bound func() bool, kin
 		headers.Set("Anthropic-Beta", "oauth-2025-04-20")
 		endpoint, decode = "https://"+claudeAPIHost+"/api/oauth/usage", nativeusage.DecodeClaude
 	case "agy-bin":
+		// Cloud Code selects the CLI project and its quota groups by client
+		// family. A generic Go user agent gets no project from loadCodeAssist.
+		headers.Set("User-Agent", "antigravity/cli/1.5.13")
 		root := "https://" + agyAPIHost + "/v1internal:"
 		hints, err := read(http.MethodPost, root+"loadCodeAssist", `{"metadata":{"ideType":"ANTIGRAVITY"}}`)
 		if err != nil {
