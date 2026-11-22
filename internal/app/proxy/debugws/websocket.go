@@ -1,4 +1,5 @@
-package proxy
+// Package debugws renders bounded previews of proxy WebSocket captures.
+package debugws
 
 import (
 	"bytes"
@@ -19,7 +20,7 @@ const (
 	debugWSFrameLimit    = 256
 )
 
-// decodeDebugWebSocket previews one direction of a raw RFC 6455 capture. Start
+// Preview renders one direction of a raw RFC 6455 capture. Start
 // at zero or at a cursor returned by this function; arbitrary offsets are not
 // supported or validated as frame boundaries. masked must be true for the
 // client direction and false for the server direction.
@@ -34,7 +35,7 @@ const (
 // preview. A page examines at most 256 frames, reading only their headers,
 // close payloads (<=125 bytes each), and at most 128 KiB of text payload.
 // Individual text messages larger than 64 KiB are not decoded.
-func decodeDebugWebSocket(r io.ReaderAt, offset, total, limit int64, masked bool) (content string, nextOffset int64) {
+func Preview(r io.ReaderAt, offset, total, limit int64, masked bool) (content string, nextOffset int64) {
 	if limit <= 0 || offset < 0 || offset >= total {
 		return "", max(0, total)
 	}

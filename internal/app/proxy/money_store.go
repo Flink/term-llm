@@ -449,7 +449,7 @@ func (s *Service) moneyAPI(w http.ResponseWriter, r *http.Request, path string) 
 		next.revision++
 		err := s.store.saveConfigAndMoney(&next)
 		if err == nil {
-			s.snap = &next
+			s.publishSnapshotLocked(&next)
 		}
 		s.mu.Unlock()
 		if err != nil {

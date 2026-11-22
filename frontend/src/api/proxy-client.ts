@@ -259,6 +259,39 @@ export interface ProxyState {
   csrf: string;
   retention_days?: number;
   has_requests?: boolean;
+  has_native_usage?: boolean;
+}
+export interface ProxyUsageWindow {
+  label: string;
+  duration_minutes: number;
+  used_percent: number;
+  resets_at?: string;
+  percent_unknown?: boolean;
+  limit_reached?: boolean;
+  detail?: string;
+  disabled?: boolean;
+}
+export interface ProxyUsageGroup {
+  name: string;
+  detail?: string;
+  windows: ProxyUsageWindow[];
+}
+export interface ProxyUsageReport {
+  plan?: string;
+  detail?: string;
+  groups: ProxyUsageGroup[];
+}
+export interface ProxyUsageProvider {
+  id: string;
+  route?: string;
+  report?: ProxyUsageReport;
+  updated_at?: string;
+  error?: string;
+}
+export interface ProxyUsageSnapshot {
+  interval_minutes: number;
+  refreshing: boolean;
+  providers: ProxyUsageProvider[];
 }
 export interface ProxyMoneyRate {
   provider: string;
@@ -845,6 +878,22 @@ export class ProxyClient {
   }
   money(settings: ProxyMoneySettings): Promise<void> {
     return this.request('money', 'PUT', settings);
+  }
+  usage(signal?: AbortSignal): Promise<ProxyUsageSnapshot> {
+    return this.request('usage', 'GET', undefined, false, !signal, signal);
+  }
+  refreshUsage(signal?: AbortSignal): Promise<void> {
+    return this.request('usage/refresh', 'POST', undefined, false, !signal, signal);
+  }
+  setUsageInterval(intervalMinutes: number, signal?: AbortSignal): Promise<void> {
+    return this.request(
+      'usage/settings',
+      'PUT',
+      { interval_minutes: intervalMinutes },
+      false,
+      !signal,
+      signal,
+    );
   }
   requests(filters: RequestFilters, signal?: AbortSignal): Promise<RequestPage> {
     return this.request(

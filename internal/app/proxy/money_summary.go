@@ -5,6 +5,8 @@ import (
 	"math/big"
 	"sort"
 	"time"
+
+	"github.com/term-llm/term-llm/internal/app/proxy/pricing"
 )
 
 // MoneySettings is optional. Budgets are warnings, never admission limits.
@@ -26,7 +28,7 @@ func ValidateMoneySettings(s MoneySettings) error {
 			return fmt.Errorf("money timezone: %w", err)
 		}
 	}
-	if b := s.Budget; b != nil && (!moneyCurrency.MatchString(b.Currency) || b.LimitMicros < 0 || b.LimitMicros > maxMoneyMicros) {
+	if b := s.Budget; b != nil && (!pricing.ValidCurrency(b.Currency) || b.LimitMicros < 0 || b.LimitMicros > maxMoneyMicros) {
 		return fmt.Errorf("invalid warning budget")
 	}
 	return ValidateMoneyRates(s.Rates)

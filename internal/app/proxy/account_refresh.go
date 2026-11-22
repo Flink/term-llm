@@ -46,6 +46,12 @@ func accountIssuer(a accountRecord) (string, string) {
 // A durable refreshing fence precedes consuming any refresh token. A crash,
 // timeout or failed result commit therefore cannot cause automatic token reuse.
 func (s *Service) ensureAccount(ctx context.Context, name string, rejected int64) (accountRecord, error) {
+	return s.ensureBoundAccount(ctx, name, rejected, nil)
+}
+
+// check, when supplied, validates the account binding after acquiring its
+// custody lock and before any vendor refresh is attempted.
+func (s *Service) ensureBoundAccount(ctx context.Context, name string, rejected int64, check func(accountRecord) bool) (accountRecord, error) {
 	unlock, lockErr := s.accountLock(ctx, name)
 	if lockErr != nil {
 		return accountRecord{}, errAccountUnavailable
@@ -57,7 +63,7 @@ func (s *Service) ensureAccount(ctx context.Context, name string, rejected int64
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	a, err := s.store.account(name)
-	if err != nil {
+	if err != nil || check != nil && !check(a) {
 		return a, errAccountUnavailable
 	}
 	if nativeProviderForKind(a.Kind) != nil {
@@ -125,7 +131,11 @@ func (s *Service) ensureAccount(ctx context.Context, name string, rejected int64
 		}
 		return a, errAccountRefreshLimited
 	}
-	if err = s.store.fenceAccount(ctx, name, a.Generation); err != nil {
+	return s.refreshBoundAccount(ctx, a, rejected)
+}
+
+func (s *Service) refreshBoundAccount(ctx context.Context, a accountRecord, rejected int64) (accountRecord, error) {
+	if err := s.store.fenceAccount(ctx, a.Name, a.Generation); err != nil {
 		return a, errAccountUnavailable
 	}
 	next, err := s.exchangeAccount(ctx, a)
@@ -155,7 +165,7 @@ func (s *Service) ensureAccount(ctx context.Context, name string, rejected int64
 		return a, errAccountUnavailable
 	}
 	s.rememberAccount(next.Name, next.credentials)
-	s.accountRejected.Delete(name)
+	s.accountRejected.Delete(a.Name)
 	return next, nil
 }
 func (s *Service) failAccount(ctx context.Context, a accountRecord) {
@@ -163,10 +173,12 @@ func (s *Service) failAccount(ctx context.Context, a accountRecord) {
 	defer cancel()
 	a.State = "needs_login"
 	a.Updated = time.Now().UnixMilli()
-	_ = s.store.replaceAccount(ctx, a, a.Generation)
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.store.replaceAccount(ctx, a, a.Generation) == nil {
+		s.reconcileNativeUsageLocked()
+	}
 	s.cancelAccountSockets(a.Name)
-	s.mu.Unlock()
 }
 
 type accountTokenReply struct {

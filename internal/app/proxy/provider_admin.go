@@ -214,7 +214,7 @@ func (s *Service) commitProviderEdit(w http.ResponseWriter, r *http.Request, c C
 		return
 	}
 	s.reconcileSockets(next)
-	s.snap = next
+	s.publishSnapshotLocked(next)
 	jsonReply(w, status, map[string]int64{"revision": next.revision})
 }
 

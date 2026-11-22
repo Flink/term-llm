@@ -101,7 +101,7 @@ func (s *Service) nativeSetupAPI(w http.ResponseWriter, r *http.Request, provide
 		return
 	}
 	s.reconcileSockets(next)
-	s.snap = next
+	s.publishSnapshotLocked(next)
 	jsonReply(w, 201, nativeSetupReply{URL: origin + chosen.LocalPrefix, Token: target.token, CallerID: target.id, Revision: next.revision})
 }
 
@@ -348,7 +348,7 @@ func (s *Service) clearNativeSetup(w http.ResponseWriter, r *http.Request, provi
 		return
 	}
 	// Publication and live cancellation are strictly after the durable commit.
-	s.snap = next
+	s.publishSnapshotLocked(next)
 	s.reconcileSockets(next)
 	for name := range accounts {
 		s.cancelAccountSockets(name)

@@ -112,9 +112,15 @@ func (s *Service) completeDeviceSetup(ctx context.Context, id string, a *deviceS
 	if err != nil {
 		return deviceflow.Label(a.target.kind) + " sign-in did not complete; start again"
 	}
-	defer unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var attemptedCommit bool
+	defer func() {
+		unlock()
+		if attemptedCommit {
+			s.reconcileNativeUsageLocked()
+		}
+		s.mu.Unlock()
+	}()
 	unlockOwner, valid := s.lockDeviceSetupOwner(a.owner)
 	defer unlockOwner()
 	if !valid {
@@ -126,6 +132,9 @@ func (s *Service) completeDeviceSetup(ctx context.Context, id string, a *deviceS
 	if d.attempts[id] != a || a.result.Status != "pending" || ctx.Err() != nil || s.closing {
 		return deviceflow.Label(a.target.kind) + " sign-in did not complete; start again"
 	}
+	// Rebuild from durable state even if setup reports a later error. An
+	// unchanged binding retains its report when a transaction rolls back.
+	attemptedCommit = true
 	route, problem := s.commitDeviceSetup(ctx, a.target, creds)
 	if problem != nil {
 		return problem.message
@@ -220,6 +229,6 @@ func (s *Service) provisionDeviceRoute(ctx context.Context, a accountRecord) (st
 	}
 	s.rememberAccount(a.Name, a.credentials)
 	s.reconcileSockets(next)
-	s.snap = next
+	s.snap = next // completeDeviceSetup reconciles after releasing the device locks
 	return route.Name, nil
 }

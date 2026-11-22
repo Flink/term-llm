@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/term-llm/term-llm/internal/app/proxy/nativeusage/poll"
 	"github.com/term-llm/term-llm/internal/modelsdev"
 	"github.com/term-llm/term-llm/internal/passkeyauth"
 	"github.com/term-llm/term-llm/internal/secrettext"
@@ -41,6 +42,7 @@ type session struct {
 }
 type Service struct {
 	pricing           *modelsdev.Client
+	nativeUsage       *poll.Cache
 	payloadDebug      *payloadDebugger
 	debugMu           sync.Mutex // guards lazy capture initialization and shutdown
 	debugClosing      bool
@@ -174,6 +176,7 @@ func Open(opts Options) (*Service, error) {
 	s.pricing = modelsdev.NewClient(filepath.Join(opts.StateDir, "pricing"), nil)
 	_ = s.pricing.Load() // Cached-only startup; a missing catalog never blocks serving.
 	s.ResponseTap = ObserveResponseUsage
+	s.openNativeUsage()
 	return s, nil
 }
 func (s *Service) activateInitial(file *Config) error {
@@ -206,6 +209,7 @@ func (s *Service) activateInitial(file *Config) error {
 }
 func (s *Service) Close() error {
 	s.closeOnce.Do(func() {
+		s.nativeUsage.Close()
 		s.debugMu.Lock()
 		s.debugClosing = true
 		debugErr := s.payloadDebug.Close()

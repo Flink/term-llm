@@ -2358,3 +2358,87 @@ test('Providers consistently offers one Add provider action before and after rec
   await expect(page.getByRole('heading', { name: 'Providers', exact: true })).toBeVisible();
   await expect(add).toHaveCount(1);
 });
+
+test('Usage matrix keeps every quota window visible without a disclosure', async ({
+  page,
+}, info) => {
+  await page.route('http://proxy.test/_proxy/api/state', (route) =>
+    route.fulfill({ json: { ...snapshot, has_native_usage: true } }),
+  );
+  const now = Date.now();
+  const limit = (label: string, minutes: number, used: number, elapsed: number) => ({
+    label,
+    duration_minutes: minutes,
+    used_percent: used,
+    resets_at: new Date(now + minutes * (1 - elapsed) * 60000).toISOString(),
+  });
+  const updated = new Date(now).toISOString();
+  await page.route('http://proxy.test/_proxy/api/usage', (route) =>
+    route.fulfill({
+      json: {
+        interval_minutes: 15,
+        refreshing: false,
+        providers: [
+          {
+            id: 'agy-bin',
+            updated_at: updated,
+            report: {
+              groups: [
+                {
+                  name: 'Gemini Models',
+                  detail:
+                    'Gemini 4 Neon · Gemini 4 Hydrogen · Orchestrator (Neon) · Gemini 3.8 Flash',
+                  windows: [limit('5 hours', 300, 34, 0.94), limit('Weekly', 10080, 10, 0.03)],
+                },
+                {
+                  name: 'Claude and GPT models',
+                  windows: [limit('6 hours', 360, 8, 0.16), limit('Weekly', 10080, 75, 0.6)],
+                },
+                { name: 'Gemini 4 Argon', windows: [limit('Weekly', 10080, 0, 0)] },
+              ],
+            },
+          },
+          {
+            id: 'chatgpt',
+            route: 'work-plan',
+            updated_at: updated,
+            report: {
+              plan: 'Pro',
+              groups: [
+                {
+                  name: 'Codex',
+                  windows: [limit('Weekly', 10080, 71, 0.83), limit('5 hours', 300, 100, 0.05)],
+                },
+              ],
+            },
+          },
+          {
+            id: 'chatgpt',
+            route: 'personal-plan',
+            error: 'Provider usage is temporarily unavailable',
+          },
+        ],
+      },
+    }),
+  );
+  await page.goto('http://proxy.test/_proxy/?tab=usage');
+  const table = page.getByRole('table');
+  await expect(table.locator('tbody tr')).toHaveCount(8);
+  await expect(page.getByText('2 providers · 7 limits')).toBeVisible();
+  await expect(table.getByText('Limit reached')).toBeVisible();
+  await expect(table.getByText('personal-plan')).toBeVisible();
+  await expect(table.getByText('work-plan')).toBeVisible();
+  for (const name of [
+    'Gemini Models',
+    'Gemini 4 Argon',
+    'Orchestrator (Neon)',
+    'Claude and GPT models',
+    'Codex',
+  ]) {
+    await expect(table.getByText(name, { exact: false }).first()).toBeVisible();
+  }
+  await expect(table.getByText(/Runs out .*early/i)).toBeVisible();
+  await expect(table.locator('details')).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath('quota-matrix.png'), fullPage: true });
+});

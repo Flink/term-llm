@@ -24,14 +24,17 @@ import { requestsView } from './requests';
 import { homeView } from './home';
 import { timelineQueryKeys } from './timeline-prefs';
 import { debugView } from './debug';
+import { usageView } from './usage';
 
-type Tab = 'Home' | 'Routes' | 'Secrets' | 'Clients' | 'Requests' | 'Debug' | 'Passkeys' | 'Admin';
+type Tab =
+  'Home' | 'Routes' | 'Secrets' | 'Clients' | 'Requests' | 'Usage' | 'Debug' | 'Passkeys' | 'Admin';
 const tabs: Tab[] = [
   'Home',
   'Routes',
   'Secrets',
   'Clients',
   'Requests',
+  'Usage',
   'Debug',
   'Passkeys',
   'Admin',
@@ -52,7 +55,10 @@ export function mountProxy(
   let tab = tabFromURL();
   let debug: ReturnType<typeof debugView> | undefined;
   let requests: ReturnType<typeof requestsView> | undefined;
+  let usage: ReturnType<typeof usageView> | undefined;
   function closeView() {
+    usage?.dispose();
+    usage = undefined;
     requests?.dispose();
     requests = undefined;
     debug?.dispose();
@@ -320,7 +326,9 @@ export function mountProxy(
     const snapshot = state;
     const nav = el('nav');
     nav.setAttribute('aria-label', 'Proxy administration');
-    const tabs: Tab[] = ['Home', 'Routes', 'Secrets', 'Clients', 'Requests', 'Debug'];
+    const tabs: Tab[] = ['Home', 'Routes', 'Secrets', 'Clients', 'Requests'];
+    if (snapshot.has_native_usage) tabs.push('Usage');
+    tabs.push('Debug');
     if (snapshot.auth === 'passkey') tabs.push('Passkeys');
     tabs.push('Admin');
     if (!tabs.includes(tab)) tab = 'Home';
@@ -355,7 +363,7 @@ export function mountProxy(
       }, logout);
     });
     tools.replaceChildren(logout);
-    if (tab !== 'Requests') tools.prepend(refresh);
+    if (tab !== 'Requests' && tab !== 'Usage') tools.prepend(refresh);
     if (snapshot.mode === 'file' && tab !== 'Home') {
       const reload = button('Reload file', () => {
         if (
@@ -386,6 +394,10 @@ export function mountProxy(
       Requests: () => {
         requests = requestsView(snapshot, api, context);
         return requests.element;
+      },
+      Usage: () => {
+        usage = usageView(snapshot, api, context);
+        return usage.element;
       },
       Debug: () => {
         debug = debugView(api, context);

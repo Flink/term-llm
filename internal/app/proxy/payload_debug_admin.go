@@ -16,6 +16,7 @@ import (
 	"github.com/term-llm/term-llm/internal/fileprivacy"
 
 	"github.com/term-llm/term-llm/internal/app/proxy/debugheaders"
+	"github.com/term-llm/term-llm/internal/app/proxy/debugws"
 )
 
 var errInvalidDebugManifest = errors.New("capture manifest is incomplete or exceeds size limit")
@@ -437,7 +438,7 @@ func (s *Service) previewPayloadCapture(w http.ResponseWriter, id, name string, 
 		return
 	}
 	if decoded {
-		content, next := decodeDebugWebSocket(f, offset, total, limit, name == "websocket-client.frames")
+		content, next := debugws.Preview(f, offset, total, limit, name == "websocket-client.frames")
 		result := map[string]any{"id": id, "file": name, "encoding": "websocket", "content": content, "total_bytes": total, "bytes_returned": next - offset, "offset": offset, "truncated": offset > 0 || next < total}
 		if next > offset && next < total {
 			result["next_offset"] = next

@@ -230,7 +230,7 @@ func (s *Service) adminAPI(w http.ResponseWriter, r *http.Request, path string, 
 	if s.payloadDebugAPI(w, r, path) {
 		return
 	}
-	if s.moneyAPI(w, r, path) {
+	if s.moneyAPI(w, r, path) || s.nativeUsageAPI(w, r, path) {
 		return
 	}
 	switch {
@@ -392,7 +392,7 @@ func (s *Service) state(w http.ResponseWriter, sess session) {
 		return
 	}
 	providers, routes := s.snap.adminProviders(accounts)
-	jsonReply(w, 200, map[string]any{"has_requests": hasRequests, "accounts": accounts, "money": money, "mode": mode, "auth": s.opts.Auth, "revision": s.snap.revision, "routes": routes, "providers": providers, "defaults": s.snap.config.Defaults, "secrets": secrets, "callers": callers, "admin_keys": adminKeys, "csrf": sess.csrf, "retention_days": s.opts.RetentionDays, "presets": routePresets})
+	jsonReply(w, 200, map[string]any{"has_requests": hasRequests, "has_native_usage": s.nativeUsage.HasSources(), "accounts": accounts, "money": money, "mode": mode, "auth": s.opts.Auth, "revision": s.snap.revision, "routes": routes, "providers": providers, "defaults": s.snap.config.Defaults, "secrets": secrets, "callers": callers, "admin_keys": adminKeys, "csrf": sess.csrf, "retention_days": s.opts.RetentionDays, "presets": routePresets})
 }
 func (s *Service) updateConfig(w http.ResponseWriter, c Config, revision int64) {
 	s.commitConfig(w, c, revision, nil)
@@ -450,7 +450,7 @@ func (s *Service) commitConfig(w http.ResponseWriter, c Config, revision int64, 
 		return
 	}
 	s.reconcileSockets(next)
-	s.snap = next
+	s.publishSnapshotLocked(next)
 	jsonReply(w, 200, map[string]int64{"revision": next.revision})
 }
 func (s *Service) reload(w http.ResponseWriter) {
@@ -493,7 +493,7 @@ func (s *Service) reload(w http.ResponseWriter) {
 		return
 	}
 	s.reconcileSockets(next)
-	s.snap = next
+	s.publishSnapshotLocked(next)
 	jsonReply(w, 200, map[string]int64{"revision": next.revision})
 }
 
@@ -643,7 +643,7 @@ func (s *Service) changeSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.reconcileSockets(next)
-	s.snap = next
+	s.publishSnapshotLocked(next)
 	jsonReply(w, 200, map[string]int64{"revision": next.revision})
 }
 

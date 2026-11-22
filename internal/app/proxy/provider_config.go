@@ -142,7 +142,7 @@ func (s *Service) updateProviderConfig(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusServiceUnavailable, "Could not commit provider configuration; active config unchanged")
 		return
 	}
-	s.snap = next
+	s.publishSnapshotLocked(next)
 	cfg := nextCfg.Providers[in.Provider].Client
 	var rendered string
 	if cfg != nil {

@@ -1,6 +1,7 @@
 @import '../src/styles/base/typography.css';
 @import './timeline.css';
 @import './timeline-tokens.css';
+@import './usage.css';
 
 :root {
   --workspace: 1120px;

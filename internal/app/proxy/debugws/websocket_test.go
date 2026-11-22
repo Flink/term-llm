@@ -1,4 +1,4 @@
-package proxy
+package debugws
 
 import (
 	"bytes"
@@ -54,7 +54,7 @@ func TestDecodeDebugWebSocketMaskedFragmentedJSON(t *testing.T) {
 	last := syntheticDebugWSFrame(0x80, true, message[cut+2:])
 	closeFrame := syntheticDebugWSFrame(0x88, true, append([]byte{0x03, 0xe8}, "done"...))
 	wire := bytes.Join([][]byte{first, ping, middle, pong, last, closeFrame}, nil)
-	content, next := decodeDebugWebSocket(bytes.NewReader(wire), 0, int64(len(wire)), 4096, true)
+	content, next := Preview(bytes.NewReader(wire), 0, int64(len(wire)), 4096, true)
 	if next != int64(len(wire)) {
 		t.Fatalf("next = %d, want end %d", next, len(wire))
 	}
@@ -72,7 +72,7 @@ func TestDecodeDebugWebSocketExtendedLengths(t *testing.T) {
 	for _, n := range []int{125, 126, 65535, 65536} {
 		t.Run(fmt.Sprint(n), func(t *testing.T) {
 			wire := syntheticDebugWSFrame(0x81, true, bytes.Repeat([]byte{'z'}, n))
-			content, next := decodeDebugWebSocket(bytes.NewReader(wire), 0, int64(len(wire)), 256, true)
+			content, next := Preview(bytes.NewReader(wire), 0, int64(len(wire)), 256, true)
 			if next != int64(len(wire)) {
 				t.Fatalf("next = %d, want end %d", next, len(wire))
 			}
@@ -92,7 +92,7 @@ func TestDecodeDebugWebSocketOpaqueMessages(t *testing.T) {
 		syntheticDebugWSFrame(0x80, false, []byte("still-hidden")),
 		syntheticDebugWSFrame(0x81, false, []byte("readable 🍀\nline\t\x1b\u202e")),
 	}, nil)
-	content, next := decodeDebugWebSocket(bytes.NewReader(wire), 0, int64(len(wire)), 4096, false)
+	content, next := Preview(bytes.NewReader(wire), 0, int64(len(wire)), 4096, false)
 	if next != int64(len(wire)) {
 		t.Fatalf("next = %d, want end %d", next, len(wire))
 	}
@@ -130,7 +130,7 @@ func TestDecodeDebugWebSocketStopsOnMalformed(t *testing.T) {
 			later := syntheticDebugWSFrame(0x81, false, []byte("must not be read"))
 			wire := bytes.Join([][]byte{good, tt.bad, later}, nil)
 			r := &countingDebugWSReader{ReaderAt: bytes.NewReader(wire)}
-			content, next := decodeDebugWebSocket(r, 0, int64(len(wire)), 4096, false)
+			content, next := Preview(r, 0, int64(len(wire)), 4096, false)
 			assertDebugWSContains(t, content, "before", "malformed WebSocket", tt.want)
 			if next != int64(len(wire)) || r.furthest > int64(len(good)+len(tt.bad)) {
 				t.Fatalf("decoder resynchronized after malformed frame: next = %d, reads up to %d", next, r.furthest)
@@ -164,7 +164,7 @@ func TestDecodeDebugWebSocketTruncated(t *testing.T) {
 					}
 					return copy(p, tt.wire[offset-base:]), nil
 				})
-				content, next := decodeDebugWebSocket(r, base, total, 4096, tt.masked)
+				content, next := Preview(r, base, total, 4096, tt.masked)
 				assertDebugWSContains(t, content, tt.want)
 				if next != total {
 					t.Fatalf("next = %d, want end %d", next, total)
@@ -176,7 +176,7 @@ func TestDecodeDebugWebSocketTruncated(t *testing.T) {
 
 func TestDecodeDebugWebSocketReaderShorterThanSnapshot(t *testing.T) {
 	r := bytes.NewReader([]byte{0x81, 3, 'x'})
-	content, next := decodeDebugWebSocket(r, 0, 5, 4096, false)
+	content, next := Preview(r, 0, 5, 4096, false)
 	assertDebugWSContains(t, content, "truncated or unreadable text frame payload")
 	if next != 5 {
 		t.Fatalf("next = %d, want end 5", next)
@@ -215,7 +215,7 @@ func TestDecodeDebugWebSocketSkipsOversizedByWireLength(t *testing.T) {
 			return 0, io.EOF
 		}
 	})
-	content, next := decodeDebugWebSocket(r, 0, total, 4096, false)
+	content, next := Preview(r, 0, total, 4096, false)
 	if next != total {
 		t.Fatalf("next = %d, want end %d", next, total)
 	}
@@ -228,7 +228,7 @@ func TestDecodeDebugWebSocketFragmentExceedsMessageCap(t *testing.T) {
 	after := syntheticDebugWSFrame(0x81, false, []byte("after the message"))
 	wire := bytes.Join([][]byte{first, last, after}, nil)
 	r := &countingDebugWSReader{ReaderAt: bytes.NewReader(wire)}
-	content, next := decodeDebugWebSocket(r, 0, int64(len(wire)), 4096, false)
+	content, next := Preview(r, 0, int64(len(wire)), 4096, false)
 	assertDebugWSContains(t, content, "continuation", "text message exceeds preview byte budget", "after the message")
 	if next != int64(len(wire)) || r.requested != int64(len(wire)-len("not read")) || strings.Contains(content, "aaaa") {
 		t.Fatalf("skipped fragment incorrectly: next = %d, requested = %d", next, r.requested)
@@ -241,17 +241,17 @@ func TestDecodeDebugWebSocketFrameBoundaryPaging(t *testing.T) {
 	wire := append(first, second...)
 	r := bytes.NewReader(wire)
 	total := int64(len(wire))
-	content, next := decodeDebugWebSocket(r, 0, total, 70, false)
+	content, next := Preview(r, 0, total, 70, false)
 	assertDebugWSContains(t, content, "[0..5) text", "one")
 	if next != int64(len(first)) || strings.Contains(content, "two") {
 		t.Fatalf("first page next = %d, content %q", next, content)
 	}
-	content, next = decodeDebugWebSocket(r, next, total, 70, false)
+	content, next = Preview(r, next, total, 70, false)
 	assertDebugWSContains(t, content, "[5..10) text", "two")
 	if next != total {
 		t.Fatalf("next = %d, want end %d", next, total)
 	}
-	if content, next := decodeDebugWebSocket(r, total, total, 70, false); content != "" || next != total {
+	if content, next := Preview(r, total, total, 70, false); content != "" || next != total {
 		t.Fatalf("end must be stable: next = %d, content %q", next, content)
 	}
 }
@@ -266,12 +266,12 @@ func TestDecodeDebugWebSocketFrameCapInsideFragment(t *testing.T) {
 	wire := bytes.Join([][]byte{prefix, ping, last, later}, nil)
 	r := &countingDebugWSReader{ReaderAt: bytes.NewReader(wire)}
 	total := int64(len(wire))
-	content, next := decodeDebugWebSocket(r, 0, total, debugWSOutputLimit, false)
+	content, next := Preview(r, 0, total, debugWSOutputLimit, false)
 	assertDebugWSContains(t, content, "fragmented message spans preview pages")
 	if next != boundary || r.furthest != boundary {
 		t.Fatalf("unexpected work at frame cap: next = %d, reads up to %d, boundary %d", next, r.furthest, boundary)
 	}
-	content, next = decodeDebugWebSocket(r, next, total, debugWSOutputLimit, false)
+	content, next = Preview(r, next, total, debugWSOutputLimit, false)
 	assertDebugWSContains(t, content, "ping", "message start unavailable on this page", "later message")
 	if next != total || strings.Contains(content, "end of message") {
 		t.Fatalf("second page next = %d, content %q", next, content)
@@ -284,11 +284,11 @@ func TestDecodeDebugWebSocketCapsTextRead(t *testing.T) {
 	wire := bytes.Repeat(first, 3)
 	r := &countingDebugWSReader{ReaderAt: bytes.NewReader(wire)}
 	total := int64(len(wire))
-	content, next := decodeDebugWebSocket(r, 0, total, debugWSOutputLimit, false)
+	content, next := Preview(r, 0, total, debugWSOutputLimit, false)
 	if next != 2*int64(len(first)) || strings.Count(content, "{}") != 2 || r.requested != debugWSTextReadLimit+30 {
 		t.Fatalf("text-read cap not respected: next = %d, requested = %d", next, r.requested)
 	}
-	content, next = decodeDebugWebSocket(r, next, total, debugWSOutputLimit, false)
+	content, next = Preview(r, next, total, debugWSOutputLimit, false)
 	if next != total || strings.Count(content, "{}") != 1 {
 		t.Fatalf("failed to resume after read cap: next = %d, content %q", next, content)
 	}
@@ -298,7 +298,7 @@ func TestDecodeDebugWebSocketCapsOutputAtUTF8Boundary(t *testing.T) {
 	wire := syntheticDebugWSFrame(0x81, false, bytes.Repeat([]byte("☃\x1b"), 16384))
 	total := int64(len(wire))
 	for _, limit := range []int64{1, 89, 90, 91, debugWSOutputLimit * 4} {
-		content, next := decodeDebugWebSocket(bytes.NewReader(wire), 0, total, limit, false)
+		content, next := Preview(bytes.NewReader(wire), 0, total, limit, false)
 		if next != total || len(content) == 0 || int64(len(content)) > min(limit, debugWSOutputLimit) || !utf8.ValidString(content) {
 			t.Fatalf("limit = %d: next = %d, content length = %d, valid UTF-8 = %t", limit, next, len(content), utf8.ValidString(content))
 		}
@@ -314,7 +314,7 @@ func TestDecodeDebugWebSocketBoundedJSONFormatting(t *testing.T) {
 		`{"not":"valid",}`,
 	} {
 		wire := syntheticDebugWSFrame(0x81, false, []byte(text))
-		content, next := decodeDebugWebSocket(bytes.NewReader(wire), 0, int64(len(wire)), 4096, false)
+		content, next := Preview(bytes.NewReader(wire), 0, int64(len(wire)), 4096, false)
 		assertDebugWSContains(t, content, "\n"+text+"\n")
 		if next != int64(len(wire)) {
 			t.Fatalf("next = %d, want end %d", next, len(wire))

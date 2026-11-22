@@ -229,8 +229,7 @@ compromised worker can still use its granted route and isolated profile; this
 is not an OS sandbox.
 
 `term-llm usage -p claude-bin` uses Claude's native `get_usage` control request
-through the same binding. There is no separate quota-query implementation, and it
-does not fall back to local vendor credentials. The **Billing** selector only
+through the same binding and does not fall back to local vendor credentials. The **Billing** selector only
 categorizes spending records; it does not change login permissions, provider charges
 or limits.
 
@@ -708,6 +707,32 @@ back to a vendor endpoint. The server’s `--public-url` still takes a concrete
 browser origin, not an SRV URL.
 
 ## Usage and spending
+
+**Usage → Quota matrix** shows upstream subscription limits when the proxy has a
+supported provider configured. The matrix reads quotas from Antigravity, Claude,
+ChatGPT, Grok, and OpenCode Go, and can show an OpenRouter key's spending limit.
+It uses the proxy's configured account or key, not a local CLI login. Each
+reported window gets its own row, grouped by provider and model group. For
+example, Antigravity's Gemini and Claude/GPT groups
+can have separate short and weekly limits. A window's duration comes from the
+provider; it need not be five hours.
+
+The bar shows quota **used**; the tick shows **even pace** (the fraction of the
+window elapsed when usage was sampled). If you have used 75% with only 60% of
+the week elapsed, the forecast says **Runs out 1d 10h early**. Forecasts assume
+your average usage rate continues. A missing forecast is not a promise that the
+quota will last. See **Resets in** for the reset countdown.
+
+The proxy refreshes these limits in the background every **15 minutes**, even
+with the tab closed. Change the interval to **10–1,440 minutes** or refresh
+manually. These checks don't invoke a model. If a provider has several bound
+accounts or keys, each is refreshed separately: a failure marks only that
+binding's last reading stale. The proxy may refresh an expiring OAuth token
+even when no inference is running. A quota endpoint denying access does not
+invalidate the token used for inference.
+
+Unlike the matrix, **Home** measures activity that passed through this proxy,
+not the upstream account's allowance.
 
 Home opens on **30 days of cost by model**. Choose **Cost** or **Tokens**, a range
 (**Today**, **7d**, **30d**), and a split (total, client, provider, or model).

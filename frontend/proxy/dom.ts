@@ -148,7 +148,16 @@ export interface UIContext {
   refresh: (focusKey?: string, preserveView?: boolean) => Promise<ProxyState | undefined>;
   announce: (message: string) => void;
   navigate: (
-    tab: 'Home' | 'Routes' | 'Secrets' | 'Clients' | 'Requests' | 'Debug' | 'Passkeys' | 'Admin',
+    tab:
+      | 'Home'
+      | 'Routes'
+      | 'Secrets'
+      | 'Clients'
+      | 'Requests'
+      | 'Usage'
+      | 'Debug'
+      | 'Passkeys'
+      | 'Admin',
   ) => void;
   protectToken: (shown: boolean, pending?: boolean) => void;
   /** A one-time client token is being issued or is still on screen. */

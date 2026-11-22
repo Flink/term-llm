@@ -45,6 +45,7 @@ func Run(ctx context.Context, opts Options, out io.Writer) error {
 	defer s.Close()
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	s.nativeUsage.Start(ctx)
 	stopPricing := s.startPricingRefresh(ctx)
 	defer stopPricing()
 	serving, cancel := context.WithCancel(context.Background())

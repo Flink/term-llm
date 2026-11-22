@@ -51,9 +51,23 @@ type Limit struct {
 type Window struct {
 	Label           string    `json:"label,omitempty"`
 	UsedPercent     float64   `json:"used_percent"`
+	PercentUnknown  bool      `json:"percent_unknown,omitempty"`
 	DurationMinutes int       `json:"duration_minutes,omitempty"`
 	ResetsAt        time.Time `json:"resets_at,omitempty"`
 	Detail          string    `json:"detail,omitempty"`
+}
+
+// MarshalJSON represents an unmeasured percentage as null, not a measured zero.
+func (w Window) MarshalJSON() ([]byte, error) {
+	type fields Window
+	var percent *float64
+	if !w.PercentUnknown {
+		percent = &w.UsedPercent
+	}
+	return json.Marshal(struct {
+		fields
+		UsedPercent *float64 `json:"used_percent"`
+	}{fields(w), percent})
 }
 
 // Credits describes optional account credits returned by the provider.
@@ -81,16 +95,16 @@ type chatGPTAdditionalUsageLimit struct {
 }
 
 type chatGPTUsageRateLimit struct {
-	Allowed         bool                `json:"allowed"`
+	Allowed         *bool               `json:"allowed"`
 	LimitReached    bool                `json:"limit_reached"`
 	PrimaryWindow   *chatGPTUsageWindow `json:"primary_window"`
 	SecondaryWindow *chatGPTUsageWindow `json:"secondary_window"`
 }
 
 type chatGPTUsageWindow struct {
-	UsedPercent        float64 `json:"used_percent"`
-	LimitWindowSeconds int64   `json:"limit_window_seconds"`
-	ResetAt            int64   `json:"reset_at"`
+	UsedPercent        *float64 `json:"used_percent"`
+	LimitWindowSeconds int64    `json:"limit_window_seconds"`
+	ResetAt            int64    `json:"reset_at"`
 }
 
 type openCodeGoUsageResponse struct {
@@ -102,9 +116,9 @@ type openCodeGoUsageResponse struct {
 }
 
 type openCodeGoUsageWindow struct {
-	Status   string  `json:"status"`
-	Percent  float64 `json:"percent"`
-	ResetsAt string  `json:"resetsAt"`
+	Status   string   `json:"status"`
+	Percent  *float64 `json:"percent"`
+	ResetsAt string   `json:"resetsAt"`
 }
 
 type grokUsageResponse struct {
@@ -514,22 +528,28 @@ func normalizeOpenCodeGoProviderUsage(raw openCodeGoUsageResponse) (*Report, err
 		{id: "monthly", name: "Monthly usage", label: "Monthly window", usage: raw.Usage.Monthly},
 	}
 	for _, item := range windows {
-		reset, err := time.Parse(time.RFC3339, strings.TrimSpace(item.usage.ResetsAt))
-		if err != nil {
-			return nil, fmt.Errorf("decode OpenCode Go %s reset time %q: %w", item.id, item.usage.ResetsAt, err)
+		status := strings.TrimSpace(item.usage.Status)
+		resetText := strings.TrimSpace(item.usage.ResetsAt)
+		if item.usage.Percent == nil && resetText == "" && status == "" {
+			continue
 		}
-		reached := strings.EqualFold(strings.TrimSpace(item.usage.Status), "rate-limited")
+		var reset time.Time
+		if resetText != "" {
+			var err error
+			reset, err = time.Parse(time.RFC3339, resetText)
+			if err != nil {
+				return nil, fmt.Errorf("decode OpenCode Go %s reset time %q: %w", item.id, resetText, err)
+			}
+		}
+		reached := strings.EqualFold(status, "rate-limited")
+		window := usageWindow(item.usage.Percent)
+		window.Label, window.DurationMinutes, window.ResetsAt = item.label, item.duration, reset
 		report.Limits = append(report.Limits, Limit{
-			ID:           item.id,
-			Name:         item.name,
-			Allowed:      !reached,
-			LimitReached: reached,
-			PrimaryWindow: &Window{
-				Label:           item.label,
-				UsedPercent:     item.usage.Percent,
-				DurationMinutes: item.duration,
-				ResetsAt:        reset,
-			},
+			ID:            item.id,
+			Name:          item.name,
+			Allowed:       !reached,
+			LimitReached:  reached,
+			PrimaryWindow: window,
 		})
 	}
 	return report, nil
@@ -557,28 +577,35 @@ func normalizeChatGPTProviderUsage(raw chatGPTUsageResponse) *Report {
 }
 
 func normalizeChatGPTUsageLimit(id, name string, raw *chatGPTUsageRateLimit) Limit {
+	reached := raw.LimitReached || (raw.Allowed != nil && !*raw.Allowed)
 	return Limit{
 		ID:              id,
 		Name:            name,
-		Allowed:         raw.Allowed,
-		LimitReached:    raw.LimitReached,
-		PrimaryWindow:   normalizeChatGPTUsageWindow(raw.PrimaryWindow),
-		SecondaryWindow: normalizeChatGPTUsageWindow(raw.SecondaryWindow),
+		Allowed:         !reached,
+		LimitReached:    reached,
+		PrimaryWindow:   normalizeChatGPTUsageWindow(raw.PrimaryWindow, reached),
+		SecondaryWindow: normalizeChatGPTUsageWindow(raw.SecondaryWindow, reached),
 	}
 }
 
-func normalizeChatGPTUsageWindow(raw *chatGPTUsageWindow) *Window {
-	if raw == nil {
+func normalizeChatGPTUsageWindow(raw *chatGPTUsageWindow, reached bool) *Window {
+	// A reached limit may apply to an unmeasured window, not its measured sibling.
+	if raw == nil || (!reached && raw.UsedPercent == nil && raw.LimitWindowSeconds <= 0 && raw.ResetAt <= 0) {
 		return nil
 	}
-	window := &Window{
-		UsedPercent:     raw.UsedPercent,
-		DurationMinutes: int(raw.LimitWindowSeconds / 60),
-	}
+	window := usageWindow(raw.UsedPercent)
+	window.DurationMinutes = int(raw.LimitWindowSeconds / 60)
 	if raw.ResetAt > 0 {
 		window.ResetsAt = time.Unix(raw.ResetAt, 0)
 	}
 	return window
+}
+
+func usageWindow(percent *float64) *Window {
+	if percent == nil {
+		return &Window{PercentUnknown: true}
+	}
+	return &Window{UsedPercent: *percent}
 }
 
 // FormatOptions controls the shared CLI and TUI usage layout.
@@ -606,6 +633,9 @@ func FormatWithOptions(report *Report, now time.Time, opts FormatOptions) string
 		b.WriteString(metadata)
 	}
 	for _, limit := range report.Limits {
+		if limit.PrimaryWindow == nil && limit.SecondaryWindow == nil && !limit.LimitReached {
+			continue
+		}
 		name := strings.TrimSpace(limit.Name)
 		if name == "" {
 			name = limit.ID
@@ -664,7 +694,9 @@ func formatProviderUsageWindow(b *strings.Builder, window *Window, now time.Time
 	usedPercent := min(100, max(0, window.UsedPercent))
 	elapsedFraction, projected, hasProjection := providerUsageProjection(window, now)
 	barWidth := providerUsageBarWidth(opts)
-	if barWidth > 0 {
+	if window.PercentUnknown {
+		b.WriteString("\n  Usage unknown")
+	} else if barWidth > 0 {
 		var marker *float64
 		if hasProjection {
 			marker = &elapsedFraction
@@ -696,7 +728,7 @@ func formatProviderUsageWindow(b *strings.Builder, window *Window, now time.Time
 }
 
 func providerUsageProjection(window *Window, now time.Time) (elapsedFraction, projected float64, ok bool) {
-	if window == nil {
+	if window == nil || window.PercentUnknown {
 		return 0, 0, false
 	}
 	usedPercent := min(100, max(0, window.UsedPercent))

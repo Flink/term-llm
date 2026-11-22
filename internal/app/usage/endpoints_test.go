@@ -18,7 +18,7 @@ func TestDirectUsageConfiguredProviderRoot(t *testing.T) {
 		if r.URL.Path != "/nested/v1/usage" || r.Header.Get("Authorization") != "Bearer fake" {
 			t.Errorf("request=%s auth=%q", r.URL, r.Header.Get("Authorization"))
 		}
-		fmt.Fprint(w, `{"usage":{"rolling":{"status":"ok","percent":42,"resetsAt":"2026-11-16T00:00:00Z"},"weekly":{"status":"ok","resetsAt":"2026-11-16T00:00:00Z"},"monthly":{"status":"ok","resetsAt":"2026-11-16T00:00:00Z"}}}`)
+		fmt.Fprint(w, `{"usage":{"rolling":{"status":"ok","percent":42,"resetsAt":"2026-11-16T00:00:00Z"},"weekly":{"resetsAt":"2026-11-16T00:00:00Z"}}}`)
 	}))
 	defer server.Close()
 	old := loadProviderUsageConfig
@@ -29,6 +29,9 @@ func TestDirectUsageConfiguredProviderRoot(t *testing.T) {
 	report, err := fetchConfiguredDirectProviderUsage(context.Background(), "opencode-go", "fake")
 	if err != nil || !called || report.Provider != "opencode-go" {
 		t.Fatalf("report=%v called=%v err=%v", report, called, err)
+	}
+	if len(report.Limits) != 2 || report.Limits[0].PrimaryWindow.UsedPercent != 42 || !report.Limits[1].PrimaryWindow.PercentUnknown {
+		t.Fatalf("sparse limits: %+v", report.Limits)
 	}
 }
 

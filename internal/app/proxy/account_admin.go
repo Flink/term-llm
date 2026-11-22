@@ -41,10 +41,16 @@ func (s *Service) accountsAPI(w http.ResponseWriter, r *http.Request, sess sessi
 		fail(w, 503, "Account operation canceled")
 		return
 	}
-	defer unlock()
 	// No issuer requests under the global configuration lock.
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var changed bool
+	defer func() {
+		unlock()
+		if changed {
+			s.reconcileNativeUsageLocked()
+		}
+		s.mu.Unlock()
+	}()
 	old, err := s.store.account(in.Name)
 	exists := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -80,6 +86,7 @@ func (s *Service) accountsAPI(w http.ResponseWriter, r *http.Request, sess sessi
 			return
 		}
 		s.cancelAccountSockets(in.Name)
+		changed = true
 		jsonReply(w, 200, map[string]any{"account": next.publicInfo()})
 		return
 	}
@@ -135,6 +142,7 @@ func (s *Service) accountsAPI(w http.ResponseWriter, r *http.Request, sess sessi
 	}
 	s.rememberAccount(next.Name, next.credentials)
 	s.cancelAccountSockets(in.Name)
+	changed = true
 	status := 200
 	if !exists {
 		status = 201

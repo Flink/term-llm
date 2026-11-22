@@ -102,17 +102,41 @@ func (s *Service) connectClaudeShared(ctx context.Context, key [32]byte, scope c
 	// Once the issuer succeeded, finish the bounded commit even if the CLI left.
 	commit, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
-	if err = s.finishClaudeSharedEnrollment(commit, scope, a, next); err != nil {
+	err = s.publishClaudeSharedEnrollment(commit, scope, a, next)
+	if err != nil {
 		return claudeVaultReply{}, err
 	}
 	return claudeSharedAliasReply(key, next, scope, reply), nil
 }
 
+// First enrollment has no previous usage binding to invalidate. Keep the
+// route stable with a read lock across that commit, then publish the current
+// inventory before acknowledging success. Re-enrollment can supersede a
+// cached report: serialize its commit and publication with usage readers.
+func (s *Service) publishClaudeSharedEnrollment(ctx context.Context, scope claudeForwardScope, before, after accountRecord) error {
+	if len(before.claudeSharedCipher) == 0 {
+		s.mu.RLock()
+		err := s.finishClaudeSharedEnrollmentLocked(ctx, scope, before, after)
+		s.mu.RUnlock()
+		if err != nil {
+			return err
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+	} else {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := s.finishClaudeSharedEnrollmentLocked(ctx, scope, before, after); err != nil {
+			return err
+		}
+	}
+	s.reconcileNativeUsageLocked()
+	return nil
+}
+
 // Serialize the commit with route changes. A disabled route may retain grants to
 // support re-enable, but cannot complete an operator exchange while disabled.
-func (s *Service) finishClaudeSharedEnrollment(ctx context.Context, scope claudeForwardScope, before, after accountRecord) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+func (s *Service) finishClaudeSharedEnrollmentLocked(ctx context.Context, scope claudeForwardScope, before, after accountRecord) error {
 	if !s.closing {
 		for _, route := range s.snap.routes {
 			if route.Enabled && route.Name == scope.route && route.Account == scope.account && route.authority == scope.authority {
@@ -160,8 +184,17 @@ func claudeSharedRequestAllowed(r *http.Request) bool {
 }
 
 func (s *Service) claudeSharedAccess(ctx context.Context, key [32]byte, scope claudeForwardScope, rejected int64) (accountRecord, string, error) {
-	a, err := s.store.account(scope.account)
-	if err != nil || !validClaudeSharedAlias(key, a, scope, scope.nativeProvider().accessPrefix) || a.identityVersion != scope.identity {
+	return s.boundNativeAccess(ctx, key, scope.account, rejected, func(a accountRecord) bool {
+		return a.identityVersion == scope.identity && validClaudeSharedAlias(key, a, scope, scope.nativeProvider().accessPrefix)
+	}, func() bool { return claudeVaultBindingValid(ctx, s.store.db, scope) == nil })
+}
+
+// Both the worker tunnel and host quota checks use the same custody fence.
+// Each supplies its own identity and binding checks; host reads do not mint or
+// borrow a caller's grant or alias.
+func (s *Service) boundNativeAccess(ctx context.Context, key [32]byte, account string, rejected int64, check func(accountRecord) bool, bound func() bool) (accountRecord, string, error) {
+	a, err := s.store.account(account)
+	if err != nil || !check(a) {
 		return a, "", errAccountUnavailable
 	}
 	if rejected == 0 && a.State == "ready" && a.refresh.RejectedGeneration != a.Generation && a.ExpiresAt > time.Now().Add(time.Minute).Unix() {
@@ -173,8 +206,8 @@ func (s *Service) claudeSharedAccess(ctx context.Context, key [32]byte, scope cl
 		return a, "", err
 	}
 	defer unlock()
-	a, err = s.store.account(scope.account)
-	if err != nil || a.State != "ready" || !validClaudeSharedAlias(key, a, scope, scope.nativeProvider().accessPrefix) || claudeVaultBindingValid(ctx, s.store.db, scope) != nil {
+	a, err = s.store.account(account)
+	if err != nil || a.State != "ready" || !check(a) || !bound() {
 		return a, "", errAccountUnavailable
 	}
 	secret, err := claudeSharedSecret(key, a)
@@ -226,7 +259,11 @@ func (s *Service) rotateClaudeShared(ctx context.Context, key [32]byte, a accoun
 		failed := fence
 		failed.State, failed.claudeSharedCipher, failed.ExpiresAt = "needs_login", nil, 0
 		failed.Updated = time.Now().UnixMilli()
-		_ = s.store.changeClaudeSharedAccount(commit, fence, failed)
+		s.mu.Lock()
+		if s.store.changeClaudeSharedAccount(commit, fence, failed) == nil {
+			s.reconcileNativeUsageLocked()
+		}
+		s.mu.Unlock()
 		return a, "", errAccountUnavailable
 	}
 	next := a

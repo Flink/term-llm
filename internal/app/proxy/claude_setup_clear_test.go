@@ -217,7 +217,9 @@ func TestClaudeSetupClearFencesLateOAuthAfterIdenticalRecreation(t *testing.T) {
 			if refresh {
 				err = s.store.changeClaudeSharedAccount(ctx, before, next)
 			} else {
-				err = s.finishClaudeSharedEnrollment(ctx, scope, before, next)
+				s.mu.Lock()
+				err = s.finishClaudeSharedEnrollmentLocked(ctx, scope, before, next)
+				s.mu.Unlock()
 			}
 			if !errors.Is(err, errClaudeVaultLogin) {
 				t.Fatalf("late OAuth completion recreated custody: %v", err)
