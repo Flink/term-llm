@@ -231,7 +231,8 @@ var (
 
 // ResponseRunAdmission durably accounts for a run before provider work starts.
 type ResponseRunAdmission struct {
-	Turn *NotificationTurnAdmission
+	Turn            *NotificationTurnAdmission
+	LinkedToolClaim *notificationdb.LinkedToolClaim
 	// AgentEvents fences a host wake against collection/stop/new generations
 	// in the same transaction as durable parent admission; only ID/generation matter.
 	AgentEvents []AgentRun
@@ -288,19 +289,21 @@ func ResponseRunFenceFromContext(ctx context.Context) (ResponseRunFence, bool) {
 }
 
 type ResponseRunTerminal struct {
-	PendingClientCallIDs []string
-	Recoverable          bool
-	AgentEvents          []AgentRun
-	PendingClientCalls   bool
-	AwaitingAgentJoin    bool
-	AwaitedEvents        []AgentRun
-	ResponseID           string
-	OwnerInstanceID      string
-	FencingToken         int64
-	Outcome              ResponseRunState
-	FinalRev             int64
-	DurableOutputCount   int
-	EndedAt              time.Time
+	LinkedDeviceID             string
+	LinkedToolHandoffMessageID int64
+	PendingClientCallIDs       []string
+	Recoverable                bool
+	AgentEvents                []AgentRun
+	PendingClientCalls         bool
+	AwaitingAgentJoin          bool
+	AwaitedEvents              []AgentRun
+	ResponseID                 string
+	OwnerInstanceID            string
+	FencingToken               int64
+	Outcome                    ResponseRunState
+	FinalRev                   int64
+	DurableOutputCount         int
+	EndedAt                    time.Time
 }
 
 // AttentionState is the authoritative per-session terminal-attention watermark.

@@ -1,14 +1,11 @@
 package serve
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -677,6 +674,9 @@ func (m *responseRunManager) registerRun(run *responseRun, idempotencyKey string
 				return nil, false, errResponseRunKeyConflict
 			}
 			if existing, exists := m.runs[claim.runID]; exists && existing != nil {
+				if run.linkedDeviceID != "" && existing.linkedDeviceID != run.linkedDeviceID {
+					return nil, false, errResponseRunKeyConflict
+				}
 				m.idempotencyReplays.Add(1)
 				return existing, true, nil
 			}
@@ -1089,27 +1089,5 @@ func appendUniqueWebMedia(dst []webMediaEntry, values ...webMediaEntry) []webMed
 var cloneJSONMap = wire.CloneJSONMap
 
 func writeStoredResponseEvent(w io.Writer, ev responseRunEvent) error {
-	var payload any
-	dec := json.NewDecoder(bytes.NewReader(ev.Data))
-	dec.UseNumber()
-	if err := dec.Decode(&payload); err != nil {
-		return err
-	}
-	data, err := steeringWireJSON(w, payload)
-	if err != nil {
-		return err
-	}
-	ev.Data = data
-	ev.Event = steeringWireEvent(w, ev.Event)
-
-	b := make([]byte, 0, 4+20+1+7+len(ev.Event)+1+6+len(ev.Data)+2)
-	b = append(b, "id: "...)
-	b = strconv.AppendInt(b, ev.Sequence, 10)
-	b = append(b, "\nevent: "...)
-	b = append(b, ev.Event...)
-	b = append(b, "\ndata: "...)
-	b = append(b, ev.Data...)
-	b = append(b, "\n\n"...)
-	_, err = w.Write(b)
-	return err
+	return wire.WriteResponseEvent(w, ev.Sequence, ev.Event, ev.Data)
 }

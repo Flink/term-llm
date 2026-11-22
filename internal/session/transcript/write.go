@@ -7,6 +7,7 @@ import (
 
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/session"
+	"github.com/term-llm/term-llm/internal/session/notificationdb"
 )
 
 // ResponseRunOwnedOutputKeys identifies response-owned assistant segments, tool
@@ -105,4 +106,29 @@ func UpdateStreamingMessageWithTranscriptRev(ctx context.Context, store session.
 		return 0, nil
 	}
 	return rev, err
+}
+
+// LinkedToolHandoffReader is an optional read capability for durable peer handoffs.
+type LinkedToolHandoffReader interface {
+	PendingLinkedToolHandoff(context.Context, int64, string) ([]string, error)
+}
+
+func AsLinkedToolHandoffReader(store session.Store) (LinkedToolHandoffReader, bool) {
+	if logging, ok := store.(*session.LoggingStore); ok {
+		return AsLinkedToolHandoffReader(logging.Store)
+	}
+	reader, ok := store.(LinkedToolHandoffReader)
+	return reader, ok
+}
+
+func ReadLinkedToolReceipt(ctx context.Context, store session.Store, sessionID, deviceID, key string) (notificationdb.LinkedToolReceipt, error) {
+	if logging, ok := store.(*session.LoggingStore); ok {
+		return ReadLinkedToolReceipt(ctx, logging.Store, sessionID, deviceID, key)
+	}
+	if reader, ok := store.(interface {
+		ReadLinkedToolReceipt(context.Context, string, string, string) (notificationdb.LinkedToolReceipt, error)
+	}); ok {
+		return reader.ReadLinkedToolReceipt(ctx, sessionID, deviceID, key)
+	}
+	return notificationdb.LinkedToolReceipt{}, nil
 }

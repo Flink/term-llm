@@ -9,6 +9,7 @@ import (
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/runboundary"
 	"github.com/term-llm/term-llm/internal/session"
+	"github.com/term-llm/term-llm/internal/session/notificationdb"
 )
 
 type responseRunEvent struct {
@@ -110,6 +111,7 @@ type responseRunResolvedInteraction struct {
 }
 
 type responseRun struct {
+	linkedDeviceID          string             // immutable verified origin, empty for owner runs
 	agentEvents             []session.AgentRun // immutable host-offered lifecycle generations
 	typedClientTools        *typedClientToolRunner
 	clientToolLease         *core.ClientToolLease
@@ -193,6 +195,8 @@ type responseRun struct {
 }
 
 type startResponseRunOptions struct {
+	linkedToolClaim    *notificationdb.LinkedToolClaim
+	linkedDeviceID     string
 	live               *liveSession // pins settings authority to this call, not whichever call is current later
 	resume             *webRunContinuation
 	onInitialInput     func()
