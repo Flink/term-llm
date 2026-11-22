@@ -7,7 +7,7 @@ import {
   isNativeImageType,
   type AttachmentPolicy,
 } from '../domain/attachments';
-import { blobChecksum, blobToDataURL, DraftBlobStore } from '../platform/draft-blobs';
+import type { DraftBlobStore } from '../platform/draft-blobs';
 import { readDrafts, saveDraft, type DraftMessage } from '../platform/storage';
 import { errorMessage } from '../domain/text';
 import type { AppStoreServices } from './app-store-services';
@@ -16,6 +16,7 @@ import { uuid } from './store-utils';
 type ComposerOwner = 'draft' | 'session';
 
 export interface ComposerStoreHost {
+  linkedDevicesMode: ReadonlySignal<boolean>;
   activeSessionId: ReadonlySignal<string>;
   activeProjectId: ReadonlySignal<string>;
   draftActive: ReadonlySignal<boolean>;
@@ -38,6 +39,9 @@ export class ComposerStore {
   readonly attachments = signal<Attachment[]>([]);
   readonly sendPending = signal(false);
   readonly attachmentPolicy = signal<AttachmentPolicy>(DEFAULT_ATTACHMENT_POLICY);
+  readonly attachmentsAllowed = computed(
+    () => !this.host.linkedDevicesMode.value || this.attachmentPolicy.value.linkedUploads === true,
+  );
   readonly attachmentAccept = computed(() => attachmentAccept(this.attachmentPolicy.value));
   readonly selectedDraftWorktree = signal('');
   /**
@@ -46,7 +50,8 @@ export class ComposerStore {
    */
   readonly unsentNewChats = signal<DraftMessage[]>([]);
 
-  private readonly draftBlobs = new DraftBlobStore();
+  // A text-only conversation never opens IndexedDB or loads the blob helpers.
+  private draftBlobs?: DraftBlobStore;
   private readonly attachmentGenerations = new Map<string, number>();
   private readonly uploadAborts = new Map<string, AbortController>();
   private readonly uploadQueue: Array<() => void> = [];
@@ -370,7 +375,15 @@ export class ComposerStore {
       );
   }
 
+  private async attachmentStorage() {
+    const { DraftBlobStore, blobChecksum, blobToDataURL } = await import('../platform/draft-blobs');
+    if (this.services.isDisposed) throw new DOMException('Composer closed', 'AbortError');
+    return { storage: (this.draftBlobs ??= new DraftBlobStore()), blobChecksum, blobToDataURL };
+  }
+
   async attachmentInput(attachment: Attachment): Promise<Record<string, unknown>> {
+    if (!this.attachmentsAllowed.peek())
+      throw new Error('This linked device does not support uploads.');
     if (attachment.status && attachment.status !== 'ready')
       throw new Error(attachment.error || `${attachment.name} is not ready to send.`);
     if (this.attachmentPolicy.peek().uploadRefs) {
@@ -378,12 +391,13 @@ export class ComposerStore {
         throw new Error(`${attachment.name} must finish uploading to this node before sending.`);
       return { type: 'input_upload', upload_id: attachment.uploadId };
     }
-    const blob =
-      !attachment.dataURL && attachment.blobRef
-        ? await this.draftBlobs.get(attachment.blobRef)
-        : null;
-    const data =
-      attachment.dataURL || (blob ? await blobToDataURL(blob.blob) : '') || attachment.url || '';
+    let data = attachment.dataURL;
+    if (!data && attachment.blobRef) {
+      const { storage, blobToDataURL } = await this.attachmentStorage();
+      const record = await storage.get(attachment.blobRef);
+      if (record) data = await blobToDataURL(record.blob);
+    }
+    data ||= attachment.url;
     if (!data) throw new Error(`Could not materialize ${attachment.name}`);
     if (isNativeImageType(attachment.type))
       return {
@@ -398,6 +412,7 @@ export class ComposerStore {
   }
 
   addAttachments(files: FileList | File[]): void {
+    if (!this.attachmentsAllowed.peek()) return;
     let count = this.attachments.peek().length;
     for (const file of Array.from(files)) {
       const validation = validateAttachmentFile(file, count, this.attachmentPolicy.peek());
@@ -438,17 +453,23 @@ export class ComposerStore {
           reject(controller.signal.reason);
           return;
         }
+        if (!this.attachmentsAllowed.peek()) {
+          reject(new Error('This linked device does not support uploads.'));
+          return;
+        }
+        const upload = this.host.linkedDevicesMode.peek()
+          ? this.services.endpoints.uploadLinkedAttachment
+          : this.services.endpoints.uploadAttachment;
         this.activeUploads += 1;
-        void this.services.endpoints
-          .uploadAttachment(blob, attachment.name, {
-            signal: controller.signal,
-            onProgress: (loaded, total) => {
-              if (!controller.signal.aborted)
-                this.updateAttachment(attachment.id!, {
-                  progress: Math.min(0.99, loaded / (total || blob.size || 1)),
-                });
-            },
-          })
+        void upload(blob, attachment.name, {
+          signal: controller.signal,
+          onProgress: (loaded, total) => {
+            if (!controller.signal.aborted)
+              this.updateAttachment(attachment.id!, {
+                progress: Math.min(0.99, loaded / (total || blob.size || 1)),
+              });
+          },
+        })
           .then((result) => {
             if (!/^upl_[A-Za-z0-9_-]{43}$/.test(result.upload_id))
               throw new Error('Server returned an invalid upload ID.');
@@ -503,9 +524,11 @@ export class ComposerStore {
     controller.signal.addEventListener('abort', revokePreview, { once: true });
     try {
       const refs = this.attachmentPolicy.peek().uploadRefs;
+      const { storage, blobChecksum, blobToDataURL } = await this.attachmentStorage();
+      if (!owns()) return;
       const dataURL = refs ? undefined : await blobToDataURL(source);
       if (!owns()) return;
-      this.updateAttachment(attachmentId, { progress: 0.5 });
+      if (!refs) this.updateAttachment(attachmentId, { progress: 0.5 });
       let width: number | undefined;
       let height: number | undefined;
       if (isNativeImageType(source.type)) {
@@ -541,7 +564,7 @@ export class ComposerStore {
         if (previewURL) URL.revokeObjectURL(previewURL);
         return;
       }
-      await this.draftBlobs.put({
+      await storage.put({
         id: attachmentId,
         draftId,
         blob: source,
@@ -616,7 +639,8 @@ export class ComposerStore {
       this.attachmentGenerations.get(id) === generation &&
       this.attachments.peek().some((entry) => entry.id === id);
     try {
-      const record = await this.draftBlobs.get(blobRef);
+      const { storage } = await this.attachmentStorage();
+      const record = await storage.get(blobRef);
       if (!owns()) return;
       if (!record || record.draftId !== draftId) {
         const attachment = this.attachments.peek().find((entry) => entry.id === id);
@@ -665,6 +689,7 @@ export class ComposerStore {
   }
 
   retryAttachment(id: string | undefined): void {
+    if (!this.attachmentsAllowed.peek()) return;
     const attachment = this.attachments.peek().find((entry) => entry.id === id);
     if (!attachment?.id || (!attachment.file && !attachment.blobRef)) return;
     const validation = validateAttachmentFile(
@@ -690,8 +715,8 @@ export class ComposerStore {
     else {
       const draftId = this.storageId();
       const generation = this.attachmentGenerations.get(attachment.id);
-      void this.draftBlobs
-        .get(attachment.blobRef!)
+      void this.attachmentStorage()
+        .then(({ storage }) => storage.get(attachment.blobRef!))
         .then((record) => {
           if (
             this.services.isDisposed ||
@@ -747,6 +772,6 @@ export class ComposerStore {
 
   dispose(): void {
     this.releaseAttachmentResources(this.attachments.peek(), false);
-    this.draftBlobs.close();
+    this.draftBlobs?.close();
   }
 }

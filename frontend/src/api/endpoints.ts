@@ -1,4 +1,3 @@
-import { uploadAttachment } from './upload-attachment';
 import type { SessionInspect, SessionInspectBodies } from '../domain/inspect';
 import type {
   CreateWebSessionRequest,
@@ -179,8 +178,11 @@ export interface CreateBlankSessionResponse {
   session: Record<string, unknown>;
 }
 
+const attachmentAPI = () => import('./upload-attachment');
 const steeringAPI = () => import('./steering');
 const encoded = (value: string): string => encodeURIComponent(value);
+const worktreePath = (id: string) =>
+  id ? `/v1/projects/${encoded(id)}/worktrees` : '/v1/worktrees';
 /** Which surface acknowledged attention; recorded for diagnostics only. */
 export type AttentionSeenSource = 'web' | 'manual';
 
@@ -224,7 +226,15 @@ export const endpoints = (api: APIClient) => ({
       body: JSON.stringify({ enabled, revision }),
     }),
   uploadAttachment: (blob: Blob, filename: string, controls?: import('./client').UploadControls) =>
-    uploadAttachment(api, blob, filename, controls),
+    attachmentAPI().then(({ uploadAttachment }) => uploadAttachment(api, blob, filename, controls)),
+  uploadLinkedAttachment: (
+    blob: Blob,
+    filename: string,
+    controls?: import('./client').UploadControls,
+  ) =>
+    attachmentAPI().then(({ uploadLinkedAttachment }) =>
+      uploadLinkedAttachment(api, blob, filename, controls),
+    ),
   capabilities: () => api.get<Record<string, unknown>>('/v1/capabilities'),
   sharingCapabilities: () => api.get<SharingCapabilitiesResponse>('/v1/sharing/capabilities'),
   providers: () => api.get<Record<string, unknown>>('/v1/providers'),
@@ -795,45 +805,42 @@ export const endpoints = (api: APIClient) => ({
       sessionReviewRead,
     ),
   legacyWorktrees: () => api.get<Record<string, unknown>>('/v1/worktrees'),
-  projectWorktrees: (id: string) =>
-    api.get<Record<string, unknown>>(`/v1/projects/${encoded(id)}/worktrees`),
+  projectWorktrees: (id: string) => api.get<Record<string, unknown>>(worktreePath(id)),
   createProjectWorktree: (id: string, body: unknown) =>
-    api.post<Record<string, unknown>>(`/v1/projects/${encoded(id)}/worktrees`, body),
+    api.post<Record<string, unknown>>(worktreePath(id), body),
   switchWorktree: (id: string, dir: string, sessionId: string) =>
     api.post<Record<string, unknown>>(
-      `/v1/projects/${encoded(id)}/worktrees/switch`,
+      `${worktreePath(id)}/switch`,
       { dir },
       'mutation',
       sessionHeaders(sessionId),
     ),
   worktreeDiff: (id: string, dir: string) =>
-    api.get<Record<string, unknown>>(
-      `/v1/projects/${encoded(id)}/worktrees/diff?dir=${encoded(dir)}`,
-    ),
+    api.get<Record<string, unknown>>(`${worktreePath(id)}/diff?dir=${encoded(dir)}`),
   mergeWorktree: (id: string, dir: string, sessionId = '', force = false) =>
     api.post<Record<string, unknown>>(
-      `/v1/projects/${encoded(id)}/worktrees/merge`,
+      `${worktreePath(id)}/merge`,
       { dir, ...(force ? { force: true } : {}) },
       'mutation',
       sessionId ? sessionHeaders(sessionId) : undefined,
     ),
   assistedMergeWorktree: (id: string, dir: string, sessionId: string) =>
     api.post<Record<string, unknown>>(
-      `/v1/projects/${encoded(id)}/worktrees/assisted-merge`,
+      `${worktreePath(id)}/assisted-merge`,
       { dir },
       'mutation',
       sessionHeaders(sessionId),
     ),
   promoteWorktree: (id: string, dir: string, branch: string, sessionId = '') =>
     api.post<Record<string, unknown>>(
-      `/v1/projects/${encoded(id)}/worktrees/promote`,
+      `${worktreePath(id)}/promote`,
       { dir, branch },
       'mutation',
       sessionId ? sessionHeaders(sessionId) : undefined,
     ),
   removeWorktree: (id: string, dir: string, force = false) =>
     api.delete<Record<string, unknown>>(
-      `/v1/projects/${encoded(id)}/worktrees?dir=${encoded(dir)}${force ? '&force=1' : ''}`,
+      `${worktreePath(id)}?dir=${encoded(dir)}${force ? '&force=1' : ''}`,
     ),
   transcribe: (
     body: FormData,

@@ -262,6 +262,9 @@ func (r *Runtime) rollbackPairingGrant(ctx context.Context, grants *pairing.Gran
 		return
 	}
 	err := grants.Remove(deviceID)
+	if err == nil {
+		r.cancelMCPLocked(deviceID)
+	}
 	r.mu.Unlock()
 	if err != nil {
 		r.setWarning("cancelled pairing could not remove its local grant")
@@ -351,7 +354,8 @@ func (r *Runtime) acceptTransport(ctx context.Context, generation, connection ui
 		r.mu.Unlock()
 		return
 	}
-	grant, err := r.grants.Authorize(id, verified.DeviceKey)
+	grants := r.grants
+	_, err := grants.Authorize(id, verified.DeviceKey)
 	if err != nil {
 		r.mu.Unlock()
 		return
@@ -415,18 +419,24 @@ func (r *Runtime) acceptTransport(ctx context.Context, generation, connection ui
 				return
 			}
 			defer r.peerRequests.Done()
-			r.opts.Handler.ServeHTTP(w, WithDevicePrincipal(request, DevicePrincipal{DeviceID: id, Scope: ScopeWebV1, Lifetime: sessionCtx, ApprovedBy: grant.ApprovedBy}))
+			if p, ok := DeviceFromRequest(request); ok && p.ManageMCP && p.mcpOps != nil && (mcpManagementRoute(request.Method, request.URL.Path) || strings.HasSuffix(request.URL.Path, "/mcp")) {
+				p.mcpOps.RLock() // Handlers recheck MCPGrantLifetime under this lock.
+				defer p.mcpOps.RUnlock()
+			}
+			r.opts.Handler.ServeHTTP(w, request)
 		}),
-		SessionGate: func(context.Context) error { _, err := r.grants.Authorize(id, verified.DeviceKey); return err },
+		SessionGate: func(context.Context) error { _, err := grants.Authorize(id, verified.DeviceKey); return err },
 		Authorize: func(request *http.Request) error {
-			escaped := request.URL.EscapedPath() != request.URL.Path
-			if err := prepareMountedRequest(request, basePath); err != nil {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if generation != r.generation || r.sharingCtx == nil {
+				return errors.New("sharing stopped")
+			}
+			grant, err := grants.Authorize(id, verified.DeviceKey)
+			if err != nil {
 				return err
 			}
-			if escaped && strings.HasPrefix(request.URL.Path, "/v1/live") || !RouteAllowed(request.Method, request.URL.Path) {
-				return errors.New("route is not available to paired devices")
-			}
-			return nil
+			return authorizePeerRequest(request, basePath, grant, sessionCtx, r.mcpLifetimeLocked(grant), r.mcpOpsLocked(id))
 		},
 		OnClose:     func() { r.removeSession(id, endpoint) },
 		MaxChannels: 1,
@@ -594,16 +604,22 @@ func (r *Runtime) CancelInvitation(ctx context.Context) error {
 }
 
 func (r *Runtime) Revoke(ctx context.Context, id string) error {
+	r.mcpDisposeMu.Lock()
+	r.mu.Lock()
 	if err := r.grants.Revoke(id, r.opts.Now()); err != nil {
+		r.mu.Unlock()
+		r.mcpDisposeMu.Unlock()
 		return err
 	}
-	r.mu.Lock()
+	r.cancelMCPLocked(id)
 	if session := r.sessions[id]; session != nil {
 		session.cancel()
 		_ = session.endpoint.Close()
 		delete(r.sessions, id)
 	}
 	r.mu.Unlock()
+	r.disposeMCP(id)
+	r.mcpDisposeMu.Unlock()
 	if err := r.renewNow(ctx); err != nil {
 		r.setWarning(msgRevokeSyncPending)
 	}
@@ -613,13 +629,20 @@ func (r *Runtime) Revoke(ctx context.Context, id string) error {
 func (r *Runtime) Reset(ctx context.Context) error {
 	r.lifecycleMu.Lock()
 	defer r.lifecycleMu.Unlock()
+	r.mcpDisposeMu.Lock()
+	defer r.mcpDisposeMu.Unlock()
 	if err := r.stopLocked(); err != nil {
+		return err
+	}
+	if err := r.resetMCP(); err != nil {
 		return err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, name := range []string{"identity.json", "devices.json", "identity.json.lock", "devices.json.lock"} {
-		_ = os.Remove(filepath.Join(r.dir, name))
+		if err := os.Remove(filepath.Join(r.dir, name)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove linked devices state %s: %w", name, err)
+		}
 	}
 	if err := writeJSONPrivate(filepath.Join(r.dir, "target.json"), targetState{Version: stateVersion, Target: r.opts.Target, StoreInstanceID: r.opts.StoreInstanceID, BrokerURL: r.opts.BrokerURL}); err != nil {
 		return err

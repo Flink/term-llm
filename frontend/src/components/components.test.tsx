@@ -1324,7 +1324,6 @@ describe('Preact-owned chat surfaces', () => {
     store.sessions.value = [
       {
         ...store.sessions.value[0],
-        projectId: 'project-1',
         workingDir: '/worktrees/feature',
         worktreeDir: '/worktrees/feature',
       },
@@ -1350,7 +1349,7 @@ describe('Preact-owned chat surfaces', () => {
     });
 
     expect(store.endpoints.mergeWorktree).toHaveBeenCalledWith(
-      'project-1',
+      '',
       '/worktrees/feature',
       's1',
       false,
@@ -5502,8 +5501,117 @@ describe('Preact-owned chat surfaces', () => {
     );
   });
 
+  it.each([
+    [{ uploads: true }, ['Upload file', 'Take photo']],
+    [{ mcp: true }, ['MCP servers']],
+    [{ goals: true }, ['Set goal…']],
+    [{}, []],
+  ] as const)('shows only granted linked composer actions: %j', async (grants, items) => {
+    const store = createStore({
+      linkedDevicesScope: 'web-v1',
+      locationSharing: false,
+      worktrees: false,
+    });
+    (store as any).applyCapabilities({
+      linked_devices: grants,
+      attachments: { upload_refs: { version: 1 } },
+    });
+    store.addAttachments = vi.fn();
+    const { container } = render(
+      <StoreContext.Provider value={store}>
+        <Composer />
+      </StoreContext.Provider>,
+    );
+    const add = screen.queryByRole('button', { name: 'Add' });
+    if (items.length) {
+      await userEvent.click(add!);
+      expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(items);
+    } else expect(add).toBeNull();
+    const file = new File(['test'], 'note.txt');
+    const pickers = container.querySelectorAll('input[type=file]');
+    for (const picker of pickers) fireEvent.change(picker, { target: { files: [file] } });
+    fireEvent.paste(screen.getByRole('textbox', { name: 'Message' }), {
+      clipboardData: { items: [{ kind: 'file', getAsFile: () => file }] },
+    });
+    fireEvent.drop(container.querySelector('footer')!, { dataTransfer: { files: [file] } });
+    const uploads = 'uploads' in grants;
+    expect(pickers).toHaveLength(uploads ? 2 : 0);
+    expect(store.addAttachments).toHaveBeenCalledTimes(uploads ? 4 : 0);
+  });
+
+  it.each([false, true])(
+    'uses the same Add menu, pickers, and actions (linked: %s)',
+    async (linked) => {
+      const store = createStore(linked ? { linkedDevicesScope: 'web-v1' } : {});
+      (store as any).applyCapabilities({
+        linked_devices: linked
+          ? { active: true, uploads: true, mcp: true, goals: true }
+          : undefined,
+        attachments: { upload_refs: { version: 1 } },
+        worktrees: { enabled: true },
+      });
+      store.prompt.value = 'Meet here';
+      const getCurrentPosition = vi.fn((ok: PositionCallback) =>
+        ok({
+          coords: { latitude: 12.345, longitude: -2.123 },
+        } as GeolocationPosition),
+      );
+      const original = Object.getOwnPropertyDescriptor(navigator, 'geolocation');
+      Object.defineProperty(navigator, 'geolocation', {
+        configurable: true,
+        value: { getCurrentPosition },
+      });
+      try {
+        render(
+          <StoreContext.Provider value={store}>
+            <Composer />
+          </StoreContext.Provider>,
+        );
+        await userEvent.click(screen.getByRole('button', { name: 'Add' }));
+        expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+          'Upload file',
+          'Take photo',
+          'Share current location',
+          'MCP servers',
+          'Set goal…',
+          'Worktrees',
+        ]);
+        expect(getCurrentPosition).not.toHaveBeenCalled();
+        await userEvent.click(screen.getByRole('menuitem', { name: 'Share current location' }));
+        expect(getCurrentPosition).toHaveBeenCalledOnce();
+        await waitFor(() =>
+          expect(store.prompt.value).toBe('Meet here\nCurrent location: 12.345000, -2.123000'),
+        );
+        const choose = async (name: string) => {
+          await userEvent.click(screen.getByRole('button', { name: 'Add' }));
+          await userEvent.click(screen.getByRole('menuitem', { name }));
+        };
+        const file = vi.spyOn(document.querySelector<HTMLInputElement>('#fileInput')!, 'click');
+        const camera = vi.spyOn(screen.getByLabelText('Take a photo'), 'click');
+        await choose('Upload file');
+        expect(file).toHaveBeenCalledOnce();
+        await choose('Take photo');
+        expect(camera).toHaveBeenCalledOnce();
+        store.loadMCP = vi.fn(async () => {});
+        store.loadWorktrees = vi.fn(async () => {});
+        await choose('MCP servers');
+        expect(store.modal.value).toBe('mcp');
+        expect(store.loadMCP).toHaveBeenCalledOnce();
+        await choose('Set goal…');
+        expect(store.modal.value).toBe('goal');
+        await choose('Worktrees');
+        expect(store.modal.value).toBe('worktrees');
+        expect(store.loadWorktrees).toHaveBeenCalledOnce();
+      } finally {
+        if (original) Object.defineProperty(navigator, 'geolocation', original);
+        else Reflect.deleteProperty(navigator, 'geolocation');
+        store.dispose();
+      }
+    },
+  );
+
   it('offers Live to a linked-device client when the host advertises it', async () => {
-    const store = createStore();
+    const store = createStore({ locationSharing: false });
     store.linkedDevicesMode.value = true;
     store.liveStore.applyCapability({
       enabled: true,
@@ -5518,7 +5626,7 @@ describe('Preact-owned chat surfaces', () => {
       </StoreContext.Provider>,
     );
 
-    // Dictation and uploads remain restricted to the host device.
+    // Dictation remains native-only and this host did not grant uploads.
     expect(screen.queryByRole('button', { name: 'Add' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Record voice message' })).toBeNull();
     const live = screen.getByRole('button', { name: 'Start live voice' });
@@ -5548,7 +5656,7 @@ describe('Preact-owned chat surfaces', () => {
     expect(screen.getByRole('button', { name: 'Stop live voice' })).toBeEnabled();
     expect(await screen.findByRole('region', { name: 'Live voice' })).toBeInTheDocument();
     expect(await screen.findByText('Listening…')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Add' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Add' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Record voice message' })).toBeNull();
   });
 
@@ -5574,7 +5682,7 @@ describe('Preact-owned chat surfaces', () => {
       );
 
       expect(screen.queryByRole('button', { name: 'Start live voice' })).toBeNull();
-      expect(screen.queryByRole('button', { name: 'Add' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Add' })).toBeEnabled();
       expect(screen.queryByRole('button', { name: 'Record voice message' })).toBeNull();
       // An advertised call the browser cannot run explains itself; a host that
       // offers no Live stays quiet rather than showing a dead control.
@@ -8991,6 +9099,20 @@ describe('Preact-owned chat surfaces', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
       expect(store.copyMCPOAuthLink).toHaveBeenCalledWith('protected');
       expect(store.cancelMCPOAuth).toHaveBeenCalledWith('protected');
+
+      store.linkedDevicesMode.value = true;
+      store.linkedMCPManage.value = true;
+      expect(await screen.findByText('waiting for authorization…')).toBeVisible();
+      expect(screen.getByRole('link', { name: 'Open sign-in link' })).toBeVisible();
+      const flow = store.mcp.value.oauth!.protected;
+      store.mcp.value = {
+        ...store.mcp.value,
+        oauth: {
+          protected: { ...flow, state: 'failed', error: 'Authorization was not completed' },
+        },
+      };
+      expect(await screen.findByText('Authorization was not completed')).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible();
     },
   );
 
@@ -9098,7 +9220,10 @@ describe('Preact-owned chat surfaces', () => {
     expect(await screen.findByText('No MCP servers yet')).toBeVisible();
     await userEvent.click(screen.getByRole('button', { name: 'Add server' }));
     expect(screen.getByRole('dialog', { name: 'Add server' })).toBeVisible();
-    expect(screen.getByRole('tab', { name: 'Catalogue' })).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByRole('tab', { name: 'Catalogue' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     expect(await screen.findByText('Web search')).toBeVisible();
     expect(screen.getByText('Added')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Add github' })).not.toBeInTheDocument();
@@ -9137,7 +9262,7 @@ describe('Preact-owned chat surfaces', () => {
     );
 
     await userEvent.click(await screen.findByRole('button', { name: 'Add' }));
-    await userEvent.click(screen.getByRole('tab', { name: 'Local command' }));
+    await userEvent.click(await screen.findByRole('tab', { name: 'Local command' }));
     expect(screen.getByText(/Runs on the machine hosting term-llm/)).toBeVisible();
     fireEvent.input(screen.getByLabelText('Command'), {
       target: { value: 'npx -y @sentry/mcp-server' },

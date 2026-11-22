@@ -7,7 +7,10 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -19,6 +22,7 @@ const ScopeWebV1 = "web-v1"
 // Grant is durable until explicitly revoked or its state is reset. The raw
 // reconnect capability is never persisted, only its SHA-256 hash.
 type Grant struct {
+	ManageMCP               bool       `json:"manage_mcp,omitempty"`
 	ApprovedBy              *Person    `json:"approved_by,omitempty"`
 	DeviceID                string     `json:"device_id"`
 	DeviceKey               B64        `json:"device_key"`
@@ -50,6 +54,19 @@ type grantFile struct {
 type GrantStore struct {
 	path string
 	mu   sync.Mutex
+	// Last locked read and the file it came from. Writers replace the file
+	// atomically under the file lock, so any write changes this signature.
+	cached   grantFile
+	cachedAs fs.FileInfo
+	cachedAt time.Time
+}
+
+// Like Git's racily-clean rule: a file modified within this window of being
+// read may change again without a visible mtime change, so it is not trusted.
+const grantCacheRacyWindow = 2 * time.Second
+
+func sameGrantFile(a, b fs.FileInfo) bool {
+	return os.SameFile(a, b) && a.Size() == b.Size() && a.Mode() == b.Mode() && a.ModTime().Equal(b.ModTime())
 }
 
 func OpenGrantStore(path string) (*GrantStore, error) {
@@ -57,34 +74,35 @@ func OpenGrantStore(path string) (*GrantStore, error) {
 	if err := ensurePrivateDir(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
-	if _, err := s.load(); err != nil {
+	if _, _, err := s.load(); err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 func (s *GrantStore) Path() string { return s.path }
-func (s *GrantStore) load() (grantFile, error) {
-	data, err := readPrivateFile(s.path)
+func (s *GrantStore) load() (grantFile, fs.FileInfo, error) {
+	data, info, err := readPrivateFileInfo(s.path)
 	if isNotExist(err) {
-		return grantFile{V: StateVersion}, nil
+		return grantFile{V: StateVersion}, nil, nil
 	}
 	if err != nil {
-		return grantFile{}, fmt.Errorf("load grants: %w", err)
+		return grantFile{}, nil, fmt.Errorf("load grants: %w", err)
 	}
 	var f grantFile
 	if err := json.Unmarshal(data, &f); err != nil {
-		return grantFile{}, fmt.Errorf("decode grants %s: %w", s.path, err)
+		return grantFile{}, nil, fmt.Errorf("decode grants %s: %w", s.path, err)
 	}
 	if f.V != StateVersion {
-		return grantFile{}, fmt.Errorf("grants %s: unsupported state version %d", s.path, f.V)
+		return grantFile{}, nil, fmt.Errorf("grants %s: unsupported state version %d", s.path, f.V)
 	}
-	return f, nil
+	return f, info, nil
 }
 func (s *GrantStore) update(fn func(*grantFile) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.cachedAs = nil
 	return withFileLock(s.path, func() error {
-		f, err := s.load()
+		f, _, err := s.load()
 		if err != nil {
 			return err
 		}
@@ -98,11 +116,26 @@ func (s *GrantStore) update(fn func(*grantFile) error) error {
 		return writePrivateFile(s.path, data)
 	})
 }
+
+// read serves an unchanged file from memory. Any change to the file by any
+// process, including revocation, is seen by the next read.
 func (s *GrantStore) read() (grantFile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if info, err := os.Lstat(s.path); err == nil && s.cachedAs != nil && sameGrantFile(s.cachedAs, info) && checkPrivateFile(s.path, info) == nil && s.cachedAt.Sub(info.ModTime()) > grantCacheRacyWindow {
+		return grantFile{V: s.cached.V, Grants: slices.Clone(s.cached.Grants)}, nil
+	}
+	s.cachedAs = nil
 	var f grantFile
-	err := withFileLock(s.path, func() error { var err error; f, err = s.load(); return err })
+	err := withFileLock(s.path, func() error {
+		var err error
+		var info fs.FileInfo
+		f, info, err = s.load()
+		if err == nil && info != nil {
+			s.cached, s.cachedAs, s.cachedAt = grantFile{V: f.V, Grants: slices.Clone(f.Grants)}, info, time.Now()
+		}
+		return err
+	})
 	return f, err
 }
 func (s *GrantStore) List() ([]Grant, error) {
@@ -136,8 +169,24 @@ func (s *GrantStore) Add(g Grant) error {
 				return fmt.Errorf("%w: duplicate device id", ErrInvalid)
 			}
 		}
+		// Pairing never confers management rights. Only a later owner action can.
+		g.ManageMCP = false
 		f.Grants = append(f.Grants, g)
 		return nil
+	})
+}
+
+// SetManageMCP changes one active grant without replacing its device identity.
+func (s *GrantStore) SetManageMCP(id string, enabled bool) error {
+	return s.update(func(f *grantFile) error {
+		for i := range f.Grants {
+			g := &f.Grants[i]
+			if g.DeviceID == id && g.RevokedAt == nil {
+				g.ManageMCP = enabled
+				return nil
+			}
+		}
+		return ErrGrantNotFound
 	})
 }
 func (s *GrantStore) Revoke(deviceID string, now time.Time) error {

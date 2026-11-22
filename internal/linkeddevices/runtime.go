@@ -128,6 +128,9 @@ type Runtime struct {
 	invitation                 *invitation
 	invitationSeq              uint64
 	pending                    map[string]*pendingRequest
+	mcpGrants                  map[string]mcpLifetime
+	mcpOps                     map[string]*sync.RWMutex
+	mcpDisposeMu               sync.Mutex // orders permission changes with disposal
 	sessions                   map[string]*deviceSession
 	warnings                   []string
 	brokerProblem              string // current broker connection problem, shown first
@@ -303,6 +306,7 @@ func (r *Runtime) loadState() error {
 		return err
 	}
 	r.identity, r.grants, r.host = id, grants, host
+	r.disposeUnmanagedMCP()
 	if r.opts.BrokerURL != "" {
 		r.broker, err = peerbroker.NewClient(r.opts.BrokerURL, r.opts.HTTPClient)
 		if err != nil {
@@ -676,6 +680,7 @@ func (r *Runtime) stopSharingLocked() {
 	if r.sharingCancel != nil {
 		r.sharingCancel()
 	}
+	r.mcpGrants = nil // sharingCancel ended every child grant lifetime.
 	r.sharingCtx, r.sharingCancel = nil, nil
 }
 
@@ -832,7 +837,7 @@ func (r *Runtime) deviceStatuses() []DeviceStatus {
 				}
 			}
 		}
-		out = append(out, DeviceStatus{ID: grant.DeviceID, Name: grant.DeviceName, ApprovedAt: grant.PairedAt, LastSeenAt: grant.LastSeenAt, Connection: connection})
+		out = append(out, DeviceStatus{ManageMCP: grant.ManageMCP, ID: grant.DeviceID, Name: grant.DeviceName, ApprovedAt: grant.PairedAt, LastSeenAt: grant.LastSeenAt, Connection: connection})
 	}
 	return out
 }

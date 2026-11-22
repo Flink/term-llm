@@ -11,6 +11,7 @@ import (
 	"time"
 
 	mcpstart "github.com/term-llm/term-llm/internal/app/runtime/mcpstart"
+	"github.com/term-llm/term-llm/internal/linkeddevices"
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/llm/engine"
 	"github.com/term-llm/term-llm/internal/mcp"
@@ -488,23 +489,6 @@ func (rt *serveRuntime) mcpSelectionReadyLocked(names []string) bool {
 	return true
 }
 
-func (s *serveServer) ensureRuntimeMCPForSession(ctx context.Context, sessionID string, rt *serveRuntime) error {
-	if s == nil || rt == nil {
-		return nil
-	}
-	if rt.hasActiveRun() || !rt.mu.TryLock() {
-		return errServeSessionBusy
-	}
-	defer rt.mu.Unlock()
-	if rt.hasActiveRun() {
-		return errServeSessionBusy
-	}
-	if err := s.applyPersistedMCPSelectionLocked(ctx, sessionID, rt); err != nil {
-		log.Printf("[serve] restore MCP selection failed for %s: %v", sessionID, err)
-	}
-	return nil
-}
-
 func runtimeProviderName(rt *serveRuntime) string {
 	if rt == nil {
 		return "unknown"
@@ -656,6 +640,11 @@ func (s *serveServer) handleSessionMCP(w http.ResponseWriter, r *http.Request, s
 	if r.Method != http.MethodGet && r.Method != http.MethodPatch {
 		w.Header().Set("Allow", "GET, PATCH")
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
+		return
+	}
+
+	if _, linked := linkeddevices.DeviceFromRequest(r); linked {
+		s.handleLinkedMCP(w, r, sessionID)
 		return
 	}
 
