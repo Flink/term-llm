@@ -34,7 +34,6 @@ const hints: Record<string, string> = {
   'claude-bin': 'Sign in once, then add devices',
   'agy-bin': 'Sign in once on Linux, then add devices',
   chatgpt: 'Includes dictation, embeddings and live',
-  grok: 'Includes Grok CLI',
   gemini: 'Includes Live',
   'opencode-go': 'Chat, Messages and Gemini',
   bedrock: 'AWS account',

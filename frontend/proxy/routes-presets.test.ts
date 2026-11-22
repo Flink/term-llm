@@ -118,12 +118,15 @@ function choose(root: HTMLElement, label: string) {
     getByRole(root.querySelector<HTMLElement>('.route-picker')!, 'button', { name: label }),
   );
 }
-function openManualChatGPT(root: HTMLElement) {
-  choose(root, 'ChatGPT');
-  expect(getByRole(root, 'button', { name: 'Sign in to ChatGPT' })).toBeVisible();
-  const setup = getByRole(root, 'heading', { name: 'Set up ChatGPT plan' }).closest('section')!;
-  setup.querySelector<HTMLDetailsElement>(':scope > details')!.open = true;
-  fireEvent.click(getByRole(setup, 'button', { name: 'Use an existing account manually' }));
+function chooseAdvancedSetup(root: HTMLElement, label: string) {
+  choose(root, label);
+  expect(getByRole(root, 'button', { name: `Sign in to ${label}` })).toBeVisible();
+  const setup = getByRole(root, 'heading', { name: `Set up ${label} plan` }).closest('section')!;
+  const advanced = setup.querySelector<HTMLDetailsElement>(':scope > details')!;
+  expect(advanced.querySelector('summary')).toHaveTextContent('Advanced');
+  expect(advanced.open).toBe(false);
+  advanced.open = true;
+  fireEvent.click(getByRole(advanced, 'button', { name: /use a saved account/i }));
 }
 function openManage(root: HTMLElement, routeName: string) {
   const line = root.querySelector<HTMLElement>(`[data-focus="route:${routeName}"]`);
@@ -383,60 +386,143 @@ it('keeps file-managed route setup read-only', () => {
   expect(root).toHaveTextContent('Routes are file-managed and read-only.');
 });
 
-it('creates ChatGPT from an existing trusted account without a static secret', async () => {
-  const { root, create } = setup();
-  openManualChatGPT(root);
-  expect((getByLabelText(root, 'Trusted account') as HTMLSelectElement).options).toHaveLength(2);
-  expect(queryByLabelText(root, 'API key')).toBeNull();
-  fireEvent.change(getByLabelText(root, 'Trusted account'), { target: { value: 'home-chat' } });
-  fireEvent.click(getByRole(root, 'button', { name: 'Create provider' }));
-  await waitFor(() =>
-    expect(create).toHaveBeenCalledWith(7, {
-      name: 'chatgpt',
-      label: 'ChatGPT plan',
-      preset: 'chatgpt',
-      routes: [
-        expect.objectContaining({ name: 'chatgpt', profile: 'chatgpt', account: 'home-chat' }),
-      ],
-    }),
-  );
-});
+const planCases = [
+  { preset: presets[1], label: 'ChatGPT', saved: 'home-chat' },
+  {
+    preset: {
+      ...presets[1],
+      id: 'grok',
+      label: 'Grok plan',
+      account_kind: 'grok',
+      upstream: 'https://cli-chat-proxy.grok.com/v1',
+    } satisfies ProxyPreset,
+    label: 'Grok',
+    saved: 'home-grok',
+  },
+];
 
-it('connects a missing account inline without losing the route draft', async () => {
-  const { root } = setup({ accounts: [accounts[1]] });
-  openManualChatGPT(root);
-  fireEvent.input(getByLabelText(root, 'Provider name'), { target: { value: 'draft-name' } });
-  const select = getByLabelText(root, 'Trusted account') as HTMLSelectElement;
-  expect(select.options).toHaveLength(1);
-  HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
-    this.open = true;
-  };
-  HTMLDialogElement.prototype.close ??= function (this: HTMLDialogElement) {
-    this.open = false;
-    this.dispatchEvent(new Event('close'));
-  };
-  fireEvent.click(getByRole(root, 'button', { name: 'Connect new account' }));
-  const dialog = root.querySelector<HTMLDialogElement>('dialog')!;
-  expect(getByLabelText(dialog, 'Account kind')).toHaveValue('chatgpt');
-  expect(getByLabelText(dialog, 'Account kind')).toBeDisabled();
-  expect(getByLabelText(dialog, 'Account name')).toHaveValue('chatgpt');
-  const stored: ProxyAccount = {
-    name: 'chatgpt',
-    kind: 'chatgpt',
-    state: 'ready',
-    generation: 1,
-    updated: 1,
-  };
-  const api = ProxyClient.prototype;
-  const save = vi.spyOn(api, 'saveAccount').mockResolvedValue({ account: stored });
-  fireEvent.input(getByLabelText(dialog, 'Paste credential JSON (write-only)'), {
-    target: { value: '{"access_token":"a","refresh_token":"r","expires_at":4102444800}' },
+it.each(planCases)(
+  'offers sign-in, not a credential form, without a saved $label account',
+  ({ preset, label }) => {
+    const { root } = setup({
+      presets: [preset],
+      accounts: accounts.filter((a) => a.kind !== preset.account_kind),
+    });
+    choose(root, label);
+    const panel = getByRole(root, 'heading', { name: `Set up ${label} plan` }).closest('section')!;
+    expect(getByRole(panel, 'button', { name: `Sign in to ${label}` })).toBeVisible();
+    if (label === 'Grok') expect(panel).not.toHaveTextContent('Advanced');
+    expect(queryByLabelText(panel, 'Trusted account')).toBeNull();
+    expect(panel.querySelector('input[type=password]')).toBeNull();
+  },
+);
+
+it.each(planCases)(
+  'links a saved $label account without asking for credentials',
+  async ({ preset, label, saved }) => {
+    const { root, create } = setup({ presets: [preset] });
+    chooseAdvancedSetup(root, label);
+    if (label === 'Grok')
+      expect(queryByRole(root, 'button', { name: 'Import account credentials' })).toBeNull();
+    expect(queryByRole(root, 'button', { name: 'Connect new account' })).toBeNull();
+    expect((getByLabelText(root, 'Trusted account') as HTMLSelectElement).options).toHaveLength(2);
+    expect(queryByLabelText(root, 'API key')).toBeNull();
+    fireEvent.change(getByLabelText(root, 'Trusted account'), { target: { value: saved } });
+    fireEvent.click(getByRole(root, 'button', { name: 'Create provider' }));
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith(7, {
+        name: preset.id,
+        label: preset.label,
+        preset: preset.id,
+        routes: [expect.objectContaining({ name: preset.id, profile: preset.id, account: saved })],
+      }),
+    );
+  },
+);
+
+it.each(['copilot', 'chatgpt'] as const)(
+  'imports the first %s account without losing the provider draft',
+  async (kind) => {
+    const copilot: ProxyPreset = {
+      ...presets[1],
+      id: 'copilot',
+      label: 'Copilot plan',
+      account_kind: 'copilot',
+      upstream: 'https://api.githubcopilot.com',
+    };
+    const preset = kind === 'chatgpt' ? presets[1] : copilot;
+    const { root, create } = setup({ presets: [preset], accounts: [] });
+    if (kind === 'chatgpt') chooseAdvancedSetup(root, 'ChatGPT');
+    else choose(root, 'Copilot');
+    fireEvent.input(getByLabelText(root, 'Provider name'), { target: { value: 'draft-name' } });
+    const select = getByLabelText(root, 'Trusted account') as HTMLSelectElement;
+    expect(select.options).toHaveLength(1);
+    HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
+      this.open = true;
+    };
+    HTMLDialogElement.prototype.close ??= function (this: HTMLDialogElement) {
+      this.open = false;
+      this.dispatchEvent(new Event('close'));
+    };
+    fireEvent.click(getByRole(root, 'button', { name: 'Import account credentials' }));
+    const dialog = root.querySelector<HTMLDialogElement>('dialog')!;
+    expect(getByLabelText(dialog, 'Account kind')).toHaveValue(kind);
+    expect(getByLabelText(dialog, 'Account kind')).toBeDisabled();
+    expect(getByLabelText(dialog, 'Account name')).toHaveValue(kind);
+    const stored: ProxyAccount = {
+      name: kind,
+      kind,
+      state: 'ready',
+      generation: 1,
+      updated: 1,
+    };
+    const api = ProxyClient.prototype;
+    const save = vi.spyOn(api, 'saveAccount').mockResolvedValue({ account: stored });
+    fireEvent.input(getByLabelText(dialog, 'Paste credential JSON (write-only)'), {
+      target: {
+        value: kind === 'copilot' ? '{"github_token":"fixture"}' : '{"access_token":"fixture"}',
+      },
+    });
+    fireEvent.submit(dialog.querySelector('form')!);
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    await waitFor(() => expect(select).toHaveValue(kind));
+    expect(root.querySelector('dialog')).toBeNull();
+    fireEvent.click(getByRole(root, 'button', { name: 'Create provider' }));
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith(
+        7,
+        expect.objectContaining({
+          name: 'draft-name',
+          routes: [expect.objectContaining({ profile: preset.id, account: kind })],
+        }),
+      ),
+    );
+  },
+);
+
+it('infers Grok for a missing account on a legacy grok-bin route without a preset', () => {
+  const { root } = setup({
+    accounts: [],
+    routes: [
+      {
+        provider: 'legacy',
+        name: 'cli',
+        profile: 'grok-bin',
+        serves: [],
+        account: 'missing',
+        local_prefix: '/cli/',
+        upstream: planCases[1].preset.upstream,
+        enabled: true,
+        allow_insecure_http: false,
+        caller_auth: presets[1].auth,
+        set_headers: {},
+      },
+    ],
   });
-  fireEvent.submit(dialog.querySelector('form')!);
-  await waitFor(() => expect(save).toHaveBeenCalled());
-  await waitFor(() => expect(select).toHaveValue('chatgpt'));
-  expect(root.querySelector('dialog')).toBeNull();
-  expect(getByLabelText(root, 'Provider name')).toHaveValue('draft-name');
+  openManage(root, 'cli');
+  fireEvent.click(getByRole(root, 'button', { name: 'Connect account missing' }));
+  expect(getByLabelText(root, 'Account kind')).toHaveValue('grok');
+  expect(getByLabelText(root, 'Account kind')).toBeDisabled();
 });
 
 it('preserves an existing route’s account, transport and admission policy when unrelated fields change', async () => {

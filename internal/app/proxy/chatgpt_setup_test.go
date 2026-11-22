@@ -14,29 +14,33 @@ import (
 	"testing"
 	"time"
 
+	"github.com/term-llm/term-llm/internal/app/proxy/deviceflow"
 	"github.com/term-llm/term-llm/internal/oauth"
 )
 
 const chatGPTSetupPath = "chatgpt/setup"
 
-func fakeChatGPTSetup(s *Service) chan *oauth.ChatGPTCredentials {
-	result := make(chan *oauth.ChatGPTCredentials, 1)
-	s.chatgptSetup.request = func(context.Context) (*oauth.ChatGPTDeviceCode, error) {
-		return &oauth.ChatGPTDeviceCode{VerificationURL: oauth.ChatGPTDeviceVerificationURL, UserCode: "TEST-DEVICE"}, nil
+func mockSetupPoll(s *Service, poll deviceflow.Poll) {
+	s.deviceSetup.start = func(context.Context, string, http.RoundTripper) (deviceflow.Challenge, deviceflow.Poll, error) {
+		return deviceflow.Challenge{VerificationURL: oauth.ChatGPTDeviceVerificationURL, UserCode: "TEST-DEVICE"}, poll, nil
 	}
-	s.chatgptSetup.wait = func(ctx context.Context, _ *oauth.ChatGPTDeviceCode) (*oauth.ChatGPTCredentials, error) {
+}
+
+func fakeChatGPTSetup(s *Service) chan deviceflow.Credentials {
+	result := make(chan deviceflow.Credentials, 1)
+	mockSetupPoll(s, func(ctx context.Context) (deviceflow.Credentials, error) {
 		select {
 		case v := <-result:
 			return v, nil
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return deviceflow.Credentials{}, ctx.Err()
 		}
-	}
+	})
 	return result
 }
 
-func chatGPTSetupTestCredentials() *oauth.ChatGPTCredentials {
-	return &oauth.ChatGPTCredentials{AccessToken: "fixture-access-token", RefreshToken: "fixture-refresh-token", AccountID: "fixture-account-id", ExpiresAt: time.Now().Add(time.Hour).Unix()}
+func chatGPTSetupTestCredentials() deviceflow.Credentials {
+	return deviceflow.Credentials{AccessToken: "fixture-access-token", RefreshToken: "fixture-refresh-token", AccountID: "fixture-account-id", ExpiresAt: time.Now().Add(time.Hour).Unix()}
 }
 
 func readChatGPTSetupReply[T any](t *testing.T, w *httptest.ResponseRecorder, want int) T {
@@ -56,19 +60,19 @@ func readChatGPTSetupReply[T any](t *testing.T, w *httptest.ResponseRecorder, wa
 	return v
 }
 
-func startChatGPTSetupTest(t *testing.T, s *Service, cookie *http.Cookie, csrf string, in chatGPTSetupInput) string {
+func startChatGPTSetupTest(t *testing.T, s *Service, cookie *http.Cookie, csrf string, in deviceSetupInput) string {
 	t.Helper()
 	w := adminRequest(s, "POST", chatGPTSetupPath, in, cookie, csrf)
-	v := readChatGPTSetupReply[chatGPTSetupChallenge](t, w, 201)
+	v := readChatGPTSetupReply[deviceSetupChallenge](t, w, 201)
 	if v.ID == "" || v.VerificationURL != oauth.ChatGPTDeviceVerificationURL || v.UserCode != "TEST-DEVICE" {
 		t.Fatalf("invalid device challenge: %+v", v)
 	}
 	return chatGPTSetupPath + "?id=" + v.ID
 }
 
-func chatGPTSetupStatusTest(t *testing.T, s *Service, cookie *http.Cookie, path string, want chatGPTSetupStatus) {
+func deviceSetupStatusTest(t *testing.T, s *Service, cookie *http.Cookie, path string, want deviceSetupStatus) {
 	t.Helper()
-	got := readChatGPTSetupReply[chatGPTSetupStatus](t, adminRequest(s, "GET", path, nil, cookie, ""), 200)
+	got := readChatGPTSetupReply[deviceSetupStatus](t, adminRequest(s, "GET", path, nil, cookie, ""), 200)
 	if got != want {
 		t.Fatalf("setup status %+v, want %+v", got, want)
 	}
@@ -78,11 +82,11 @@ func TestChatGPTSetupProvisionsRouteAndAccountOnly(t *testing.T) {
 	s := testService(t)
 	result := fakeChatGPTSetup(s)
 	admin, csrf := loginAdmin(t, s)
-	path := startChatGPTSetupTest(t, s, admin, csrf, chatGPTSetupInput{})
-	chatGPTSetupStatusTest(t, s, admin, path, chatGPTSetupStatus{Status: "pending"})
+	path := startChatGPTSetupTest(t, s, admin, csrf, deviceSetupInput{})
+	deviceSetupStatusTest(t, s, admin, path, deviceSetupStatus{Status: "pending"})
 	result <- chatGPTSetupTestCredentials()
-	s.chatgptSetup.workers.Wait()
-	chatGPTSetupStatusTest(t, s, admin, path, chatGPTSetupStatus{Status: "connected", Route: "chatgpt"})
+	s.deviceSetup.workers.Wait()
+	deviceSetupStatusTest(t, s, admin, path, deviceSetupStatus{Status: "connected", Route: "chatgpt"})
 	if w := adminRequest(s, "DELETE", path, nil, admin, csrf); w.Code != 409 {
 		t.Fatalf("cancel after commit: %d, want 409", w.Code)
 	}
@@ -127,10 +131,10 @@ func TestChatGPTSetupUsesDistinctCompanions(t *testing.T) {
 	admin, csrf := loginAdmin(t, s)
 	existing := Route{Name: "chatgpt-backend", LocalPrefix: "/chatgpt-backend/", Enabled: false, Upstream: "https://example.test/v1"}
 	configure(t, s, Config{Routes: []Route{existing}}, nil)
-	path := startChatGPTSetupTest(t, s, admin, csrf, chatGPTSetupInput{Name: "work"})
+	path := startChatGPTSetupTest(t, s, admin, csrf, deviceSetupInput{Name: "work"})
 	result <- chatGPTSetupTestCredentials()
-	s.chatgptSetup.workers.Wait()
-	chatGPTSetupStatusTest(t, s, admin, path, chatGPTSetupStatus{Status: "connected", Route: "work"})
+	s.deviceSetup.workers.Wait()
+	deviceSetupStatusTest(t, s, admin, path, deviceSetupStatus{Status: "connected", Route: "work"})
 	var names []string
 	for _, r := range s.snap.config.Routes {
 		names = append(names, r.Name+"@"+r.Account)
@@ -147,12 +151,12 @@ func TestChatGPTSetupCollisionAndRollback(t *testing.T) {
 	manual := Route{Name: "manual", LocalPrefix: "/chatgpt/sub/", Enabled: false, Upstream: "https://example.test/v1"}
 	configure(t, s, Config{Routes: []Route{manual}}, nil)
 	for _, name := range []string{"manual", "chatgpt", "assets"} {
-		w := adminRequest(s, "POST", chatGPTSetupPath, chatGPTSetupInput{Name: name}, admin, csrf)
+		w := adminRequest(s, "POST", chatGPTSetupPath, deviceSetupInput{Name: name}, admin, csrf)
 		if w.Code != 409 {
 			t.Fatalf("collision %q: %d %s", name, w.Code, w.Body)
 		}
 	}
-	path := startChatGPTSetupTest(t, s, admin, csrf, chatGPTSetupInput{Name: "alternate"})
+	path := startChatGPTSetupTest(t, s, admin, csrf, deviceSetupInput{Name: "alternate"})
 	// Introduce a collision through the real config API after the user is sent
 	// to OpenAI. Completion must recheck the live configuration.
 	manual.LocalPrefix = "/alternate/"
@@ -161,18 +165,18 @@ func TestChatGPTSetupCollisionAndRollback(t *testing.T) {
 		t.Fatalf("config update: %d %s", w.Code, w.Body)
 	}
 	result <- chatGPTSetupTestCredentials()
-	s.chatgptSetup.workers.Wait()
-	chatGPTSetupStatusTest(t, s, admin, path, chatGPTSetupStatus{Status: "failed", Error: "This route prefix is reserved or overlaps an existing route; choose a different name"})
+	s.deviceSetup.workers.Wait()
+	deviceSetupStatusTest(t, s, admin, path, deviceSetupStatus{Status: "failed", Error: "This route prefix is reserved or overlaps an existing route; choose a different name"})
 
 	previous := s.snap
 	_, err := s.store.db.Exec(`CREATE TRIGGER refuse_chatgpt_config BEFORE UPDATE ON configuration BEGIN SELECT RAISE(FAIL,'fixture-private-error'); END`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path = startChatGPTSetupTest(t, s, admin, csrf, chatGPTSetupInput{Name: "new"})
+	path = startChatGPTSetupTest(t, s, admin, csrf, deviceSetupInput{Name: "new"})
 	result <- chatGPTSetupTestCredentials()
-	s.chatgptSetup.workers.Wait()
-	chatGPTSetupStatusTest(t, s, admin, path, chatGPTSetupStatus{Status: "failed", Error: "Could not save the ChatGPT route and account; existing configuration is unchanged"})
+	s.deviceSetup.workers.Wait()
+	deviceSetupStatusTest(t, s, admin, path, deviceSetupStatus{Status: "failed", Error: "Could not save the ChatGPT route and account; existing configuration is unchanged"})
 	if _, err := s.store.account("new"); !errors.Is(err, sql.ErrNoRows) || s.snap != previous {
 		t.Fatal("failed config commit published or retained part of the setup")
 	}
@@ -190,25 +194,25 @@ func TestChatGPTSetupAuthorizationCancellationAndExpiry(t *testing.T) {
 			// Even if the issuer returns credentials alongside local cancellation,
 			// the transaction must be fenced. No network requests occur.
 			approval := make(chan struct{})
-			s.chatgptSetup.wait = func(ctx context.Context, _ *oauth.ChatGPTDeviceCode) (*oauth.ChatGPTCredentials, error) {
+			mockSetupPoll(s, func(ctx context.Context) (deviceflow.Credentials, error) {
 				select {
 				case <-approval:
 				case <-ctx.Done():
 				}
 				return chatGPTSetupTestCredentials(), nil
-			}
+			})
 			admin, csrf := loginAdmin(t, s)
 			outsider, outsiderCSRF := loginAdmin(t, s)
 			req := func(method, path string, cookie *http.Cookie, token string, want int) {
 				t.Helper()
-				w := adminRequest(s, method, path, chatGPTSetupInput{}, cookie, token)
+				w := adminRequest(s, method, path, deviceSetupInput{}, cookie, token)
 				if w.Code != want {
 					t.Fatalf("%s %s: %d, want %d: %s", method, path, w.Code, want, w.Body)
 				}
 			}
 			req("POST", chatGPTSetupPath, nil, "", 401)
 			req("POST", chatGPTSetupPath, admin, "", 403)
-			path := startChatGPTSetupTest(t, s, admin, csrf, chatGPTSetupInput{})
+			path := startChatGPTSetupTest(t, s, admin, csrf, deviceSetupInput{})
 			req("POST", chatGPTSetupPath, outsider, outsiderCSRF, 409)
 			req("GET", path, outsider, "", 404)
 			req("DELETE", path, outsider, outsiderCSRF, 404)
@@ -221,19 +225,19 @@ func TestChatGPTSetupAuthorizationCancellationAndExpiry(t *testing.T) {
 				req("POST", "logout", admin, csrf, 200)
 				req("GET", path, admin, "", 401)
 			case "expire":
-				s.chatgptSetup.mu.Lock()
-				for _, a := range s.chatgptSetup.attempts {
+				s.deviceSetup.mu.Lock()
+				for _, a := range s.deviceSetup.attempts {
 					a.expires = time.Now().Add(-time.Second)
 				}
-				s.chatgptSetup.mu.Unlock()
-				chatGPTSetupStatusTest(t, s, admin, path, chatGPTSetupStatus{Status: "failed", Error: chatGPTSetupExpired})
+				s.deviceSetup.mu.Unlock()
+				deviceSetupStatusTest(t, s, admin, path, deviceSetupStatus{Status: "failed", Error: "ChatGPT sign-in expired; start again"})
 			case "shutdown":
 				if err := s.Close(); err != nil {
 					t.Fatal(err)
 				}
 			}
 			close(approval)
-			s.chatgptSetup.workers.Wait()
+			s.deviceSetup.workers.Wait()
 			if action == "shutdown" {
 				var err error
 				s, err = Open(s.opts)
@@ -260,7 +264,7 @@ func TestChatGPTSetupReconnectPreservesFileAndGrants(t *testing.T) {
 	if w := adminRequest(s, "DELETE", "accounts", accountInput{Name: old.Name}, admin, csrf); w.Code != 200 {
 		t.Fatalf("sign out: %d %s", w.Code, w.Body)
 	}
-	if a, err := s.store.account(old.Name); err != nil || a.credentials.AccountID != "" || a.chatGPTIdentityHash == "" {
+	if a, err := s.store.account(old.Name); err != nil || a.credentials.AccountID != "" || a.identityHash == "" {
 		t.Fatal("sign out should retain only an identity digest for a later reconnect")
 	}
 	s.opts.ConfigFile = filepath.Join(t.TempDir(), "proxy.yaml")
@@ -271,7 +275,7 @@ func TestChatGPTSetupReconnectPreservesFileAndGrants(t *testing.T) {
 	if w := adminRequest(s, "POST", "reload", nil, admin, csrf); w.Code != 200 {
 		t.Fatalf("reload: %d %s", w.Code, w.Body)
 	}
-	if w := adminRequest(s, "POST", chatGPTSetupPath, chatGPTSetupInput{}, admin, csrf); w.Code != 409 {
+	if w := adminRequest(s, "POST", chatGPTSetupPath, deviceSetupInput{}, admin, csrf); w.Code != 409 {
 		t.Fatalf("provision in file mode: %d %s", w.Code, w.Body)
 	}
 	previous := s.snap
@@ -280,19 +284,19 @@ func TestChatGPTSetupReconnectPreservesFileAndGrants(t *testing.T) {
 	defer cancel(nil)
 	s.sockets.Store("old-generation", &activeSocket{account: "subscription", cancel: cancel})
 	defer s.sockets.Delete("old-generation")
-	path := startChatGPTSetupTest(t, s, admin, csrf, chatGPTSetupInput{Account: "subscription"})
+	path := startChatGPTSetupTest(t, s, admin, csrf, deviceSetupInput{Account: "subscription"})
 	other := chatGPTSetupTestCredentials()
 	other.AccountID = "different-workspace"
 	result <- other
-	s.chatgptSetup.workers.Wait()
-	chatGPTSetupStatusTest(t, s, admin, path, chatGPTSetupStatus{Status: "failed", Error: "Sign in to the original ChatGPT account and workspace, or create a separate route"})
+	s.deviceSetup.workers.Wait()
+	deviceSetupStatusTest(t, s, admin, path, deviceSetupStatus{Status: "failed", Error: "Sign in to the original ChatGPT account and workspace, or create a separate route"})
 	if a, err := s.store.account(old.Name); err != nil || a.State != "needs_login" || a.Generation != 4 || context.Cause(stream) != nil {
 		t.Fatal("a different ChatGPT identity changed existing custody or closed streams")
 	}
-	path = startChatGPTSetupTest(t, s, admin, csrf, chatGPTSetupInput{Account: "subscription"})
+	path = startChatGPTSetupTest(t, s, admin, csrf, deviceSetupInput{Account: "subscription"})
 	result <- chatGPTSetupTestCredentials()
-	s.chatgptSetup.workers.Wait()
-	chatGPTSetupStatusTest(t, s, admin, path, chatGPTSetupStatus{Status: "connected", Route: "custom"})
+	s.deviceSetup.workers.Wait()
+	deviceSetupStatusTest(t, s, admin, path, deviceSetupStatus{Status: "connected", Route: "custom"})
 	if s.snap != previous || context.Cause(stream) != errSocketRevoked {
 		t.Fatal("reconnect altered the route snapshot or left a prior identity stream open")
 	}
@@ -310,11 +314,11 @@ func TestChatGPTSetupReconnectPreservesFileAndGrants(t *testing.T) {
 func TestChatGPTSetupDeviceUnavailable(t *testing.T) {
 	s := testService(t)
 	fakeChatGPTSetup(s)
-	s.chatgptSetup.request = func(context.Context) (*oauth.ChatGPTDeviceCode, error) {
-		return nil, oauth.ErrChatGPTDeviceCodeNotEnabled
+	s.deviceSetup.start = func(context.Context, string, http.RoundTripper) (deviceflow.Challenge, deviceflow.Poll, error) {
+		return deviceflow.Challenge{}, nil, oauth.ErrChatGPTDeviceCodeNotEnabled
 	}
 	admin, csrf := loginAdmin(t, s)
-	w := adminRequest(s, "POST", chatGPTSetupPath, chatGPTSetupInput{}, admin, csrf)
+	w := adminRequest(s, "POST", chatGPTSetupPath, deviceSetupInput{}, admin, csrf)
 	got := readChatGPTSetupReply[map[string]string](t, w, 409)
 	if !strings.Contains(got["error"], "device code settings") {
 		t.Fatal("device-code settings hint missing")
@@ -327,12 +331,12 @@ func TestChatGPTSetupPasskeyRevocationBeforeCommit(t *testing.T) {
 	initiator := newPasskeyBrowser(t, s)
 	_, reauth := bootstrapPasskey(t, initiator)
 	reauth("reauth", 1)
-	w := initiator.send("POST", chatGPTSetupPath, chatGPTSetupInput{}, 201)
-	id := readChatGPTSetupReply[chatGPTSetupChallenge](t, w, 201).ID
+	w := initiator.send("POST", chatGPTSetupPath, deviceSetupInput{}, 201)
+	id := readChatGPTSetupReply[deviceSetupChallenge](t, w, 201).ID
 	initiator.send("POST", "logout", nil, 200)
 	initiator.send("GET", chatGPTSetupPath+"?id="+id, nil, 401)
 	result <- chatGPTSetupTestCredentials()
-	s.chatgptSetup.workers.Wait()
+	s.deviceSetup.workers.Wait()
 	if _, err := s.store.account("chatgpt"); !errors.Is(err, sql.ErrNoRows) || len(s.snap.routes) != 0 {
 		t.Fatal("a revoked passkey session committed a ChatGPT setup")
 	}
@@ -341,16 +345,16 @@ func TestChatGPTSetupPasskeyRevocationBeforeCommit(t *testing.T) {
 func TestChatGPTSetupPasskeyAndSafeIssuerFailure(t *testing.T) {
 	s, _ := passkeyFixture(t)
 	fakeChatGPTSetup(s)
-	s.chatgptSetup.wait = func(context.Context, *oauth.ChatGPTDeviceCode) (*oauth.ChatGPTCredentials, error) {
-		return nil, errors.New("fixture-private-error")
-	}
+	mockSetupPoll(s, func(context.Context) (deviceflow.Credentials, error) {
+		return deviceflow.Credentials{}, errors.New("fixture-private-error")
+	})
 	b := newPasskeyBrowser(t, s)
 	_, _ = bootstrapPasskey(t, b)
-	w := b.send("POST", chatGPTSetupPath, chatGPTSetupInput{}, 201)
-	id := readChatGPTSetupReply[chatGPTSetupChallenge](t, w, 201).ID
-	s.chatgptSetup.workers.Wait()
+	w := b.send("POST", chatGPTSetupPath, deviceSetupInput{}, 201)
+	id := readChatGPTSetupReply[deviceSetupChallenge](t, w, 201).ID
+	s.deviceSetup.workers.Wait()
 	w = b.send("GET", chatGPTSetupPath+"?id="+id, nil, 200)
-	status := readChatGPTSetupReply[chatGPTSetupStatus](t, w, 200)
+	status := readChatGPTSetupReply[deviceSetupStatus](t, w, 200)
 	if status.Status != "failed" || status.Error == "" {
 		t.Fatalf("issuer failure did not produce a safe error: %+v", status)
 	}

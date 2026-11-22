@@ -234,8 +234,8 @@ func (s *Service) adminAPI(w http.ResponseWriter, r *http.Request, path string, 
 		return
 	}
 	switch {
-	case path == "chatgpt/setup" && (r.Method == http.MethodPost || r.Method == http.MethodGet || r.Method == http.MethodDelete):
-		s.chatgptSetupAPI(w, r, sess)
+	case (path == "chatgpt/setup" || path == "grok/setup") && (r.Method == http.MethodPost || r.Method == http.MethodGet || r.Method == http.MethodDelete):
+		s.deviceSetupAPI(w, r, sess, strings.TrimSuffix(path, "/setup"))
 	case path == "claude/setup" && (r.Method == http.MethodPost || r.Method == http.MethodDelete):
 		s.nativeSetupAPI(w, r, claudeSetup)
 	case path == "agy/setup" && (r.Method == http.MethodPost || r.Method == http.MethodDelete):

@@ -9,7 +9,7 @@ export function missingCompanions(group: ProviderGroup, state: ProxyState): Prox
   const primary = presets.find((preset) => owned.has(preset.id) && preset.companions?.length);
   if (!primary) return [];
   return (primary.companions ?? []).flatMap((id) => {
-    if (owned.has(id) || (id === 'grok-bin' && group.id !== primary.id)) return [];
+    if (owned.has(id)) return [];
     const companion = presets.find((preset) => preset.id === id);
     return companion ? [companion] : [];
   });

@@ -76,12 +76,13 @@ export interface ProxyPresetRule {
   auth: ProxyAuth;
   allow?: string[];
 }
-export interface ProxyChatGPTDeviceSignIn {
+export type ProxyDeviceProvider = 'chatgpt' | 'grok';
+export interface ProxyDeviceSignIn {
   id: string;
   verification_url: string;
   user_code: string;
 }
-export type ProxyChatGPTSetupStatus =
+export type ProxyDeviceSetupStatus =
   | { status: 'pending' }
   | { status: 'connected'; route?: string }
   | { status: 'failed'; error?: string };
@@ -139,6 +140,7 @@ export interface ProxyAccount {
   kind: 'chatgpt' | 'grok' | 'copilot' | 'claude-bin' | 'agy-bin' | 'aws-sigv4';
   state: string;
   generation: number;
+  device_reconnect?: 'eligible' | 'missing_identity' | 'custom_settings';
   auth_mode?: 'token_only' | 'rotating' | 'vault' | 'shared_vault';
   expires_at?: number;
   updated: number;
@@ -628,14 +630,17 @@ export class ProxyClient {
     await this.request('logout', 'POST');
     this.csrf = '';
   }
-  startChatGPTSetup(input: { name?: string; account?: string }): Promise<ProxyChatGPTDeviceSignIn> {
-    return this.request('chatgpt/setup', 'POST', input);
+  startDeviceSetup(
+    provider: ProxyDeviceProvider,
+    input: { name?: string; account?: string },
+  ): Promise<ProxyDeviceSignIn> {
+    return this.request(`${provider}/setup`, 'POST', input);
   }
-  chatGPTSetupStatus(id: string): Promise<ProxyChatGPTSetupStatus> {
-    return this.request(`chatgpt/setup?id=${encodeURIComponent(id)}`);
+  deviceSetupStatus(provider: ProxyDeviceProvider, id: string): Promise<ProxyDeviceSetupStatus> {
+    return this.request(`${provider}/setup?id=${encodeURIComponent(id)}`);
   }
-  cancelChatGPTSetup(id: string): Promise<void> {
-    return this.request(`chatgpt/setup?id=${encodeURIComponent(id)}`, 'DELETE');
+  cancelDeviceSetup(provider: ProxyDeviceProvider, id: string): Promise<void> {
+    return this.request(`${provider}/setup?id=${encodeURIComponent(id)}`, 'DELETE');
   }
   // Operator launchers create or reconnect a shared route; worker launchers require an existing route.
   setupNative(

@@ -3,6 +3,7 @@ package proxy
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -12,10 +13,10 @@ func TestRemoveUnusedAccountAllowsRecreatingChatGPTRoute(t *testing.T) {
 	s := testService(t)
 	result := fakeChatGPTSetup(s)
 	admin, csrf := loginAdmin(t, s)
-	path := startChatGPTSetupTest(t, s, admin, csrf, chatGPTSetupInput{})
+	path := startChatGPTSetupTest(t, s, admin, csrf, deviceSetupInput{})
 	result <- chatGPTSetupTestCredentials()
-	s.chatgptSetup.workers.Wait()
-	chatGPTSetupStatusTest(t, s, admin, path, chatGPTSetupStatus{Status: "connected", Route: "chatgpt"})
+	s.deviceSetup.workers.Wait()
+	deviceSetupStatusTest(t, s, admin, path, deviceSetupStatus{Status: "connected", Route: "chatgpt"})
 
 	remove := accountInput{Name: "chatgpt", Remove: true}
 	if w := adminRequest(s, "DELETE", "accounts", remove, admin, csrf); w.Code != 409 {
@@ -24,7 +25,7 @@ func TestRemoveUnusedAccountAllowsRecreatingChatGPTRoute(t *testing.T) {
 	if w := adminRequest(s, "PUT", "config", map[string]any{"revision": s.snap.revision, "routes": []Route{}}, admin, csrf); w.Code != 200 {
 		t.Fatalf("delete routes: %d %s", w.Code, w.Body)
 	}
-	if w := adminRequest(s, "POST", chatGPTSetupPath, chatGPTSetupInput{}, admin, csrf); w.Code != 409 {
+	if w := adminRequest(s, "POST", chatGPTSetupPath, deviceSetupInput{}, admin, csrf); w.Code != 409 || !strings.Contains(w.Body.String(), "Unused accounts") {
 		t.Fatalf("leftover account should block reuse of its name: %d %s", w.Code, w.Body)
 	}
 	if w := adminRequest(s, "DELETE", "accounts", remove, admin, csrf); w.Code != 200 {
@@ -37,10 +38,10 @@ func TestRemoveUnusedAccountAllowsRecreatingChatGPTRoute(t *testing.T) {
 		t.Fatalf("second removal: %d, want 404", w.Code)
 	}
 
-	path = startChatGPTSetupTest(t, s, admin, csrf, chatGPTSetupInput{})
+	path = startChatGPTSetupTest(t, s, admin, csrf, deviceSetupInput{})
 	result <- chatGPTSetupTestCredentials()
-	s.chatgptSetup.workers.Wait()
-	chatGPTSetupStatusTest(t, s, admin, path, chatGPTSetupStatus{Status: "connected", Route: "chatgpt"})
+	s.deviceSetup.workers.Wait()
+	deviceSetupStatusTest(t, s, admin, path, deviceSetupStatus{Status: "connected", Route: "chatgpt"})
 	var names []string
 	for _, route := range s.snap.config.Routes {
 		names = append(names, route.Name)

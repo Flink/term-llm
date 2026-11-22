@@ -1728,144 +1728,169 @@ for (const width of [1440, 390]) {
   });
 }
 
-test('ChatGPT sign-in creates a route before approving the provider', async ({ page }) => {
-  const chatGPTRoute = {
-    serves: [],
-    profile: 'chatgpt',
-    provider: 'chatgpt',
-    name: 'chatgpt',
-    local_prefix: '/chatgpt/',
+for (const { id, label, issuer, verificationURL, upstream } of [
+  {
+    id: 'chatgpt',
+    label: 'ChatGPT',
+    issuer: 'OpenAI',
+    verificationURL: 'https://auth.openai.com/codex/device',
     upstream: 'https://chatgpt.com/backend-api/codex',
-    enabled: true,
-    allow_insecure_http: false,
-    caller_auth: { header: 'Authorization', prefix: 'Bearer ' },
-    set_headers: {},
-  };
-  const state: ProxyState = {
-    ...snapshot,
-    auth: 'token',
-    accounts: [],
-    routes: [
-      {
-        ...chatGPTRoute,
-        provider: 'legacy',
-        profile: '',
-        serves: [],
-        name: 'legacy',
-        local_prefix: '/legacy/',
-        upstream: 'https://example.test/v1',
-      },
-    ],
-    callers: [
-      {
-        id: 'desktop',
-        name: 'Desktop',
-        grants: ['legacy'],
-        created: 1,
-        revoked: false,
-        created_by: '',
-        external_id: '',
-      },
-    ],
-    presets: [
-      {
-        family: 'inference',
-        id: 'chatgpt',
-        label: 'ChatGPT plan',
-        upstream: chatGPTRoute.upstream,
-        auth: chatGPTRoute.caller_auth,
-        account_kind: 'chatgpt',
-      },
-    ],
-  };
-  let approved = false;
-  const approvals: unknown[] = [];
-  await page.route('http://proxy.test/_proxy/api/**', async (request) => {
-    const url = new URL(request.request().url());
-    const method = request.request().method();
-    if (url.pathname.endsWith('/state'))
-      return request.fulfill({ json: withSingletonProviders(state) });
-    if (url.pathname.endsWith('/chatgpt/setup')) {
-      if (method === 'POST') {
-        expect(request.request().postDataJSON()).toEqual({});
-        return request.fulfill({
-          json: {
-            id: 'mock-attempt',
-            user_code: 'TEST-1234',
-            verification_url: 'https://auth.openai.com/codex/device',
-          },
-        });
-      }
-      expect(url.searchParams.get('id')).toBe('mock-attempt');
-      if (!approved) return request.fulfill({ json: { status: 'pending' } });
-      state.routes.push({ ...chatGPTRoute, account: 'chatgpt-account' });
-      state.providers = [
+  },
+  {
+    id: 'grok',
+    label: 'Grok',
+    issuer: 'xAI',
+    verificationURL: 'https://accounts.x.ai/device',
+    upstream: 'https://cli-chat-proxy.grok.com/v1',
+  },
+] as const) {
+  test(`${label} sign-in creates a route before approving the provider`, async ({ page }) => {
+    const providerRoute = {
+      serves: [],
+      profile: id,
+      provider: id,
+      name: id,
+      local_prefix: `/${id}/`,
+      upstream,
+      enabled: true,
+      allow_insecure_http: false,
+      caller_auth: { header: 'Authorization', prefix: 'Bearer ' },
+      set_headers: {},
+    };
+    const state: ProxyState = {
+      ...snapshot,
+      auth: 'token',
+      accounts: [],
+      routes: [
+        {
+          ...providerRoute,
+          provider: 'legacy',
+          profile: '',
+          serves: [],
+          name: 'legacy',
+          local_prefix: '/legacy/',
+          upstream: 'https://example.test/v1',
+        },
+      ],
+      callers: [
+        {
+          id: 'desktop',
+          name: 'Desktop',
+          grants: ['legacy'],
+          created: 1,
+          revoked: false,
+          created_by: '',
+          external_id: '',
+        },
+      ],
+      presets: [
         {
           family: 'inference',
-          status: 'green',
-          reason: '',
-          id: 'chatgpt',
-          label: 'ChatGPT',
-          routes: ['chatgpt'],
+          id,
+          label: `${label} plan`,
+          upstream: providerRoute.upstream,
+          auth: providerRoute.caller_auth,
+          account_kind: id,
         },
-      ];
-      state.accounts = [
-        { name: 'chatgpt-account', kind: 'chatgpt', state: 'ready', generation: 1, updated: 1 },
-      ];
-      state.revision = 2;
-      return request.fulfill({ json: { status: 'connected', route: chatGPTRoute.name } });
+      ],
+    };
+    let approved = false;
+    const approvals: unknown[] = [];
+    await page.route('http://proxy.test/_proxy/api/**', async (request) => {
+      const url = new URL(request.request().url());
+      const method = request.request().method();
+      if (url.pathname.endsWith('/state'))
+        return request.fulfill({ json: withSingletonProviders(state) });
+      if (url.pathname === `/_proxy/api/${id}/setup`) {
+        if (method === 'POST') {
+          expect(request.request().postDataJSON()).toEqual({});
+          return request.fulfill({
+            json: {
+              id: 'mock-attempt',
+              user_code: 'TEST-1234',
+              verification_url: verificationURL,
+            },
+          });
+        }
+        expect(method).toBe('GET');
+        expect(url.searchParams.get('id')).toBe('mock-attempt');
+        if (!approved) return request.fulfill({ json: { status: 'pending' } });
+        state.routes.push({ ...providerRoute, account: `${id}-account` });
+        state.providers = [
+          {
+            family: 'inference',
+            status: 'green',
+            reason: '',
+            id,
+            label,
+            routes: [id],
+          },
+        ];
+        state.accounts = [
+          { name: `${id}-account`, kind: id, state: 'ready', generation: 1, updated: 1 },
+        ];
+        state.revision = 2;
+        return request.fulfill({ json: { status: 'connected', route: providerRoute.name } });
+      }
+      if (url.pathname.endsWith('/callers') && method === 'PUT') {
+        const body = request.request().postDataJSON() as {
+          id: string;
+          provider_changes: { id: string; approved: boolean }[];
+          revision: number;
+        };
+        approvals.push(body);
+        expect(body.provider_changes).toEqual([{ id, approved: true }]);
+        expect(body).not.toHaveProperty('grants');
+        if (!state.callers[0].grants.includes(providerRoute.name))
+          state.callers[0].grants.push(providerRoute.name);
+        state.revision = 3;
+        return request.fulfill({ json: { ok: true } });
+      }
+      return request.fallback();
+    });
+    await page.goto('http://proxy.test/_proxy/?tab=routes');
+    await choosePreset(page, label);
+    for (const field of [
+      'API key',
+      'Credential source',
+      'Trusted account',
+      'Paste credential JSON (write-only)',
+    ]) {
+      await expect(page.getByLabel(field, { exact: true })).toHaveCount(0);
     }
-    if (url.pathname.endsWith('/callers') && method === 'PUT') {
-      const body = request.request().postDataJSON() as {
-        id: string;
-        provider_changes: { id: string; approved: boolean }[];
-        revision: number;
-      };
-      approvals.push(body);
-      expect(body.provider_changes).toEqual([{ id: 'chatgpt', approved: true }]);
-      expect(body).not.toHaveProperty('grants');
-      if (!state.callers[0].grants.includes(chatGPTRoute.name))
-        state.callers[0].grants.push(chatGPTRoute.name);
-      state.revision = 3;
-      return request.fulfill({ json: { ok: true } });
-    }
-    return request.fallback();
+    await page.getByRole('button', { name: `Sign in to ${label}`, exact: true }).click();
+    const code = page.getByLabel('One-time sign-in code', { exact: true });
+    await expect(code).toHaveValue('TEST-1234');
+    await expect(
+      page.getByRole('link', { name: `Continue to ${issuer}`, exact: true }),
+    ).toHaveAttribute('href', verificationURL);
+    const row = routeLine(page, id);
+    await expect(row).toHaveCount(0);
+    approved = true;
+    await expect(row).toBeFocused();
+    const card = providerCard(page, id);
+    await expect(card.getByRole('heading', { name: id, exact: true })).toBeVisible();
+    await expect(card.getByRole('img', { name: 'Status: green' })).toBeVisible();
+    await expect(card.locator('.provider-approval-summary')).toHaveCount(1);
+    await expect(card.locator('.provider-approval-summary')).toHaveText('No clients approved');
+    await expect(row.locator('.provider-route-clients')).toHaveCount(0);
+    await expect(code).toHaveCount(0);
+    expect(approvals).toEqual([]);
+    const manage = await openManage(page, id);
+    await manage.getByLabel('Desktop', { exact: true }).check();
+    await manage.getByRole('button', { name: 'Approve selected', exact: true }).click();
+    await expect(card.locator('.provider-approval-summary')).toHaveText('Approved: Desktop');
+    await expect(row).not.toContainText('Desktop');
+    await expect(row.locator('.provider-route-clients')).toHaveCount(0);
+    expect(approvals).toEqual([
+      {
+        id: 'desktop',
+        provider_changes: [{ id, approved: true }],
+        revision: 2,
+      },
+    ]);
   });
-  await page.goto('http://proxy.test/_proxy/?tab=routes');
-  await choosePreset(page, 'ChatGPT');
-  await page.getByRole('button', { name: 'Sign in to ChatGPT', exact: true }).click();
-  const code = page.getByLabel('One-time sign-in code', { exact: true });
-  await expect(code).toHaveValue('TEST-1234');
-  await expect(page.getByRole('link', { name: 'Continue to OpenAI' })).toHaveAttribute(
-    'href',
-    'https://auth.openai.com/codex/device',
-  );
-  const row = routeLine(page, 'chatgpt');
-  await expect(row).toHaveCount(0);
-  approved = true;
-  await expect(row).toBeFocused();
-  const card = providerCard(page, 'chatgpt');
-  await expect(card.getByRole('heading', { name: 'chatgpt', exact: true })).toBeVisible();
-  await expect(card.getByRole('img', { name: 'Status: green' })).toBeVisible();
-  await expect(card.locator('.provider-approval-summary')).toHaveCount(1);
-  await expect(card.locator('.provider-approval-summary')).toHaveText('No clients approved');
-  await expect(row.locator('.provider-route-clients')).toHaveCount(0);
-  await expect(code).toHaveCount(0);
-  expect(approvals).toEqual([]);
-  const manage = await openManage(page, 'chatgpt');
-  await manage.getByLabel('Desktop', { exact: true }).check();
-  await manage.getByRole('button', { name: 'Approve selected', exact: true }).click();
-  await expect(card.locator('.provider-approval-summary')).toHaveText('Approved: Desktop');
-  await expect(row).not.toContainText('Desktop');
-  await expect(row.locator('.provider-route-clients')).toHaveCount(0);
-  expect(approvals).toEqual([
-    {
-      id: 'desktop',
-      provider_changes: [{ id: 'chatgpt', approved: true }],
-      revision: 2,
-    },
-  ]);
-});
+}
 
 test('Provider approval creates one show-once client for every current route', async ({ page }) => {
   const routeDefaults = {

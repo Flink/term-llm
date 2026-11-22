@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/term-llm/term-llm/internal/app/proxy/deviceflow"
 )
 
 const accountSchema = `CREATE TABLE accounts (name TEXT PRIMARY KEY, kind TEXT NOT NULL, state TEXT NOT NULL, generation INTEGER NOT NULL, expires INTEGER NOT NULL, updated INTEGER NOT NULL, data TEXT NOT NULL);`
@@ -13,25 +15,26 @@ const accountSchema = `CREATE TABLE accounts (name TEXT PRIMARY KEY, kind TEXT N
 // AccountInfo is the entire public account representation. Credentials, identity
 // IDs, fixture endpoints and bootstrap paths must never be exported.
 type AccountInfo struct {
-	Name       string `json:"name"`
-	Kind       string `json:"kind"`
-	AuthMode   string `json:"auth_mode,omitempty"`
-	State      string `json:"state"`
-	Generation int64  `json:"generation"`
-	ExpiresAt  int64  `json:"expires_at,omitempty"`
-	Updated    int64  `json:"updated"`
+	DeviceReconnect deviceflow.Reconnect `json:"device_reconnect,omitempty"`
+	Name            string               `json:"name"`
+	Kind            string               `json:"kind"`
+	AuthMode        string               `json:"auth_mode,omitempty"`
+	State           string               `json:"state"`
+	Generation      int64                `json:"generation"`
+	ExpiresAt       int64                `json:"expires_at,omitempty"`
+	Updated         int64                `json:"updated"`
 }
 
 type accountRecord struct {
 	AccountInfo
-	credentials         accountCredentials
-	operator            accountOperator
-	endpoint            string
-	identityVersion     int64
-	chatGPTIdentityHash string // only retained when ChatGPT credentials are cleared
-	refresh             accountRefreshState
-	claudeSharedID      string
-	claudeSharedCipher  []byte
+	credentials        accountCredentials
+	operator           accountOperator
+	endpoint           string
+	identityVersion    int64
+	identityHash       string // provider-scoped digest retained across sign-out
+	refresh            accountRefreshState
+	claudeSharedID     string
+	claudeSharedCipher []byte
 }
 type accountPrivate struct {
 	Credentials         accountCredentials  `json:"credentials"`
@@ -39,15 +42,22 @@ type accountPrivate struct {
 	Endpoint            string              `json:"endpoint,omitempty"`
 	Refresh             accountRefreshState `json:"refresh,omitempty"`
 	IdentityVersion     int64               `json:"identity_version,omitempty"`
+	IdentityHash        string              `json:"device_identity_hash,omitempty"`
 	ChatGPTIdentityHash string              `json:"chatgpt_identity_hash,omitempty"`
 	ClaudeSharedID      string              `json:"claude_shared_id,omitempty"`
 	ClaudeSharedCipher  []byte              `json:"claude_shared_cipher,omitempty"`
 }
 
 func (s *store) account(name string) (accountRecord, error) {
+	return scanAccount(s.db.QueryRow("SELECT "+accountColumns+" FROM accounts WHERE name=?", name))
+}
+
+const accountColumns = "name,kind,state,generation,expires,updated,data"
+
+func scanAccount(row interface{ Scan(...any) error }) (accountRecord, error) {
 	var a accountRecord
 	var data string
-	err := s.db.QueryRow("SELECT name,kind,state,generation,expires,updated,data FROM accounts WHERE name=?", name).Scan(&a.Name, &a.Kind, &a.State, &a.Generation, &a.ExpiresAt, &a.Updated, &data)
+	err := row.Scan(&a.Name, &a.Kind, &a.State, &a.Generation, &a.ExpiresAt, &a.Updated, &data)
 	if err != nil {
 		return a, err
 	}
@@ -58,30 +68,27 @@ func (s *store) account(name string) (accountRecord, error) {
 	a.credentials, a.operator, a.endpoint = private.Credentials, private.Operator, private.Endpoint
 	a.refresh = private.Refresh
 	a.identityVersion = private.IdentityVersion
-	a.chatGPTIdentityHash = private.ChatGPTIdentityHash
+	a.identityHash = private.IdentityHash
+	if a.Kind == "chatgpt" {
+		a.identityHash = private.ChatGPTIdentityHash
+	}
 	a.claudeSharedID, a.claudeSharedCipher = private.ClaudeSharedID, private.ClaudeSharedCipher
-	applyAccountAuthInfo(&a.AccountInfo, private)
+	a.AccountInfo = a.publicInfo()
 	return a, nil
 }
 func (s *store) accountInfos() ([]AccountInfo, error) {
-	rows, err := s.db.Query("SELECT name,kind,state,generation,expires,updated,data FROM accounts ORDER BY name")
+	rows, err := s.db.Query("SELECT " + accountColumns + " FROM accounts ORDER BY name")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []AccountInfo{}
 	for rows.Next() {
-		var a AccountInfo
-		var data string
-		if err = rows.Scan(&a.Name, &a.Kind, &a.State, &a.Generation, &a.ExpiresAt, &a.Updated, &data); err != nil {
+		a, err := scanAccount(rows)
+		if err != nil {
 			return nil, err
 		}
-		var private accountPrivate
-		if err = json.Unmarshal([]byte(data), &private); err != nil {
-			return nil, err
-		}
-		applyAccountAuthInfo(&a, private)
-		out = append(out, a)
+		out = append(out, a.AccountInfo)
 	}
 	return out, rows.Err()
 }
@@ -123,7 +130,13 @@ func (s *store) accountWrite(ctx context.Context, fn func(*sql.Tx) error) error 
 	return nil
 }
 func encodeAccount(a accountRecord) ([]byte, error) {
-	return json.Marshal(accountPrivate{Credentials: a.credentials, Operator: a.operator, Endpoint: a.endpoint, Refresh: a.refresh, IdentityVersion: a.identityVersion, ChatGPTIdentityHash: a.chatGPTIdentityHash, ClaudeSharedID: a.claudeSharedID, ClaudeSharedCipher: a.claudeSharedCipher})
+	private := accountPrivate{Credentials: a.credentials, Operator: a.operator, Endpoint: a.endpoint, Refresh: a.refresh, IdentityVersion: a.identityVersion, ClaudeSharedID: a.claudeSharedID, ClaudeSharedCipher: a.claudeSharedCipher}
+	if a.Kind == "chatgpt" {
+		private.ChatGPTIdentityHash = a.identityHash
+	} else {
+		private.IdentityHash = a.identityHash
+	}
+	return json.Marshal(private)
 }
 func insertAccount(ctx context.Context, tx *sql.Tx, a accountRecord) error {
 	var n int
@@ -190,6 +203,9 @@ func (s *store) interruptAccounts(ctx context.Context) error {
 	})
 }
 
-func applyAccountAuthInfo(info *AccountInfo, private accountPrivate) {
-	info.AuthMode = accountAuthMode(info.Kind, private.Credentials)
+func (a accountRecord) publicInfo() AccountInfo {
+	info := a.AccountInfo
+	info.AuthMode = accountAuthMode(a.Kind, a.credentials)
+	info.DeviceReconnect = deviceflow.ReconnectEligibility(a.Kind, a.operator.Issuer != "" || a.operator.ClientID != "" || len(a.operator.Origins) != 0, a.credentials.AccountID != "" || a.identityHash != "")
+	return info
 }

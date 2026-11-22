@@ -13,9 +13,8 @@ import (
 	"github.com/term-llm/term-llm/internal/proxyprofile"
 )
 
-// Presets project the native routing table except for the explicitly combined
-// OpenCode Go preset. All other route identities, authentication, billing,
-// transport and custody kinds remain faithful; gated profiles are not offered.
+// Presets keep their profile's authentication, billing, transport and custody
+// settings. Gated and legacy-only profiles are not offered for creation.
 func TestRoutePresetsProjectProfiles(t *testing.T) {
 	presets := map[string]routePreset{}
 	for _, preset := range routePresets {
@@ -26,9 +25,9 @@ func TestRoutePresetsProjectProfiles(t *testing.T) {
 	}
 	for _, p := range proxyprofile.All() {
 		preset, ok := presets[p.ID]
-		if p.Gate != "" || p.Account != "" && !accountKind(p.Account) || p.ID == "opencode-go-messages" || p.ID == "opencode-go-gemini" {
+		if p.Gate != "" || p.Account != "" && !accountKind(p.Account) || p.ID == "grok-bin" || p.ID == "opencode-go-messages" || p.ID == "opencode-go-gemini" {
 			if ok {
-				t.Errorf("%s is gated or has no custody support but is offered as a preset", p.ID)
+				t.Errorf("%s must not be offered as a creation preset", p.ID)
 			}
 			continue
 		}
@@ -230,7 +229,7 @@ func TestRoutePresetGroupsAndCompanions(t *testing.T) {
 		"ollama": "inference", "vllm": "inference", "openai-compatible": "inference", "elevenlabs": "media",
 		"jina": "embeddings", "jina-reader": "embeddings", "voyage": "embeddings", "mistral": "inference",
 		"typesafe": "classification", "openai-decisions": "classification", "cloudflare-clef": "classification",
-		"chatgpt-openai": "inference", "gemini-live": "inference", "grok-bin": "inference", "exa": "search", "exa-mcp": "search", "brave": "search",
+		"chatgpt-openai": "inference", "gemini-live": "inference", "grok": "inference", "exa": "search", "exa-mcp": "search", "brave": "search",
 	}
 	for id, group := range want {
 		if byID[id].Family != group {
@@ -238,7 +237,7 @@ func TestRoutePresetGroupsAndCompanions(t *testing.T) {
 		}
 	}
 	companions := map[string][]string{
-		"chatgpt": {"chatgpt-backend", "chatgpt-openai"}, "gemini": {"gemini-live"}, "grok": {"grok-bin"},
+		"chatgpt": {"chatgpt-backend", "chatgpt-openai"}, "gemini": {"gemini-live"},
 		"exa": {"exa-mcp"}, "jina": {"jina-reader"},
 	}
 	for _, p := range routePresets {

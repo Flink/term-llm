@@ -168,13 +168,18 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
                 guided && preset ? card(`Set up ${presetLabel(preset)}`, guided) : manualForm();
               if (guided && nativeProvider(preset?.account_kind))
                 panel.append(actions(button('Cancel', close)));
-              // Guided sign-in is the default. Existing operators can still
-              // attach a manually imported ChatGPT account to a new route.
-              if (guided && preset?.account_kind === 'chatgpt') {
+              const kind = preset?.account_kind;
+              const manualAction =
+                kind === 'chatgpt'
+                  ? 'Import credentials or use a saved account'
+                  : kind === 'grok' && state.accounts?.some((account) => account.kind === kind)
+                    ? 'Use a saved account'
+                    : undefined;
+              if (guided && manualAction) {
                 panel.append(
                   disclosure(
                     'Advanced',
-                    button('Use an existing account manually', () => {
+                    button(manualAction, () => {
                       if (blocked()) return;
                       composer.replaceChildren(manualForm());
                       composer.querySelector('input')?.focus();
@@ -372,7 +377,9 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
       list.append(providerRouteLine(route));
       if (route.account && !seenAccounts.has(route.account) && !native) {
         seenAccounts.add(route.account);
-        const account = routeAccountTools(route, preset?.account_kind);
+        // Legacy Grok CLI routes no longer have a picker preset.
+        const kind = preset?.account_kind ?? (route.profile === 'grok-bin' ? 'grok' : undefined);
+        const account = routeAccountTools(route, kind);
         const signIn = providerRouteAction(route, state, api, componentContext());
         if (signIn || account) {
           const settings = el('div', el('h4', 'Account'));

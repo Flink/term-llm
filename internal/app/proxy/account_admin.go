@@ -61,13 +61,12 @@ func (s *Service) accountsAPI(w http.ResponseWriter, r *http.Request, sess sessi
 			return
 		}
 		next := old
-		if old.Kind == "chatgpt" {
-			next.chatGPTIdentityHash = chatGPTAccountIdentityHash(old)
+		if old.Kind == "chatgpt" || old.Kind == "grok" {
+			next.identityHash = accountIdentityHash(old)
 		}
 		next.credentials = accountCredentials{}
 		if nativeProviderForKind(old.Kind) != nil {
 			next.credentials.Mode = old.credentials.Mode
-			next.AuthMode = old.AuthMode
 		}
 		next.claudeSharedCipher = nil
 		next.identityVersion++
@@ -81,7 +80,7 @@ func (s *Service) accountsAPI(w http.ResponseWriter, r *http.Request, sess sessi
 			return
 		}
 		s.cancelAccountSockets(in.Name)
-		jsonReply(w, 200, map[string]any{"account": next.AccountInfo})
+		jsonReply(w, 200, map[string]any{"account": next.publicInfo()})
 		return
 	}
 	if exists && (r.Method == http.MethodPost || !in.Replace) {
@@ -130,7 +129,6 @@ func (s *Service) accountsAPI(w http.ResponseWriter, r *http.Request, sess sessi
 	if nativeProviderForKind(next.Kind) != nil {
 		next = newNativeAccount(in.Name, in.Kind)
 	}
-	next.AuthMode = accountAuthMode(next.Kind, next.credentials)
 	if err = s.store.replaceAccount(r.Context(), next, expected); err != nil {
 		fail(w, 503, "Could not durably store account")
 		return
@@ -141,7 +139,7 @@ func (s *Service) accountsAPI(w http.ResponseWriter, r *http.Request, sess sessi
 	if !exists {
 		status = 201
 	}
-	jsonReply(w, status, map[string]any{"account": next.AccountInfo})
+	jsonReply(w, status, map[string]any{"account": next.publicInfo()})
 }
 
 // whoami is caller-token-only and deliberately matched before the browser admin

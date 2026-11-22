@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-
-	"github.com/term-llm/term-llm/internal/proxyprofile"
 )
 
 type providerCreateInput struct {
@@ -81,10 +79,6 @@ func addPresetProvider(c *Config, in providerCreateInput) error {
 	offered := providerPresetCompanions(preset)
 	if len(in.Routes) == 0 {
 		for _, profile := range offered {
-			p, _ := proxyprofile.ByID(profile)
-			if in.Name != in.Preset && profile != in.Preset && proxyprofile.InferenceCapable(p) {
-				continue
-			}
 			name := profile
 			if profile == in.Preset {
 				name = in.Name

@@ -257,7 +257,7 @@ export function routeForm(
     );
     if (accountKind && !nativeProvider(accountKind) && !account.disabled)
       accountField.append(
-        button('Connect new account', () =>
+        button('Import account credentials', () =>
           accountDialog({ state, api, context }, formRoot, accountKind, (stored) => {
             const option = el('option', `${stored.name} · ${accountStateLabel(stored)}`);
             option.value = stored.name;

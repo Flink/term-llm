@@ -20,7 +20,7 @@ term-llm serve proxy
 2. Run the printed `cat` command, paste the bootstrap token, name your passkey and
    enroll. The token expires ten minutes after startup; restart if it expires.
 3. Open **Providers → Add provider** and choose a preset. The preset asks for only
-   what it needs: sign in for ChatGPT, [sign in once for Claude Code](#set-up-a-shared-claude-subscription),
+   what it needs: sign in for ChatGPT or [Grok](#share-a-grok-subscription), [sign in once for Claude Code](#set-up-a-shared-claude-subscription),
    [sign in once for personal Antigravity](#run-personal-antigravity-through-the-proxy),
    or add an API key for a service like Venice.
 4. Open **Manage** on the new provider card, then choose **Approve access for**
@@ -87,6 +87,9 @@ bookmarks still open **Providers**. The public management API is route-based.
    app or device for the provider's current routes. A successful provider
    sign-in does not give any new client access by itself.
 
+If your workspace disables device-code sign-in, **Advanced** in ChatGPT setup
+lets you import credentials manually, even on a new proxy.
+
 Use **Manage → Reconnect ChatGPT** to renew the login without changing client
 approvals. Use a distinct name when setting up a separate ChatGPT account. The
 main route is enough for chat; the other routes cover usage, dictation,
@@ -95,6 +98,29 @@ route is added later, approve the provider again for clients that need it. A
 ChatGPT subscription is separate from the **OpenAI API** key preset. To route
 only ChatGPT through the proxy in term-llm, [configure the client allowlist](#using-term-llm-as-a-client)
 with `providers: [chatgpt]`.
+
+## Share a Grok subscription
+
+1. Choose **Providers → Add provider → Grok**, then **Sign in to Grok**.
+2. Open the xAI verification page, enter the one-time code and approve the
+   request. The proxy stores the login and creates one Grok plan route (`/grok/`
+   by default).
+3. Under **Manage**, approve the apps or devices that should use the plan.
+   With the proxy URL and client token configured, try `term-llm models --provider grok`.
+   If the client has a `proxy.providers` allowlist, include `grok`.
+
+Neither the proxy nor its clients need the Grok Build CLI or a local Grok login.
+You don't need to paste tokens. If the proxy already holds a Grok login, you can
+choose **Advanced → Use a saved account** instead of signing in again.
+`grok-bin` is a separate adapter for running that CLI; new proxy setups don't
+create a route for it. Existing `grok-bin` routes and their approvals are
+unchanged. Choose **xAI API** instead if you want to use a developer API key.
+
+**Manage → Reconnect Grok** renews the same account, including for file-managed
+routes, without changing approvals. If a Grok account was already signed out
+before the proxy began retaining its identity, it cannot verify a reconnect.
+Create a separately named provider for the account and explicitly approve the
+clients that need it. For file-managed routes, have the operator make the change.
 
 ## Run native Claude Code through the proxy
 
@@ -521,7 +547,7 @@ Search do not have proxy presets.
 Under **Providers**, open **Manage** on a provider and choose **Edit → Advanced**;
 manual credential JSON is still supported for
 `chatgpt`, `grok`, `copilot` and `aws-sigv4`. Use the guided sign-in for new
-ChatGPT plan routes.
+ChatGPT and Grok plan routes.
 Select the account when creating its route. Credentials are write-only; metadata
 contains state, mode and expiry. Account-managed headers cannot also have static
 substitutions. Origins and API paths are restricted to that integration. Sign-out

@@ -59,7 +59,7 @@ func TestChatGPTAccountLiveSideband(t *testing.T) {
 	}
 	chat, _ := routePresetByID("chatgpt")
 	sideband, _ := routePresetByID("chatgpt-openai")
-	configure(t, s, Config{Routes: []Route{chatGPTPresetRoute(chat, chat.ID, a.Name), chatGPTPresetRoute(sideband, sideband.ID, a.Name)}}, nil)
+	configure(t, s, Config{Routes: []Route{devicePresetRoute(chat, chat.ID, a.Name), devicePresetRoute(sideband, sideband.ID, a.Name)}}, nil)
 	token := caller(t, s, chat.ID, sideband.ID)
 
 	req := httptest.NewRequest(http.MethodPost, "/chatgpt/realtime/calls", strings.NewReader("offer"))

@@ -26,7 +26,7 @@ type routePreset struct {
 	Family      string            `json:"family"`
 	Allow       []string          `json:"allow,omitempty"`
 	// Companions are presets created beside this one so ancillary client
-	// features (dictation, embeddings, live, CLI) reach their fixed route names.
+	// features (dictation, embeddings, live) reach their fixed route names.
 	// A companion is never offered on its own in the picker.
 	Companions []string `json:"companions,omitempty"`
 }
@@ -38,8 +38,8 @@ type routePresetRule struct {
 	Allow      []string `json:"allow,omitempty"`
 }
 
-// routePresets projects the native profiles, combining OpenCode Go's protocols
-// only for new creation. Existing single-upstream routes remain unchanged.
+// routePresets projects the profiles offered for new routes. Existing routes
+// continue to use their original profiles for validation and client discovery.
 var routePresets = presetsFromProfiles(proxyprofile.All())
 
 // presetNotes holds operator guidance that the routing table does not carry.
@@ -74,7 +74,13 @@ func presetsFromProfiles(profiles []proxyprofile.Profile) []routePreset {
 		// A gated profile has no verified credentialless path; offering it would
 		// claim an integration the proxy cannot deliver. An account kind without
 		// proxy custody support cannot be selected either.
-		if p.Gate != "" || p.Account != "" && !accountKind(p.Account) || p.ID == "opencode-go-messages" || p.ID == "opencode-go-gemini" {
+		if p.Gate != "" || p.Account != "" && !accountKind(p.Account) {
+			continue
+		}
+		// Keep these profiles readable for existing routes, but do not offer
+		// them as presets or provision them alongside a new plan.
+		switch p.ID {
+		case "grok-bin", "opencode-go-messages", "opencode-go-gemini":
 			continue
 		}
 		preset := routePreset{ID: p.ID, Label: p.Label, Upstream: p.Upstream, Auth: Auth{Header: p.Header, Prefix: p.Prefix}, Note: presetNotes[p.ID], Billing: p.Billing, WebSocket: p.WebSocket, AccountKind: p.Account, Family: p.Family, Allow: slices.Clone(p.Allow)}

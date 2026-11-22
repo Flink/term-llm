@@ -62,7 +62,7 @@ type Service struct {
 	accountRedactions sync.Map
 	claudeNative      *claudeForwarder
 	agyNative         *claudeForwarder
-	chatgptSetup      chatGPTSetups
+	deviceSetup       deviceSetups
 	socketWG          sync.WaitGroup
 	closing           bool
 	// ResponseTap observes opt-in responses; set before serving.
@@ -210,7 +210,7 @@ func (s *Service) Close() error {
 		s.debugClosing = true
 		debugErr := s.payloadDebug.Close()
 		s.debugMu.Unlock()
-		s.chatgptSetup.close()
+		s.deviceSetup.close()
 		s.closeSockets()
 		s.transport.CloseIdleConnections()
 		var authErr error

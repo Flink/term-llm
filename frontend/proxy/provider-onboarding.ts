@@ -1,10 +1,4 @@
-import type {
-  ProxyChatGPTDeviceSignIn,
-  ProxyClient,
-  ProxyPreset,
-  ProxyRoute,
-  ProxyState,
-} from '../src/api/proxy-client';
+import type { ProxyClient, ProxyPreset, ProxyRoute, ProxyState } from '../src/api/proxy-client';
 import {
   legacyNativeNotice,
   nativeConnectionDetails,
@@ -13,165 +7,10 @@ import {
   routeSharedNativeAccount,
   type NativeProvider,
 } from './native';
-import { actions, button, disclosure, el, field, input, submit, type UIContext } from './dom';
+import { actions, button, el, type UIContext } from './dom';
 import { nativeSignInClientForm, type NativeSignInChoice } from './native-signin';
 
-import { requireProviderName, slugPattern } from './provider-name';
-
-const chatGPTDeviceURL = 'https://auth.openai.com/codex/device';
-
-function chatGPTSignIn(
-  state: ProxyState,
-  api: ProxyClient,
-  context: UIContext,
-  close: () => void,
-  route?: ProxyRoute,
-): HTMLElement {
-  const view = el('div');
-  view.className = 'provider-onboarding';
-  const name = input();
-  name.placeholder = 'chatgpt';
-  name.pattern = slugPattern;
-  name.maxLength = 64;
-  const form = el(
-    'form',
-    el(
-      'p',
-      route
-        ? 'Sign in again to renew this provider’s account. Existing client access stays in place.'
-        : 'Sign in with your ChatGPT subscription. The proxy keeps the login; you approve clients separately.',
-    ),
-  );
-  if (!route) {
-    form.append(disclosure('Provider name (optional)', field('Provider name', name)));
-    form.append(button('Cancel', close));
-  }
-  let active: string | undefined;
-
-  async function cancel(id: string) {
-    if (active !== id) return;
-    active = undefined;
-    await api.cancelChatGPTSetup(id);
-  }
-
-  function renderPrompt(signIn: ProxyChatGPTDeviceSignIn) {
-    const code = input(signIn.user_code);
-    code.readOnly = true;
-    const copy = button('Copy code', () => {
-      void context.run(async () => {
-        try {
-          await navigator.clipboard.writeText(code.value);
-          context.announce('ChatGPT sign-in code copied.');
-        } catch {
-          code.focus();
-          code.select();
-          context.announce('Copy the selected code manually.');
-        }
-      }, copy);
-    });
-    const link = el('a', 'Continue to OpenAI');
-    link.href = chatGPTDeviceURL;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    const back = button('Cancel sign-in', () => {
-      void context.run(async () => {
-        try {
-          await cancel(signIn.id);
-        } finally {
-          if (route) view.replaceChildren(form);
-          else close();
-        }
-      }, back);
-    });
-    const waiting = el('p', 'Waiting for you to finish signing in at OpenAI…');
-    waiting.role = 'status';
-    view.replaceChildren(
-      el('p', 'Open OpenAI, enter this code, and approve the sign-in. Then return here.'),
-      field('One-time sign-in code', code),
-      actions(copy, link, back),
-      waiting,
-    );
-    // Let the submit action settle before moving focus from its now-detached button.
-    link.focus();
-  }
-
-  function poll(id: string) {
-    window.setTimeout(() => {
-      if (active !== id) return;
-      if (!view.isConnected) {
-        void cancel(id).catch(() => {}); // Abandoned attempts also expire on the server.
-        return;
-      }
-      let ran = false;
-      void context
-        .run(async () => {
-          ran = true;
-          const result = await api.chatGPTSetupStatus(id);
-          if (active !== id || !view.isConnected) return;
-          if (result.status === 'pending') {
-            poll(id);
-            return;
-          }
-          active = undefined;
-          if (result.status === 'failed') {
-            view.replaceChildren(form);
-            const message =
-              result.error ===
-              'Sign in to the original ChatGPT account and workspace, or create a separate route'
-                ? result.error
-                : 'ChatGPT sign-in did not finish. Start again to get a fresh code.';
-            throw new Error(message);
-          }
-          const message = route
-            ? 'ChatGPT reconnected. Existing client access is unchanged.'
-            : 'ChatGPT connected. Approve clients for ChatGPT when you’re ready.';
-          // Don’t invite another sign-in if setup succeeded but the view refresh fails.
-          view.replaceChildren(el('p', message));
-          if (!context.hasProtectedToken?.()) {
-            const routeName = result.route ?? route?.name;
-            await context.refresh(routeName && `route:${routeName}`);
-          }
-          context.announce(message);
-        })
-        .then((ok) => {
-          if (!ran && active === id) {
-            poll(id);
-            return;
-          }
-          if (!ok && active === id && view.isConnected) {
-            void cancel(id).catch(() => {});
-            view.replaceChildren(form);
-          }
-        });
-    }, 2000);
-  }
-
-  submit(
-    form,
-    context,
-    async () => {
-      const requested = name.value.trim();
-      if (!route && requested) requireProviderName(requested, state);
-      const signIn = await api.startChatGPTSetup(
-        route ? { account: route.account } : requested ? { name: requested } : {},
-      );
-      active = signIn.id;
-      if (!view.isConnected) {
-        await cancel(signIn.id);
-        return;
-      }
-      if (signIn.verification_url !== chatGPTDeviceURL) {
-        await cancel(signIn.id);
-        throw new Error('Unexpected ChatGPT sign-in destination.');
-      }
-      renderPrompt(signIn);
-      poll(signIn.id);
-    },
-    route ? 'Reconnect ChatGPT' : 'Sign in to ChatGPT',
-  );
-  view.append(form);
-  return view;
-}
+import { deviceSignIn, isDeviceProvider } from './device-signin';
 
 type NativeIssue =
   | [use: 'shared-operator', route: ProxyRoute | undefined, choice: NativeSignInChoice]
@@ -329,7 +168,7 @@ export function providerOnboarding(
   context: UIContext,
   close: () => void,
 ): HTMLElement | undefined {
-  if (preset.id === 'chatgpt') return chatGPTSignIn(state, api, context, close);
+  if (isDeviceProvider(preset.id)) return deviceSignIn(preset.id, state, api, context, close);
   const provider = nativeProvider(preset.id);
   if (!provider) return;
   return nativeLauncherSetup(provider, state, api, context);
@@ -341,9 +180,9 @@ export function providerRouteAction(
   api: ProxyClient,
   context: UIContext,
 ): HTMLElement | undefined {
-  if (state.mode === 'file') return;
   const provider = routeNativeProvider(route, state);
   if (provider) {
+    if (state.mode === 'file') return;
     const shared = routeSharedNativeAccount(route, state);
     if (!shared) return el('p', legacyNativeNotice);
     if (!route.enabled) return;
@@ -392,8 +231,28 @@ export function providerRouteAction(
     return view;
   }
   const account = (state.accounts ?? []).find((value) => value.name === route.account);
-  if (account?.kind !== 'chatgpt') return;
-  const view = chatGPTSignIn(state, api, context, () => {}, route);
+  if (!account || !isDeviceProvider(account.kind)) return;
+  // Older UI-managed installs offered reconnect without capability metadata.
+  const legacyReady =
+    account.device_reconnect === undefined && state.mode === 'ui' && account.state === 'ready';
+  if (account.device_reconnect !== 'eligible' && !legacyReady) {
+    if (account.state !== 'needs_login') return;
+    if (account.device_reconnect === 'custom_settings') {
+      return el(
+        'p',
+        'This account uses custom settings. Use Replace credentials to renew the same account.',
+      );
+    }
+    if (account.device_reconnect !== 'missing_identity') {
+      return el('p', 'Device reconnect eligibility is unknown. Check with the proxy operator.');
+    }
+    const recovery =
+      state.mode === 'file'
+        ? 'Ask the operator to configure a new provider and approve clients for it again.'
+        : 'Create a new provider and approve clients for it again.';
+    return el('p', `The original account identity is unavailable. ${recovery}`);
+  }
+  const view = deviceSignIn(account.kind, state, api, context, () => {}, route);
   if (account.state !== 'ready') {
     const submitButton = view.querySelector<HTMLButtonElement>('button[type=submit]');
     if (submitButton) submitButton.className = 'primary';

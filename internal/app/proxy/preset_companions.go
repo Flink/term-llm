@@ -6,15 +6,15 @@ import (
 	"github.com/term-llm/term-llm/internal/providerspec"
 )
 
-// chatGPTPresetRoute is the standard route a ChatGPT device sign-in creates
+// devicePresetRoute is the standard route a device sign-in creates
 // for one preset: the account replaces any static key substitution.
-func chatGPTPresetRoute(preset routePreset, name, account string) Route {
+func devicePresetRoute(preset routePreset, name, account string) Route {
 	r := preset.newRoute(account, name, "")
 	r.Account = account
 	return r
 }
 
-func chatGPTCompanionRoutes(preset routePreset, account string, c Config) []Route {
+func deviceCompanionRoutes(preset routePreset, account string, c Config) []Route {
 	var out []Route
 	for _, id := range preset.Companions {
 		companion, ok := routePresetByID(id)
@@ -28,7 +28,7 @@ func chatGPTCompanionRoutes(preset routePreset, account string, c Config) []Rout
 				continue
 			}
 		}
-		r := chatGPTPresetRoute(companion, name, account)
+		r := devicePresetRoute(companion, name, account)
 		if !providerSlugAvailable(c, name, id) || routeSlotTaken(r, c.Routes) {
 			continue
 		}

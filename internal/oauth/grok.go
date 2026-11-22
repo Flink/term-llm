@@ -435,7 +435,7 @@ func validateGrokVerificationURL(value string) error {
 		return errors.New("invalid Grok verification URL")
 	}
 	host := strings.ToLower(parsed.Hostname())
-	if host != "x.ai" && !strings.HasSuffix(host, ".x.ai") {
+	if (host != "x.ai" && !strings.HasSuffix(host, ".x.ai")) || (parsed.Port() != "" && parsed.Port() != "443") {
 		return errors.New("invalid Grok verification URL host")
 	}
 	return nil

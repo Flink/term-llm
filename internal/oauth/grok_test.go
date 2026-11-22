@@ -254,6 +254,8 @@ func TestGrokDeviceVerificationURLValidation(t *testing.T) {
 	}{
 		{name: "accounts", uri: "https://accounts.x.ai/device", code: "ABCD-EFGH", ok: true},
 		{name: "ASCII lowercase", uri: "https://accounts.x.ai/device", code: "ab12-CD34", ok: true},
+		{name: "default HTTPS port", uri: "https://accounts.x.ai:443/device", code: "ABCD", ok: true},
+		{name: "other HTTPS port", uri: "https://accounts.x.ai:8443/device", code: "ABCD"},
 		{name: "auth subdomain", uri: "https://auth.x.ai/device", code: "ABCD", ok: true},
 		{name: "user code space", uri: "https://accounts.x.ai/device", code: "ABCD EFGH"},
 		{name: "user code punctuation", uri: "https://accounts.x.ai/device", code: "ABCD_EFGH"},

@@ -28,3 +28,21 @@ func TestGrokAccountAllowsNativeAndCLIInferenceButNotAdministration(t *testing.T
 		}
 	}
 }
+
+// A preset change is not a migration. Previously saved CLI routes still compile
+// as part of Grok and are discoverable under their own identity and grant.
+func TestLegacyGrokCLIGrantDoesNotExposePlanRoute(t *testing.T) {
+	s := testService(t)
+	plan := providerTestRoute(t, "grok", "shared")
+	cli := plan
+	cli.Name, cli.Profile, cli.LocalPrefix = "grok-bin", "grok-bin", "/grok-bin/"
+	configure(t, s, Config{Routes: []Route{plan, cli}}, nil)
+	req := httptest.NewRequest("GET", "/_proxy/client/v2/providers", nil)
+	req.Header.Set("Authorization", "Bearer "+caller(t, s, cli.Name))
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	out := proxyResponse[struct{ Providers []clientProviderInfo }](t, w, 200)
+	if len(out.Providers) != 1 || out.Providers[0].ID != "grok" || len(out.Providers[0].Routes) != 1 || out.Providers[0].Routes[0].Profile != "grok-bin" {
+		t.Fatalf("unexpected discovery for existing CLI-only grant: %+v", out.Providers)
+	}
+}

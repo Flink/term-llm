@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/term-llm/term-llm/internal/app/proxy/deviceflow"
 	"github.com/term-llm/term-llm/internal/oauth"
 )
 
@@ -210,7 +211,7 @@ func (s *Service) exchangeAccount(ctx context.Context, a accountRecord) (account
 	issuerTransport.MaxConnsPerHost = 1
 	defer issuerTransport.CloseIdleConnections()
 	// Fixed endpoints, no environment proxy, no redirects, bounded body/deadline.
-	client := &http.Client{Transport: issuerTransport, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := deviceflow.IssuerHTTPClient(issuerTransport)
 	var connected atomic.Bool
 	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { connected.Store(true) }}))
 	resp, err := client.Do(req)

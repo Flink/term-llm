@@ -85,17 +85,19 @@ export function providerForm(
   );
   if (kind) {
     account.required = true;
-    form.append(
-      field('Trusted account', account),
-      button('Connect new account', () => {
-        accountDialog({ state, api, context }, view, kind, (stored) => {
-          const option = el('option', `${stored.name} · ${accountStateLabel(stored)}`);
-          option.value = stored.name;
-          account.append(option);
-          account.value = stored.name;
-        });
-      }),
-    );
+    form.append(field('Trusted account', account));
+    // Grok credentials come from sign-in; this form can only link a saved Grok account.
+    if (kind !== 'grok')
+      form.append(
+        button('Import account credentials', () => {
+          accountDialog({ state, api, context }, view, kind, (stored) => {
+            const option = el('option', `${stored.name} · ${accountStateLabel(stored)}`);
+            option.value = stored.name;
+            account.append(option);
+            account.value = stored.name;
+          });
+        }),
+      );
   } else if (usesKey) {
     if (!optionalKey && state.secrets.some((s) => s.name === preset.id)) source.value = 'existing';
     const keyField = field('API key', value, 'Stored once under the provider name.');
@@ -137,7 +139,7 @@ export function providerForm(
           (candidate) => candidate.kind === kind && candidate.name === account.value,
         )
       )
-        throw new Error(`Choose an existing ${kind} account, or connect a new one first.`);
+        throw new Error(`Choose a saved ${kind} account.`);
       if (usesKey && source.value === 'new') {
         if (state.secrets.some((s) => s.name === id))
           throw new Error(
@@ -159,7 +161,6 @@ export function providerForm(
           },
         ];
         for (const companion of preset.companions ?? []) {
-          if (id !== preset.id && companion === 'grok-bin') continue; // A second inference route is canonical-only.
           request.routes.push({
             name: id === preset.id ? companion : `${id}-${companion.replace(`${preset.id}-`, '')}`,
             profile: companion,
