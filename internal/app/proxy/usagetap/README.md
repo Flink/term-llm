@@ -56,14 +56,16 @@ response URL evidence does not qualify. Other providers never use this adapter.
 Only identity-encoded JSON or SSE is supported (including bounded framing
 inference when `Content-Type` is absent).
 
-The charge comes from `usage.cost` in the JSON response or the final SSE data
-chunk before an optional `[DONE]`. A root `cost` is ignored. The final chunk
-replaces earlier candidates; cumulative or replayed values are never added
-across chunks. `usd` and `diem` are nonnegative JSON numbers (either or both
-may be present). At 1 DIEM = 1 USD, sum exact decimals before rounding half-up
-to USD micros. The cost object is bounded to 512 bytes, each numeric token to
-64 bytes and its exponent to ±64. Duplicate charge fields, unknown denominations,
-invalid amounts, overflow, framing loss, and incomplete transport give no charge.
+The charge comes from a top-level `cost` or from `usage.cost` in the JSON
+response or final SSE data chunk before an optional `[DONE]`. If both fields
+are present, only `usage.cost` is used. The final chunk replaces earlier
+candidates; cumulative or replayed values are never added across chunks.
+`usd` and `diem` are nonnegative JSON numbers (either or both may be present);
+`diam` is ignored. At 1 DIEM = 1 USD, sum exact decimals before rounding half-up
+to USD micros. The cost object is bounded to 512 bytes, each counted numeric
+token to 64 bytes and its exponent to ±64. Duplicate charge fields, unknown
+denominations other than `diam`, invalid counted amounts, overflow, framing
+loss, and incomplete transport give no charge.
 
 `Usage.VeniceCostMicros` (`venice_cost_micros` in JSON) is omitted when no valid
 charge was observed. A non-nil zero is real evidence. Charge validity does not

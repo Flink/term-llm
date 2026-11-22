@@ -765,9 +765,10 @@ prices. `TERM_LLM_OFFLINE` disables background refresh. Price details show the
 source and retrieval date. Missing rates/counts stay unknown; no fuzzy matching,
 automatic FX or invented invoice charges.
 
-For Venice chat completions, the proxy uses `usage.cost` from the response,
-including the final usage chunk of a stream. It adds `usd` and `diem` at
-**1 DIEM = US$1** and rounds the sum once to the nearest millionth of a dollar.
+For Venice chat completions, the proxy reads top-level `cost` or `usage.cost`
+from the response, including the final usage chunk of a stream. It adds `usd`
+and `diem` at **1 DIEM = US$1**, ignores `diam`, and rounds the sum once to the
+nearest millionth of a dollar.
 For example, `{"usd":0,"diem":0.0002498}` records **US$0.000250**. This is a
 provider-reported cost, not a token-price estimate. Raw payload capture is not
 required, and previously recorded requests are not repriced.

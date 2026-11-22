@@ -508,7 +508,7 @@ func reportedVeniceMoney(rec *Record, in MoneyInput) *Money {
 	in.Charge = &MoneyCharge{
 		AmountMicros: *amount,
 		Currency:     "USD",
-		Source:       "Venice reported usage.cost (1 DIEM = 1 USD)",
+		Source:       "Venice reported cost (1 DIEM = 1 USD)",
 		AsOf:         time.UnixMilli(rec.Ended).UTC().Format(time.DateOnly),
 	}
 	money := CalculateMoney(in, nil)

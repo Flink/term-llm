@@ -68,8 +68,14 @@ func TestVeniceChargeJSON(t *testing.T) {
 		{"duplicate denomination", `{"usage":{"cost":{"usd":0,"\u0075sd":0}}}`, -1, Unknown},
 		{"duplicate cost", `{"usage":{"cost":{"usd":2},"\u0063ost":{"usd":0}}}`, -1, Unknown},
 		{"duplicate usage", `{"usage":null,"\u0075sage":{"cost":{"usd":0}}}`, -1, Unknown},
-		{"root cost unsupported", `{"cost":{"usd":0.1},"usage":{"prompt_tokens":1}}`, -1, Reported},
-		{"ignore root alias", `{"cost":{"usd":0.1},"usage":{"cost":{"usd":0.000001}}}`, 1, Unknown},
+		{"ignore diam", `{"usage":{"cost":{"usd":0.125,"diem":0.25,"diam":10}}}`, 375_000, Unknown},
+		{"diam only is not a charge", `{"usage":{"cost":{"diam":0}}}`, -1, Unknown},
+		{"root cost", `{"cost":{"usd":0.1},"usage":{"prompt_tokens":1}}`, 100_000, Reported},
+		{"root cost without counters", `{"cost":{"usd":0.1}}`, 100_000, Unknown},
+		{"duplicate usage with root cost", `{"cost":{"usd":0},"usage":{"cost":{"usd":2}},"\u0075sage":null}`, -1, Unknown},
+		{"duplicate root cost", `{"cost":{"usd":2},"\u0063ost":{"usd":0}}`, -1, Unknown},
+		{"prefer nested cost when both are present", `{"cost":{"usd":0.1},"usage":{"cost":{"usd":0.000001}}}`, 1, Unknown},
+		{"duplicate nested cost with root cost", `{"cost":{"usd":0},"usage":{"cost":{"usd":2},"\u0063ost":{"usd":0}}}`, -1, Unknown},
 		{"malformed JSON", `{"usage":{"cost":{"usd":0.001}}`, -1, Unknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -91,12 +97,20 @@ func TestVeniceChargeJSON(t *testing.T) {
 func TestVeniceChargeFinalSSE(t *testing.T) {
 	const earlier = "data: {\"usage\":{\"cost\":{\"diem\":0.00005}}}\r\n\r\n"
 	const final = "data: {\"choices\":[],\r\ndata: \"usage\":{\"prompt_tokens\":1204,\"cost\":{\"usd\":0,\"diem\":0.0002498}}}\r\n\r\n"
+	const rootCost = `data: {"model":"gemini-4-carbon","choices":[{"delta":{"content":"Hello!"}}]}
+
+data: {"model":"gemini-4-carbon","choices":[{"delta":{},"finish_reason":"stop"}]}
+
+data: {"model":"gemini-4-carbon","choices":[],"usage":{"prompt_tokens":1674,"completion_tokens":163,"total_tokens":1837},"cost":{"usd":0,"diem":0.006222500000000001}}
+
+`
 	const done = "data: [DONE]\r\n\r\n"
 	for _, tc := range []struct {
 		name, data string
 		complete   bool
 		want       int64
 	}{
+		{"top-level cost on final usage chunk", rootCost + done, true, 6223},
 		{"cumulative replay", earlier + final + final + done + ": keepalive\n\n", true, 250},
 		{"final without DONE", earlier + final, true, 250},
 		{"no cost on final chunk", earlier + "data: {\"usage\":null}\n\n" + done, true, -1},

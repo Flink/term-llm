@@ -20,7 +20,7 @@ type veniceCharge struct {
 	present, bad, sawDone bool
 }
 
-// ForVeniceChatCompletions enables usage.cost parsing for an HTTP response.
+// ForVeniceChatCompletions enables provider cost parsing for an HTTP response.
 // The caller must first authenticate the route, response origin and endpoint.
 // Only JSON and SSE are supported for the charge (including detected framing).
 func ForVeniceChatCompletions(contentType string) *Parser {
@@ -31,40 +31,56 @@ func ForVeniceChatCompletions(contentType string) *Parser {
 	return p
 }
 
-func (v *veniceCharge) observe(data []byte, usage json.RawMessage) {
+func (v *veniceCharge) observe(data []byte, o object) {
 	v.present = false
-	if v.bad || v.sawDone || len(usage) == 0 || usage[0] != '{' {
+	if v.bad || v.sawDone {
 		return
 	}
-	cost := uniqueJSONField(usage, "cost")
+	var cost json.RawMessage
+	if usage := o["usage"]; len(usage) > 0 && usage[0] == '{' {
+		var ok bool
+		cost, ok = uniqueJSONField(usage, "cost")
+		if !ok {
+			return
+		}
+	}
+	// Venice also reports cost as a sibling of usage. Prefer usage.cost if
+	// present so the two representations are never added together.
+	if cost == nil && o["cost"] != nil {
+		cost, _ = uniqueJSONField(data, "cost")
+	}
 	total := veniceCostTotal(cost)
-	if total == nil || uniqueJSONField(data, "usage") == nil {
+	if total == nil {
+		return
+	}
+	if _, ok := uniqueJSONField(data, "usage"); !ok {
 		return
 	}
 	v.micros, v.present = roundVeniceMicros(total)
 }
 
 // uniqueJSONField avoids the last-key-wins behavior of a map for charge fields.
-// The caller has already checked that the enclosing event is valid JSON.
-func uniqueJSONField(data []byte, field string) json.RawMessage {
+// It returns nil, true for an absent field and nil, false for ambiguity or an
+// invalid object. The caller has already checked that the event is valid JSON.
+func uniqueJSONField(data []byte, field string) (json.RawMessage, bool) {
 	d := json.NewDecoder(bytes.NewReader(data))
 	if first, err := d.Token(); err != nil || first != json.Delim('{') {
-		return nil
+		return nil, false
 	}
 	var found, value json.RawMessage
 	for d.More() {
 		key, err := d.Token()
 		if err != nil || d.Decode(&value) != nil {
-			return nil
+			return nil, false
 		}
 		if key == field {
 			if found != nil {
-				return nil
+				return nil, false
 			}
 			found, value = value, nil
 		}
 	}
-	return found
+	return found, true
 }
 
 func veniceCostTotal(data []byte) *big.Rat {
@@ -80,14 +96,20 @@ func veniceCostTotal(data []byte) *big.Rat {
 	for d.More() {
 		token, err := d.Token()
 		key, _ := token.(string)
-		if err != nil || (key != "diem" && key != "usd") || seen[key] {
+		if err != nil {
 			return nil
 		}
-		seen[key] = true
 		var value json.RawMessage
 		if d.Decode(&value) != nil {
 			return nil
 		}
+		if key == "diam" {
+			continue // DIAM is not included in the USD charge.
+		}
+		if (key != "diem" && key != "usd") || seen[key] {
+			return nil
+		}
+		seen[key] = true
 		amount := veniceAmount(value)
 		if amount == nil {
 			return nil

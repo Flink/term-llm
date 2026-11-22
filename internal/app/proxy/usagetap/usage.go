@@ -115,7 +115,7 @@ func (p *Parser) feedEvent(data []byte, turns *webSocketTurns) {
 		p.response(o, turns)
 	case ChatCompletions:
 		if p.venice != nil {
-			p.venice.observe(data, o["usage"])
+			p.venice.observe(data, o)
 		}
 		p.chatCompletion(o)
 	case Messages:

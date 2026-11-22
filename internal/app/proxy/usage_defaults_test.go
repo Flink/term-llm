@@ -40,18 +40,25 @@ func TestVeniceLegacyUsageDefault(t *testing.T) {
 }
 
 func TestVeniceRoutePersistsUsageAndReportedCharge(t *testing.T) {
-	const model = "venice-uncensored-1-2"
-	const request = `{"model":"` + model + `","stream_options":{"include_usage":true}}`
-	const usage = `{"model":"` + model + `","service_tier":"default","usage":{"prompt_tokens":562,"completion_tokens":2,"total_tokens":564,"prompt_tokens_details":{"cached_tokens":544},"cache_read_input_tokens":544`
+	const legacyModel = "venice-uncensored-1-2"
+	const usage = `{"model":"` + legacyModel + `","service_tier":"default","usage":{"prompt_tokens":562,"completion_tokens":2,"total_tokens":564,"prompt_tokens_details":{"cached_tokens":544},"cache_read_input_tokens":544`
 	const cost = `,"cost":{"usd":0,"diem":0.0002498}`
+	const terminalWithTopLevelCost = `{"model":"gemini-4-carbon","choices":[],"usage":{"prompt_tokens":1674,"completion_tokens":163,"total_tokens":1837},"cost":{"usd":0,"diem":0.006222500000000001}}`
 	for _, tc := range []struct {
 		name, billing, mode, cost, wantKind string
 		stream                              bool
+		terminal                            string
+		wantUsage                           usagetap.Usage
 		status                              int
 		wantAmount                          *int64
 	}{
 		{name: "legacy JSON", cost: cost, wantKind: "charged", wantAmount: moneyPtr(250)},
 		{name: "legacy SSE", stream: true, cost: cost, wantKind: "charged", wantAmount: moneyPtr(250)},
+		{
+			name: "SSE with top-level cost", stream: true, terminal: terminalWithTopLevelCost,
+			wantUsage: usagetap.Usage{Model: "gemini-4-carbon", Input: 1674, Output: 163, Total: 1837, CachedInput: -1},
+			wantKind:  "charged", wantAmount: moneyPtr(6223),
+		},
 		{name: "unspecified zero", billing: "unspecified", cost: `,"cost":{"usd":0,"diem":0}`, wantKind: "charged", wantAmount: moneyPtr(0)},
 		{name: "pay as you go", billing: "pay_as_you_go", cost: cost, wantKind: "charged", wantAmount: moneyPtr(250)},
 		{name: "no charge evidence", wantKind: "unspecified"},
@@ -63,6 +70,14 @@ func TestVeniceRoutePersistsUsageAndReportedCharge(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := usage + tc.cost + "}}"
+			wantUsage := tc.wantUsage
+			if tc.terminal != "" {
+				body = tc.terminal
+			} else {
+				wantUsage = usagetap.Usage{Model: legacyModel, Input: 562, Output: 2, Total: 564, CachedInput: 544}
+			}
+			model := wantUsage.Model
+			request := `{"model":"` + model + `","stream_options":{"include_usage":true}}`
 			status := tc.status
 			if status == 0 {
 				status = http.StatusOK
@@ -102,7 +117,7 @@ func TestVeniceRoutePersistsUsageAndReportedCharge(t *testing.T) {
 			r := route("custom-name", "/venice/", "https://api.venice.ai/api/v1", "X-Client-Key", "key")
 			r.SetHeaders = map[string]HeaderRule{"Authorization": {Secret: "key", Prefix: "Bearer "}}
 			r.Usage, r.Billing = tc.mode, tc.billing
-			// A matching card would estimate 564 micros, not the actual 250.
+			// A matching card would estimate the legacy usage at 564 micros, not the reported 250.
 			card := MoneyRate{Provider: r.Name, Model: model, Tier: "default", Currency: "USD", Source: "fixture card", AsOf: "2026-11-16", Input: moneyPtr(1000000), Output: moneyPtr(1000000), CacheRead: moneyPtr(1000000)}
 			secrets := map[string]material{"key": boundMaterial(t, r.Upstream, "synthetic-venice-key")}
 			snap, err := compile(fixtureProviders(Config{Routes: []Route{r}, Money: MoneySettings{Rates: []MoneyRate{card}}}), s.snap.revision+1, secrets)
@@ -135,7 +150,7 @@ func TestVeniceRoutePersistsUsageAndReportedCharge(t *testing.T) {
 					t.Fatal("Venice returned usage but the legacy route did not persist it")
 				}
 				u := rec.Usage.Usage
-				if u.Input != 562 || u.Output != 2 || u.Total != 564 || u.CachedInput != 544 || u.Model != model || u.Source != usagetap.Reported {
+				if u.Input != wantUsage.Input || u.Output != wantUsage.Output || u.Total != wantUsage.Total || u.CachedInput != wantUsage.CachedInput || u.Model != model || u.Source != usagetap.Reported {
 					t.Fatalf("wrong persisted usage: %+v", u)
 				}
 			}
