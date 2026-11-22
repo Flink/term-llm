@@ -95,6 +95,35 @@ func testReportedContextIsDisplayOnly(t *testing.T, withTools bool) {
 	}
 }
 
+func TestTrackedContextWindowRestoresAsDisplayFallback(t *testing.T) {
+	const providerName, modelName = "chatgpt", "test-model"
+	provider := &fakeProvider{}
+	e := NewEngine(provider, nil)
+	e.ConfigureContextManagement(provider, providerName, modelName, true)
+	e.SetContextEstimateBaseline(7_700, 4)
+	e.RestoreContextWindow(providerName, modelName, 272_000)
+	if got := e.ContextUsage(); got != (core.ContextUsage{UsedTokens: 7_700, Window: 272_000}) {
+		t.Fatalf("restored context = %+v", got)
+	}
+	if got := e.InputLimit(); got != 0 {
+		t.Fatalf("restored display window set engine input limit to %d", got)
+	}
+
+	// A newer effective input limit and usage supersede the saved reading.
+	e.SetContextTracking(200_000)
+	e.recordUsageBaseline(e.InputLimit(), &core.Usage{InputTokens: 8_000, OutputTokens: 100}, 5, true)
+	if total, count, window := e.ContextEstimateSnapshotFor(providerName, modelName); total != 8_100 || count != 6 || window != 200_000 {
+		t.Fatalf("live snapshot = %d/%d (%d messages)", total, window, count)
+	}
+	if _, _, window := e.ContextEstimateSnapshotFor(providerName, "other-model"); window != 0 {
+		t.Fatalf("saved a window for a different model: %d", window)
+	}
+	e.ConfigureContextManagement(provider, providerName, "other-model", true)
+	if got := e.ContextUsage().Window; got != 0 {
+		t.Fatalf("new model inherited the saved window: %d", got)
+	}
+}
+
 // The provider owns window retention. A reading with an unknown window (a
 // mid-run model change) must not inherit the previous model's window.
 func TestReportedContextDoesNotInheritWindow(t *testing.T) {

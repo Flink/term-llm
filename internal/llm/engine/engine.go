@@ -152,14 +152,15 @@ type Engine struct {
 	maxToolOutputChars int // 0 = disabled; truncate tool output to this many runes
 
 	// Context compaction
-	compactionConfig     *CompactionConfig // nil = compaction disabled
-	inputLimit           int               // 0 = unknown/disabled
-	lastTotalTokens      int               // cached+input+output from most recent API response
-	lastMessageCount     int               // retained/persisted for compatibility; estimator anchors structurally
-	reportedContext      core.ContextUsage // display-only reading from providers that manage their own context
-	reportedContextKey   string            // provider/model the reportedContext belongs to
-	systemPrompt         string            // Captured for re-injection after compaction
-	contextNoticeEmitted atomic.Bool       // one-shot flag: WARNING emitted once per session
+	compactionConfig      *CompactionConfig // nil = compaction disabled
+	inputLimit            int               // 0 = unknown/disabled
+	lastTotalTokens       int               // cached+input+output from most recent API response
+	lastMessageCount      int               // retained/persisted for compatibility; estimator anchors structurally
+	reportedContext       core.ContextUsage // display-only reading from providers that manage their own context
+	restoredContextWindow int               // saved window, used only when displaying an unknown limit
+	contextModelKey       string            // provider/model the display readings belong to
+	systemPrompt          string            // Captured for re-injection after compaction
+	contextNoticeEmitted  atomic.Bool       // one-shot flag: WARNING emitted once per session
 
 	// Steering support: users can send messages while the agent is streaming.
 	// Messages are injected FIFO after the current turn's tool results, before
@@ -650,6 +651,7 @@ func (e *Engine) resetConversationState() {
 	e.lastTotalTokens = 0
 	e.lastMessageCount = 0
 	e.reportedContext = core.ContextUsage{}
+	e.restoredContextWindow = 0
 	e.systemPrompt = ""
 	e.claimedSteeringIDs = nil
 	e.claimedSteeringOrder = nil

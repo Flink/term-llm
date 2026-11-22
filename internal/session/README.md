@@ -115,5 +115,9 @@ Migration 70 adds `sessions.last_context_window INTEGER NOT NULL DEFAULT 0`,
 the context window size in effect when the session last reported token usage;
 zero means unknown. The previous v69 binary rejects the v70 marker for writes.
 Read-only v69 databases lack the column, so read-only stores probe for it and
-treat the window as unknown. Stop older writers before upgrading; restore a
 backup to downgrade.
+
+The saved window can be either a provider-reported window or the engine's
+resolved input limit. Upgrade all processes that share a session database
+together. Older builds with schema 70 can mistake a saved engine limit for a
+provider usage report and keep showing the old token count after new turns.

@@ -1361,7 +1361,7 @@ func (m *Model) configureContextManagementForSession() {
 		return
 	}
 	m.engine.SetContextEstimateBaseline(m.sess.LastTotalTokens, m.sess.LastMessageCount)
-	m.engine.RestoreReportedWindow(savedProvider, savedModel, m.sess.LastTotalTokens, m.sess.LastContextWindow)
+	m.engine.RestoreContextWindow(savedProvider, savedModel, m.sess.LastContextWindow)
 }
 
 func (m *Model) persistContextEstimate(ctx context.Context) {
@@ -1372,7 +1372,7 @@ func (m *Model) persistContextEstimate(ctx context.Context) {
 	if total == 0 && m.sess.LastTotalTokens == 0 && m.sess.LastMessageCount == 0 && m.sess.LastContextWindow == 0 {
 		return
 	}
-	// Totals follow the transcript, but the reported window belongs to the active model.
+	// Totals follow the transcript, but the window belongs to the active model.
 	savedProvider, savedModel, provider, model := m.contextIdentities()
 	if savedProvider != provider || savedModel != model {
 		window = 0

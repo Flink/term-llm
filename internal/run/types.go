@@ -41,7 +41,7 @@ type ProgressiveResult struct {
 	FallbackText  string         `json:"fallback_text,omitempty"`
 }
 
-// ContextEstimate pairs a persisted baseline with the identity that reported its window.
+// ContextEstimate pairs a persisted baseline with the identity that produced its window.
 type ContextEstimate struct {
 	TotalTokens, MessageCount, Window int
 	Provider, Model                   string
@@ -53,7 +53,7 @@ func (c ContextEstimate) Restore(e *engine.Engine) {
 		return
 	}
 	e.SetContextEstimateBaseline(c.TotalTokens, c.MessageCount)
-	e.RestoreReportedWindow(c.Provider, c.Model, c.TotalTokens, c.Window)
+	e.RestoreContextWindow(c.Provider, c.Model, c.Window)
 }
 
 // Request is a single LLM execution request. It intentionally carries execution

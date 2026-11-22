@@ -1,11 +1,12 @@
 package engine
 
 import (
+	"cmp"
 	"context"
-	"github.com/term-llm/term-llm/internal/llm/core"
 	"strings"
 	"time"
 
+	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/runtimeoutput"
 )
 
@@ -69,11 +70,11 @@ func (e *Engine) ConfigureContextManagement(provider core.Provider, providerName
 	e.callbackMu.Lock()
 	e.inputLimit = limit
 	e.compactionConfig = compactionConfig
-	// A provider-reported context reading only describes the provider/model
-	// that produced it; drop it when the runtime moves to another one.
-	if key := providerName + "\x00" + modelName; key != e.reportedContextKey {
-		e.reportedContextKey = key
+	// Display readings belong to the provider/model that produced them.
+	if key := contextModelKey(providerName, modelName); key != e.contextModelKey {
+		e.contextModelKey = key
 		e.reportedContext = core.ContextUsage{}
+		e.restoredContextWindow = 0
 	}
 	e.callbackMu.Unlock()
 }
@@ -120,14 +121,14 @@ func (e *Engine) LastTotalTokens() int {
 // Providers that manage their own context report it via EventContextUsage;
 // that reading wins because the engine neither tracks nor compacts their
 // context. Otherwise it is the engine-tracked usage baseline and input limit.
-// The result never feeds compaction.
+// A restored window is a display-only fallback and never feeds compaction.
 func (e *Engine) ContextUsage() core.ContextUsage {
 	e.callbackMu.RLock()
 	defer e.callbackMu.RUnlock()
 	if e.reportedContext.UsedTokens > 0 {
 		return e.reportedContext
 	}
-	return core.ContextUsage{UsedTokens: e.lastTotalTokens, Window: e.inputLimit}
+	return core.ContextUsage{UsedTokens: e.lastTotalTokens, Window: e.displayInputLimitLocked()}
 }
 
 // observeReportedContext stores the reading carried by an EventContextUsage
@@ -182,41 +183,49 @@ func (e *Engine) ContextEstimateBaseline() (int, int) {
 	return total, count
 }
 
-// ContextEstimateSnapshot reads the baseline and its provider-reported window
-// atomically. Never persist the engine's configured limit as a provider reading.
-func (e *Engine) ContextEstimateSnapshot() (total, count, reportedWindow int) {
+// ContextEstimateSnapshot reads the baseline and its display window atomically.
+func (e *Engine) ContextEstimateSnapshot() (total, count, window int) {
 	return e.contextEstimateSnapshot("")
 }
 
 // ContextEstimateSnapshotFor omits the window when persisting against a
 // different identity, for example a job running in a reused session.
-func (e *Engine) ContextEstimateSnapshotFor(provider, model string) (total, count, reportedWindow int) {
-	return e.contextEstimateSnapshot(strings.TrimSpace(provider) + "\x00" + strings.TrimSpace(model))
+func (e *Engine) ContextEstimateSnapshotFor(provider, model string) (total, count, window int) {
+	return e.contextEstimateSnapshot(contextModelKey(provider, model))
 }
 
-func (e *Engine) contextEstimateSnapshot(key string) (total, count, reportedWindow int) {
+func contextModelKey(provider, model string) string {
+	return strings.TrimSpace(provider) + "\x00" + strings.TrimSpace(model)
+}
+
+func (e *Engine) contextEstimateSnapshot(key string) (total, count, window int) {
 	e.callbackMu.RLock()
 	defer e.callbackMu.RUnlock()
-	if e.reportedContext.UsedTokens <= 0 {
-		return e.lastTotalTokens, e.lastMessageCount, 0
+
+	total, count, window = e.lastTotalTokens, e.lastMessageCount, e.displayInputLimitLocked()
+	if e.reportedContext.UsedTokens > 0 {
+		total, count, window = e.reportedContext.UsedTokens, 0, e.reportedContext.Window
 	}
-	if key == "" || key == e.reportedContextKey {
-		reportedWindow = e.reportedContext.Window
+	if total <= 0 || (key != "" && key != e.contextModelKey) {
+		window = 0
 	}
-	return e.reportedContext.UsedTokens, 0, reportedWindow
+	return total, count, window
 }
 
-// RestoreReportedWindow seeds only the display reading. A cold session may
-// have changed providers/models; never attach the old window to its new model
-// or supersede a live reading (even one that explicitly reports unknown).
-func (e *Engine) RestoreReportedWindow(provider, model string, used, window int) {
-	if used <= 0 || window <= 0 {
+func (e *Engine) displayInputLimitLocked() int {
+	return cmp.Or(e.inputLimit, e.restoredContextWindow)
+}
+
+// RestoreContextWindow seeds a display fallback for the matching provider/model.
+// It never changes the token baseline or overrides a live limit or reading.
+func (e *Engine) RestoreContextWindow(provider, model string, window int) {
+	if window <= 0 {
 		return
 	}
 	e.callbackMu.Lock()
 	defer e.callbackMu.Unlock()
-	if e.reportedContext.UsedTokens == 0 && e.reportedContextKey == provider+"\x00"+model {
-		e.reportedContext = core.ContextUsage{UsedTokens: used, Window: window}
+	if e.lastTotalTokens > 0 && e.contextModelKey == contextModelKey(provider, model) {
+		e.restoredContextWindow = window
 	}
 }
 
@@ -233,6 +242,7 @@ func (e *Engine) SetContextEstimateBaseline(lastTotalTokens, lastMessageCount in
 	e.callbackMu.Lock()
 	if lastTotalTokens == 0 {
 		e.reportedContext = core.ContextUsage{}
+		e.restoredContextWindow = 0
 	}
 	e.lastTotalTokens = lastTotalTokens
 	e.lastMessageCount = lastMessageCount

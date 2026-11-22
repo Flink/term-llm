@@ -54,7 +54,7 @@ func (sess *telegramSession) restoreReloadChat(saved telegramReloadChat) {
 		return
 	}
 	rt.Engine.SetContextEstimateBaseline(meta.LastTotalTokens, meta.LastMessageCount)
-	rt.Engine.RestoreReportedWindow(cmp.Or(meta.ProviderKey, meta.Provider), meta.Model, meta.LastTotalTokens, meta.LastContextWindow)
+	rt.Engine.RestoreContextWindow(cmp.Or(meta.ProviderKey, meta.Provider), meta.Model, meta.LastContextWindow)
 }
 
 type telegramContinuation struct {

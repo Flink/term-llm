@@ -12,9 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/term-llm/term-llm/internal/credentials"
+	"github.com/term-llm/term-llm/internal/llm"
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/llm/engine"
 	"github.com/term-llm/term-llm/internal/llm/mockprovider"
+	"github.com/term-llm/term-llm/internal/llm/providers/responsesproviders"
 	"github.com/term-llm/term-llm/internal/session"
 )
 
@@ -224,5 +227,112 @@ func TestClaudeContextWindowSurvivesColdSessionReopen(t *testing.T) {
 	applyPersistedContextEstimate(hydrated, saved)
 	if got := hydrated.ContextUsage(); got.Window != 0 {
 		t.Fatalf("other model inherited window: %+v", got)
+	}
+}
+
+func TestChatGPTContextWindowSurvivesColdSessionReopen(t *testing.T) {
+	const (
+		providerName = "chatgpt"
+		model        = "gpt-6.2-sol"
+		window       = 123_456
+		used         = 1250
+		cached       = 500
+	)
+	dir := t.TempDir()
+	t.Setenv("TERM_LLM_CREDENTIALS_DIR", dir)
+	t.Setenv("XDG_DATA_HOME", dir)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/models":
+			_, _ = io.WriteString(w, `{"models":[{"slug":"gpt-6.2-sol","context_window":123456}]}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/responses":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"done\"}\n\n"+
+				"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1200,\"input_tokens_details\":{\"cached_tokens\":500},\"output_tokens\":50,\"total_tokens\":1250}}}\n\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer backend.Close()
+	p := responsesproviders.NewChatGPTProviderWithCredsAndOptions(&credentials.ChatGPTCredentials{
+		AccessToken: "test-token", ExpiresAt: time.Now().Add(time.Hour).Unix(),
+	}, model, responsesproviders.ChatGPTProviderOptions{BaseURL: backend.URL})
+	e := engine.NewEngine(p, nil)
+	rt := &serveRuntime{provider: p, engine: e, providerKey: providerName, defaultModel: model}
+	// The tool-capable turn loop records provider usage as the next context baseline.
+	req := core.Request{
+		Model: model, Messages: []core.Message{core.UserText("hi")},
+		Tools: []core.ToolSpec{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
+	}
+	rt.configureContextManagementForRequest(req)
+	stream, err := e.Stream(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	var usage core.Usage
+	for {
+		event, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == core.EventUsage && event.Use != nil {
+			usage.Add(*event.Use)
+		}
+	}
+
+	cfg := session.Config{Enabled: true, Path: filepath.Join(dir, "sessions.db")}
+	open := func() *session.SQLiteStore {
+		t.Helper()
+		s, err := session.NewSQLiteStore(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		return s
+	}
+	store := open()
+	meta := &session.Session{ID: session.NewID(), Provider: p.Name(), ProviderKey: providerName, Model: model, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := store.Create(ctx, meta); err != nil {
+		t.Fatal(err)
+	}
+	rt.store, rt.sessionMeta = store, meta
+	mgr := newServeSessionManager(time.Minute, 100, func(context.Context) (*serveRuntime, error) { return rt, nil })
+	defer mgr.Close()
+	if _, err := mgr.GetOrCreate(ctx, meta.ID); err != nil {
+		t.Fatal(err)
+	}
+	selectionUsage := func(srv *serveServer) serveContextUsage {
+		t.Helper()
+		selected, err := srv.selectedWebSession(ctx, meta.ID, nil)
+		if err != nil || selected == nil || selected.ContextUsage == nil {
+			t.Fatalf("missing selected context: selected = %+v, err = %v", selected, err)
+		}
+		return *selected.ContextUsage
+	}
+	live := selectionUsage(&serveServer{store: store, sessionMgr: mgr})
+	if live.InputLimit != window || live.UsedTokens != used {
+		t.Fatalf("live context = %+v, want %d/%d", live, used, window)
+	}
+	rt.persistTurnAccounting(ctx, true, meta.ID, []core.Message{core.AssistantText("done")}, core.TurnMetrics{
+		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, CachedInputTokens: usage.CachedInputTokens,
+	})
+	mgr.Close()
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Custom endpoint metadata must not make the cold lookup pass without the saved window.
+	if fallback := llm.SessionDisplayInputLimit(providerName, model, 0); fallback == window {
+		t.Fatalf("cold fallback unexpectedly matches the live window %d", window)
+	}
+	cold := selectionUsage(&serveServer{store: open()})
+	if cold.InputLimit != live.InputLimit || cold.UsedTokens != live.UsedTokens || cold.CachedInputTokens != cached {
+		t.Fatalf("after cold reopen: %+v, want %d/%d with %d cached tokens", cold, live.UsedTokens, live.InputLimit, cached)
 	}
 }
