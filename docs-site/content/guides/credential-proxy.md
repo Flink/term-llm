@@ -479,6 +479,18 @@ headers, configure them on the proxy route, not the client.
 | `openai-decisions` | `openai` | `POST /decisions` (upstream base includes `/v1`) |
 | `cloudflare-clef` | `cloudflare` | `POST /@cf/cloudflare/clef`, `POST /@cf/cloudflare/clef-flash` |
 
+New TypeSafe routes default to **Pay as you go** and **Automatic** usage
+measurement. On an existing route to `https://api.typesafe.ai`, change those
+settings in place if they still show **Not specified** and **Off**. The route's
+key and client approvals stay the same. The proxy estimates new System One
+requests from the response's model and token counts. Its bundled
+[TypeSafe list rate](https://docs.typesafe.ai/models) for `jev-1.13.0` and
+`jev-1.14.0` is US$0.042 per million input tokens, with free output (verified
+2026-11-22). TypeSafe's model API does not publish prices. If the rate changes,
+use a Home price card for the route name and exact model ID (empty tier) to
+override it for future requests. The proxy does not scrape the docs or reprice
+past requests.
+
 For Clef, enter the full upstream Workers AI run root
 (`https://api.cloudflare.com/client/v4/accounts/<account-id>/ai/run`), or an AI
 Gateway Workers AI root ending in `/workers-ai`. Fill in the IDs on the proxy;
@@ -772,6 +784,14 @@ nearest millionth of a dollar.
 For example, `{"usd":0,"diem":0.0002498}` records **US$0.000250**. This is a
 provider-reported cost, not a token-price estimate. Raw payload capture is not
 required, and previously recorded requests are not repriced.
+
+For routes using `https://api.exa.ai`, observation is enabled automatically
+when `usage` is unset, including on existing routes. No new key, client grant,
+or price entry is needed. On pay-as-you-go routes, the proxy records
+`costDollars.total` from completed `POST /search` JSON responses as a USD
+estimate, not a confirmed charge. Missing or invalid amounts, streamed search
+responses, and previously recorded requests aren’t priced by this integration.
+Set `usage: off` to disable observation.
 
 Subscription activity is valued at the API rate when a stored **API-equivalent
 estimate** is available. The Home Cost graph includes these estimates and shows

@@ -100,6 +100,9 @@ func catalogUsageMatches(in MoneyInput, observed *ObservedUsage) bool {
 	if observed == nil || observed.Usage.Ambiguous || in.UsageState != "reported" || observed.Usage.Source != usagetap.Reported {
 		return false
 	}
+	if observed.Protocol == usagetap.TypeSafeSystemOne {
+		return offlineUsageMatches("typesafe", in, *observed)
+	}
 	u := observed.Usage
 	if u.Model != in.Model || u.Input < 0 || u.Output < 0 || u.CachedInput < 0 || in.InputTokens < 0 || in.OutputTokens < 0 || in.CacheReadTokens < 0 || in.CacheWriteTokens < 0 {
 		return false

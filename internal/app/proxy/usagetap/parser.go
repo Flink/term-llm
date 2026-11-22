@@ -46,6 +46,8 @@ type Usage struct {
 	// VeniceCostMicros is a verified provider-reported charge in USD micros.
 	// Nil means absent or invalid; a non-nil zero is an actual observation.
 	VeniceCostMicros *int64 `json:"venice_cost_micros,omitempty"`
+	// ExaCostMicros is a provider-reported estimate, not an invoice charge.
+	ExaCostMicros *int64 `json:"exa_cost_micros,omitempty"`
 }
 
 // Protocol identifies the provider's response schema, never request content.

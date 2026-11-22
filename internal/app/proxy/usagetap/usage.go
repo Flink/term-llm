@@ -105,6 +105,10 @@ func (p *Parser) feedEvent(data []byte, turns *webSocketTurns) {
 		}
 		return
 	}
+	if p.protocol == TypeSafeSystemOne {
+		p.typeSafe(data)
+		return
+	}
 	var o object
 	if err := json.Unmarshal(data, &o); err != nil || o == nil {
 		p.MarkUnknown()

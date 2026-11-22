@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 
@@ -78,10 +77,15 @@ func selectUsageTap(route Route, resp *http.Response) (usageTap, usagetap.Protoc
 	if resp.Request != nil && resp.Request.URL != nil {
 		path = resp.Request.URL.Path
 	}
-	// Route.Upstream is a root, not the requested endpoint. Only the Venice
-	// charge adapter needs a trusted provider in addition to the endpoint schema.
+	// Cost adapters require a trusted origin as well as the endpoint schema.
+	if route.Usage != "off" && usagetap.IsExaSearchJSON(route.Upstream, resp) {
+		return &usagetap.ExaSearchJSON{}, usagetap.ExaSearch
+	}
+	if route.Usage != "off" && usagetap.IsTypeSafeSystemOneJSON(route.Upstream, resp) {
+		return usagetap.New(usagetap.TypeSafeSystemOne, usagetap.JSON), usagetap.TypeSafeSystemOne
+	}
 	ct := resp.Header.Get("Content-Type")
-	if len(resp.Header.Values("Content-Type")) <= 1 && isVeniceChatResponse(route, resp) {
+	if route.Usage != "off" && len(resp.Header.Values("Content-Type")) <= 1 && usagetap.IsVeniceChatResponse(route.Upstream, resp) {
 		return usagetap.ForVeniceChatCompletions(ct), usagetap.ChatCompletions
 	}
 	if strings.EqualFold(strings.TrimSpace(strings.SplitN(ct, ";", 2)[0]), "application/vnd.amazon.eventstream") {
@@ -97,29 +101,6 @@ func selectUsageTap(route Route, resp *http.Response) (usageTap, usagetap.Protoc
 		return usagetap.New(usagetap.Messages, usagetap.JSON), usagetap.Bedrock
 	}
 	return p, p.Protocol()
-}
-
-// isVeniceChatResponse checks the request that produced this response, not
-// merely the configured destination. Missing URL evidence or a redirect away
-// from the exact Venice endpoint must not authorize a provider charge.
-func isVeniceChatResponse(route Route, resp *http.Response) bool {
-	if route.Usage == "off" || resp.StatusCode < 200 || resp.StatusCode >= 300 || resp.Uncompressed || !isCanonicalVeniceRoot(route.Upstream) {
-		return false
-	}
-	req := resp.Request
-	if req == nil || req.URL == nil || req.URL.Opaque != "" || req.URL.EscapedPath() != veniceRootPath+"/chat/completions" {
-		return false
-	}
-	u := *req.URL
-	u.RawQuery, u.ForceQuery = "", false // Query parameters are not part of the origin.
-	origin, err := Origin(u.String())
-	return err == nil && origin == veniceOrigin && (req.Host == "" || isVeniceAuthority(u.Scheme, req.Host))
-}
-
-func isVeniceAuthority(scheme, host string) bool {
-	u := url.URL{Scheme: scheme, Host: host}
-	origin, err := Origin(u.String())
-	return err == nil && origin == veniceOrigin
 }
 
 type usageObserverBody struct {

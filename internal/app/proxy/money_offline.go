@@ -81,6 +81,9 @@ func finishTokenMoney(in MoneyInput, observed *ObservedUsage, rates []MoneyRate,
 // route names, presets, credential kinds nor model prefixes establish identity.
 // Explicit :443 is the same HTTPS authority, never a fixture/custom-port bypass.
 func offlinePriceProvider(upstream string) string {
+	if usagetap.IsTypeSafeRoot(upstream) {
+		return "typesafe"
+	}
 	u, err := url.Parse(upstream)
 	if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" {
 		return ""
@@ -99,18 +102,20 @@ func offlinePriceProvider(upstream string) string {
 }
 func offlineUsageMatches(provider string, in MoneyInput, observed ObservedUsage) bool {
 	u := observed.Usage
-	if u.Model != in.Model || u.Tier != in.Tier || u.Input < 0 || u.Output < 0 || u.CachedInput < 0 || in.InputTokens < 0 || in.OutputTokens < 0 || in.CacheReadTokens < 0 || in.CacheWriteTokens < 0 {
+	if u.Model != in.Model || u.Tier != in.Tier || u.Input < 0 || u.Output < 0 || in.InputTokens < 0 || in.OutputTokens < 0 || in.CacheReadTokens < 0 || in.CacheWriteTokens < 0 {
 		return false
 	}
 	switch provider {
+	case "typesafe":
+		return observed.Protocol == usagetap.TypeSafeSystemOne && in.Tier == "" && in.InputTokens == u.Input && in.OutputTokens == u.Output && in.CacheReadTokens == 0 && in.CacheWriteTokens == 0
 	case "openai":
 		// Responses/Chat input includes cache reads. Unknown reads cannot be
 		// replaced with zero. Separate write counts are not understood here.
-		return (observed.Protocol == usagetap.Responses || observed.Protocol == usagetap.ChatCompletions) && in.Tier == "default" && u.CachedInput <= u.Input && (u.CacheWrite == -1 || u.CacheWrite == 0) && in.InputTokens == u.Input-u.CachedInput && in.CacheReadTokens == u.CachedInput && in.OutputTokens == u.Output && in.CacheWriteTokens == 0
+		return (observed.Protocol == usagetap.Responses || observed.Protocol == usagetap.ChatCompletions) && in.Tier == "default" && u.CachedInput >= 0 && u.CachedInput <= u.Input && (u.CacheWrite == -1 || u.CacheWrite == 0) && in.InputTokens == u.Input-u.CachedInput && in.CacheReadTokens == u.CachedInput && in.OutputTokens == u.Output && in.CacheWriteTokens == 0
 	case "anthropic":
 		// Messages attests service tier inside usage. Empty evidence is not an
 		// attestation of the standard tariff; do not infer it.
-		return observed.Protocol == usagetap.Messages && in.Tier == "standard" && u.CacheWrite >= 0 && in.InputTokens == u.Input && in.OutputTokens == u.Output && in.CacheReadTokens == u.CachedInput && in.CacheWriteTokens == u.CacheWrite
+		return observed.Protocol == usagetap.Messages && in.Tier == "standard" && u.CachedInput >= 0 && u.CacheWrite >= 0 && in.InputTokens == u.Input && in.OutputTokens == u.Output && in.CacheReadTokens == u.CachedInput && in.CacheWriteTokens == u.CacheWrite
 	default:
 		return false
 	}

@@ -144,7 +144,7 @@ func All() []Profile {
 		{
 			ID: "typesafe", Family: "classification", Label: "TypeSafe", ClassifyProvider: "typesafe",
 			Slots:    map[string]string{"classify": "typesafe"},
-			Upstream: "https://api.typesafe.ai", Header: "Authorization", Prefix: "Bearer ", Billing: "unspecified",
+			Upstream: "https://api.typesafe.ai", Header: "Authorization", Prefix: "Bearer ", Billing: "pay_as_you_go",
 			Allow: []string{"POST =/v1/systemone", "GET =/v1/models"},
 		},
 		{

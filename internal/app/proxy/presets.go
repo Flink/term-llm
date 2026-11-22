@@ -3,6 +3,7 @@ package proxy
 import (
 	"slices"
 
+	"github.com/term-llm/term-llm/internal/app/proxy/usagetap"
 	"github.com/term-llm/term-llm/internal/proxyprofile"
 )
 
@@ -101,7 +102,7 @@ func presetsFromProfiles(profiles []proxyprofile.Profile) []routePreset {
 		if p.Billing == "local" {
 			preset.Auth = Auth{} // Default bearer client authentication, no upstream key.
 		}
-		if p.Provider != "" {
+		if p.Provider != "" || usagetap.IsExaRoot(p.Upstream) || p.ID == "typesafe" {
 			preset.Usage = "auto"
 		} else if p.ClassifyProvider != "" {
 			preset.Usage = "off"

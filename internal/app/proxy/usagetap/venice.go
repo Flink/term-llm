@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	maxVeniceCostBytes   = 512
-	maxVeniceNumberBytes = 64
-	maxVeniceExponent    = 64
+	maxVeniceCostBytes = 512
+	maxCostNumberBytes = 64
+	maxCostExponent    = 64
 )
 
 // veniceCharge is independent of token-count evidence. It holds only the last
@@ -56,7 +56,7 @@ func (v *veniceCharge) observe(data []byte, o object) {
 	if _, ok := uniqueJSONField(data, "usage"); !ok {
 		return
 	}
-	v.micros, v.present = roundVeniceMicros(total)
+	v.micros, v.present = roundCostMicros(total)
 }
 
 // uniqueJSONField avoids the last-key-wins behavior of a map for charge fields.
@@ -110,7 +110,7 @@ func veniceCostTotal(data []byte) *big.Rat {
 			return nil
 		}
 		seen[key] = true
-		amount := veniceAmount(value)
+		amount := parseCostDecimal(value)
 		if amount == nil {
 			return nil
 		}
@@ -122,16 +122,16 @@ func veniceCostTotal(data []byte) *big.Rat {
 	return &total
 }
 
-func veniceAmount(data []byte) *big.Rat {
+func parseCostDecimal(data []byte) *big.Rat {
 	// These bytes are a complete JSON value. Only a digit can start an
 	// unsigned JSON number; reject strings, null and even signed zero.
-	if len(data) == 0 || len(data) > maxVeniceNumberBytes || data[0] < '0' || data[0] > '9' {
+	if len(data) == 0 || len(data) > maxCostNumberBytes || data[0] < '0' || data[0] > '9' {
 		return nil
 	}
 	// Bound the exponent independently of length before constructing a rational.
 	if i := bytes.IndexAny(data, "eE"); i >= 0 {
 		exponent, err := strconv.Atoi(string(data[i+1:]))
-		if err != nil || exponent < -maxVeniceExponent || exponent > maxVeniceExponent {
+		if err != nil || exponent < -maxCostExponent || exponent > maxCostExponent {
 			return nil
 		}
 	}
@@ -139,7 +139,7 @@ func veniceAmount(data []byte) *big.Rat {
 	return amount
 }
 
-func roundVeniceMicros(total *big.Rat) (int64, bool) {
+func roundCostMicros(total *big.Rat) (int64, bool) {
 	var scaled, micros, rem big.Int
 	scaled.Mul(total.Num(), big.NewInt(1_000_000))
 	micros.QuoRem(&scaled, total.Denom(), &rem)

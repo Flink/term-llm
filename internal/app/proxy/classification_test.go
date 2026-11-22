@@ -68,10 +68,14 @@ func TestClassificationProviderCreationAndState(t *testing.T) {
 			t.Errorf("wrong provider state: %+v", provider)
 		}
 		root := "classify.providers." + p.ClassifyProvider
-		if route.Profile != id || !slices.Equal(route.Serves, []string{root + ".api_key", root + ".base_url", "classify: " + p.ClassifyProvider}) || route.Usage != "off" || route.Billing != "unspecified" {
+		wantUsage := "off"
+		if id == "typesafe" {
+			wantUsage = "auto"
+		}
+		if route.Profile != id || !slices.Equal(route.Serves, []string{root + ".api_key", root + ".base_url", "classify: " + p.ClassifyProvider}) || route.Usage != wantUsage || route.Billing != p.Billing {
 			t.Errorf("wrong route state: %+v", route)
 		}
-		if preset.Family != "classification" || !slices.Equal(preset.Allow, p.Allow) || preset.Upstream != p.Upstream || preset.Usage != "off" {
+		if preset.Family != "classification" || !slices.Equal(preset.Allow, p.Allow) || preset.Upstream != p.Upstream || preset.Usage != wantUsage {
 			t.Errorf("wrong preset state: %+v", preset)
 		}
 	}

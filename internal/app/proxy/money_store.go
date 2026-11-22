@@ -473,6 +473,10 @@ func (s *Service) finalizeMoney(rec *Record, route Route) {
 		rec.Money = money
 		return
 	}
+	if money := estimatedExaMoney(rec, route); money != nil {
+		rec.Money = money
+		return
+	}
 	if rec.Usage != nil {
 		input = moneyInputFromUsage(input, *rec.Usage)
 	}
@@ -578,7 +582,7 @@ func moneyInputFromUsage(in MoneyInput, observed ObservedUsage) MoneyInput {
 				in.OutputTokens = -1
 			}
 		}
-	case usagetap.Ollama:
+	case usagetap.Ollama, usagetap.TypeSafeSystemOne:
 		in.CacheReadTokens = 0
 		in.CacheWriteTokens = 0
 	}

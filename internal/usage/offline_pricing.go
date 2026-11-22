@@ -27,6 +27,11 @@ type OfflinePricing struct {
 func LookupOfflinePricing(provider, model string) (OfflinePricing, bool) {
 	var result OfflinePricing
 	switch provider {
+	case "typesafe":
+		if model != "jev-1.13.0" && model != "jev-1.14.0" {
+			return result, false
+		}
+		return OfflinePricing{Currency: "USD", Source: "Bundled TypeSafe list pricing (docs.typesafe.ai/models)", AsOf: "2026-11-22", Base: OfflineTokenPrices{Input: 42_000}}, true
 	case "openai":
 		switch model {
 		case "gpt-5.5", "gpt-5.6-terra", "gpt-5.3-codex":
