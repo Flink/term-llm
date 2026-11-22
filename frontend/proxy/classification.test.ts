@@ -247,10 +247,9 @@ it('renders a Classification provider section without client inference config', 
   expect(settings).toHaveTextContent('GET exactly /v1/models');
 
   const defaults = root.querySelector<HTMLElement>('[data-focus="client-defaults"]')!;
+  fireEvent.click(within(defaults).getByRole('button', { name: 'Edit' }));
   const classifier = within(defaults).getByLabelText('Classification');
-  expect(within(classifier).getByRole('option', { name: 'typesafe · typesafe' })).toHaveValue(
-    'typesafe',
-  );
+  expect(within(classifier).getByRole('option', { name: 'typesafe' })).toHaveValue('typesafe');
 });
 
 it('keeps exact allow entries in the editor and saves them unchanged', async () => {

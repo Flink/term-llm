@@ -1371,6 +1371,96 @@ button.client-toggle:hover {
   margin: 0;
 }
 
+/* Client defaults: a one-line summary whose editor floats under Edit. */
+.defaults-strip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.45rem 0.85rem;
+}
+
+.defaults-summary {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.85rem;
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.defaults-item > span:first-child,
+.defaults-rest,
+.defaults-note {
+  color: var(--muted);
+}
+
+.defaults-item > b {
+  font-weight: 600;
+}
+
+.defaults-note {
+  font-size: 0.85rem;
+}
+
+button.defaults-edit {
+  flex: none;
+  padding: 0.2rem 0.5rem;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+button.defaults-edit[aria-expanded='true'] {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.defaults-popover {
+  position: absolute;
+  inset-block-start: calc(100% + 0.4rem);
+  inset-inline-end: 0;
+  z-index: 20;
+  width: min(23rem, calc(100vw - 2 * var(--gutter)));
+  padding: 0.85rem;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 14px 40px rgb(0 0 0 / 16%);
+}
+
+.defaults-popover > p {
+  margin: 0 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.defaults-grid .field {
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.3rem 0;
+}
+
+/* The proxy theme is light-only, so the chevron can match --muted directly. */
+.defaults-popover select {
+  appearance: none;
+  padding-inline-end: 2rem;
+  background: var(--bg)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2369717d' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+    no-repeat right 0.7rem center;
+}
+
+.defaults-popover:focus {
+  outline: none;
+}
+
+.defaults-popover .actions {
+  justify-content: flex-end;
+}
+
 .route-form .field,
 .route-form label {
   margin: 0.45rem 0;
