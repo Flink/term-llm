@@ -227,7 +227,8 @@ jobs:
       - name: Race-test Web UI lifecycle owners
         if: needs.changes.outputs.backend == 'true'
         run: |
-          go test -race ./internal/session ./internal/termhost ./internal/app/serve/... ./cmd
+          # Serve's race-instrumented integration suite can exceed Go's default 10m on CI runners.
+          go test -race -timeout=20m ./internal/session ./internal/termhost ./internal/app/serve/... ./cmd
           go test -race -tags browserfixture ./internal/llm/debug -run '^TestDebugBrowserGate$'
 
       - name: Race-test nested modules

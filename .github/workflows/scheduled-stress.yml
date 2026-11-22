@@ -41,7 +41,8 @@ jobs:
         run: make frontend
 
       - name: Race-test root module
-        run: go test -race ./...
+        # Serve's race-instrumented integration suite can exceed Go's default 10m on CI runners.
+        run: go test -race -timeout=20m ./...
 
       - name: Race-test nested modules
         run: |

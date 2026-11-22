@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 )
 
 type unixProcess struct {
@@ -175,7 +176,20 @@ func (p *unixProcess) WriteContext(ctx context.Context, data []byte) (int, error
 }
 
 func (p *unixProcess) Resize(cols, rows int) error {
-	return pty.Setsize(p.file, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
+	// Keep the descriptor valid during ioctl without racing Close or changing
+	// the file's blocking mode through Fd.
+	conn, err := p.file.SyscallConn()
+	if err != nil {
+		return err
+	}
+	size := unix.Winsize{Col: uint16(cols), Row: uint16(rows)}
+	var ioctlErr error
+	if err := conn.Control(func(fd uintptr) {
+		ioctlErr = unix.IoctlSetWinsize(int(fd), unix.TIOCSWINSZ, &size)
+	}); err != nil {
+		return err
+	}
+	return ioctlErr
 }
 
 func (p *unixProcess) Done() <-chan Exit { return p.done }

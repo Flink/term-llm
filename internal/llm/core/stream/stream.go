@@ -13,21 +13,35 @@ import (
 	"github.com/term-llm/term-llm/internal/restart"
 )
 
-// ErrClosed is returned by Sender.Send when the consumer closed the stream.
+// ErrClosed is returned by Sender.Send when the event stream has closed.
 var ErrClosed = errors.New("stream closed")
 
-// Sender provides safe event sending for stream producers.
-// It handles context cancellation and closed-channel panics, preventing
-// goroutine hangs when a consumer stops reading.
-// Zero value is a no-op sender (for cases where events == nil).
+// Sender provides safe event sending for stream producers. Copies of a
+// stream-owned Sender share its shutdown state. Zero value is a no-op sender.
 type Sender struct {
 	ctx   context.Context
 	ch    chan<- core.Event
 	route func() Sender
+	life  *sendLifetime
+}
+
+type sendLifetime struct {
+	active  sync.RWMutex
+	stopped chan struct{}
+}
+
+// stop wakes blocked sends and waits for them to leave the channel before it
+// can be closed. Later sends see stopped while holding a read lock and do not
+// touch the event channel. This signal is separate from consumer cancellation.
+func (l *sendLifetime) stop() {
+	close(l.stopped)
+	l.active.Lock()
+	l.active.Unlock()
 }
 
 // NewSender returns a Sender that delivers events to ch until ctx is done.
-// A nil ch yields a no-op sender.
+// A nil ch yields a no-op sender. The caller owns ch and must coordinate
+// closure with senders; recovering a closed-channel panic is not synchronization.
 func NewSender(ctx context.Context, ch chan<- core.Event) Sender {
 	return Sender{ctx: ctx, ch: ch}
 }
@@ -47,17 +61,15 @@ func (s Sender) destination() Sender {
 // Context returns the context bounding sends.
 func (s Sender) Context() context.Context { return s.destination().ctx }
 
-// Chan returns the underlying event channel (nil for a no-op sender).
+// Chan returns the underlying event channel (nil for a no-op sender). Sending
+// on it directly, including via NewSender, bypasses stream shutdown protection.
+// Such callers must finish all sends before the channel owner can close it.
 func (s Sender) Chan() chan<- core.Event { return s.destination().ch }
 
-// Send sends an event, blocking until delivered, context cancelled, or channel closed.
-// Returns nil on success, context error on cancellation, or a generic error on closed channel.
+// Send blocks until delivered, the context is cancelled, or the stream closes.
 func (s Sender) Send(event core.Event) error {
 	s = s.destination()
-	if s.ch == nil {
-		return nil
-	}
-	if SafeSend(s.ctx, s.ch, event) {
+	if s.ch == nil || s.send(event, true) {
 		return nil
 	}
 	if err := s.ctx.Err(); err != nil {
@@ -66,18 +78,45 @@ func (s Sender) Send(event core.Event) error {
 	return ErrClosed
 }
 
-// TrySend attempts a non-blocking send. Returns true if the event was delivered.
-// Like Send, it recovers from closed-channel panics.
-func (s Sender) TrySend(event core.Event) (sent bool) {
+// TrySend attempts a non-blocking send and reports whether it was delivered.
+func (s Sender) TrySend(event core.Event) bool {
 	s = s.destination()
-	if s.ch == nil {
-		return false
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			sent = false
+	return s.ch != nil && s.send(event, false)
+}
+
+func (s Sender) send(event core.Event, block bool) (sent bool) {
+	var stopped <-chan struct{}
+	if s.life != nil {
+		if block {
+			s.life.active.RLock()
+		} else if !s.life.active.TryRLock() {
+			return false
 		}
-	}()
+		defer s.life.active.RUnlock()
+		stopped = s.life.stopped
+		select {
+		case <-stopped:
+			return false
+		default:
+		}
+	} else {
+		// Preserve the fallback for externally owned channels.
+		defer func() {
+			if recover() != nil {
+				sent = false
+			}
+		}()
+	}
+	if block {
+		select {
+		case s.ch <- event:
+			return true
+		case <-s.ctx.Done():
+			return false
+		case <-stopped:
+			return false
+		}
+	}
 	select {
 	case s.ch <- event:
 		return true
@@ -88,23 +127,11 @@ func (s Sender) TrySend(event core.Event) (sent bool) {
 	}
 }
 
-// SafeSend attempts to send an event to the channel, returning false if
-// the channel is closed or context is cancelled. This prevents panics when
-// the stream is closed while tool execution is still in progress.
-func SafeSend(ctx context.Context, ch chan<- core.Event, event core.Event) (sent bool) {
-	// Recover from panic if channel is closed
-	defer func() {
-		if r := recover(); r != nil {
-			sent = false
-		}
-	}()
-
-	select {
-	case ch <- event:
-		return true
-	case <-ctx.Done():
-		return false
-	}
+// SafeSend attempts to send an event to a caller-owned channel, returning
+// false on closure or cancellation. The caller must still synchronize sends
+// with channel closure; panic recovery alone does not prevent a data race.
+func SafeSend(ctx context.Context, ch chan<- core.Event, event core.Event) bool {
+	return NewSender(ctx, ch).send(event, true)
 }
 
 type channelStream struct {
@@ -137,21 +164,25 @@ func NewWithCancelHook(ctx context.Context, cancelHook func(), run func(context.
 	ch := make(chan core.Event, 16)
 	terminalErr := make(chan error, 1)
 	done := make(chan struct{})
+	sender := Sender{ctx: streamCtx, ch: ch, life: &sendLifetime{stopped: make(chan struct{})}}
 	go func() {
 		if release != nil {
 			defer release()
 		}
 		defer close(done)
+		var runErr error
 		defer func() {
 			if r := recover(); r != nil && streamCtx.Err() == nil {
-				err := fmt.Errorf("stream panic: %v", r)
-				// Preserve the panic as a stream error for the consumer when possible.
-				// Never let a provider/cleanup panic escape this goroutine: an
-				// unrecovered panic in any goroutine terminates the whole TUI process.
+				runErr = fmt.Errorf("stream panic: %v", r)
+			}
+			sender.life.stop()
+			if runErr != nil {
+				// Keep the terminal event after accepted sends. Preserve it even
+				// if the buffer is full or the consumer has cancelled.
 				select {
-				case ch <- core.Event{Type: core.EventError, Err: err}:
+				case ch <- core.Event{Type: core.EventError, Err: runErr}:
 				default:
-					terminalErr <- err
+					terminalErr <- runErr
 				}
 			}
 			close(terminalErr)
@@ -164,22 +195,7 @@ func NewWithCancelHook(ctx context.Context, cancelHook func(), run func(context.
 			terminalErr <- ownershipErr
 			return
 		}
-		sender := Sender{ctx: streamCtx, ch: ch}
-		if err := run(streamCtx, sender); err != nil {
-			// If the consumer has stopped draining and the buffer is full, preserve the
-			// terminal error for Recv() rather than dropping it and reporting clean EOF.
-			//
-			// A cancelled stream context must not discard the error either. Recv
-			// reports cancellation only while this goroutine is still running; once it
-			// closes the channels, a dropped error becomes an indistinguishable clean
-			// EOF and the caller reports a failed run as success. Keeping the error
-			// makes both orderings terminal.
-			select {
-			case ch <- core.Event{Type: core.EventError, Err: err}:
-			default:
-				terminalErr <- err
-			}
-		}
+		runErr = run(streamCtx, sender)
 	}()
 	return &channelStream{ctx: streamCtx, cancel: cancel, cancelHook: cancelHook, events: ch, terminalErr: terminalErr, done: done}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -29,75 +28,95 @@ func TestCodeModeTerminalPromptsSerializeAndCancelWithTheirCells(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(manager.ApprovalMgr.Close)
 	e := engine.NewEngine(mockprovider.NewMockProvider("terminal-cell"), nil)
 	defer e.CloseCodeMode()
 	manager.SetupEngine(e)
 	messages := make(chan tea.Msg, 16)
 	bindChatCodeModePrompts(manager, func(msg tea.Msg) { messages <- msg })
-	ctx := core.ContextWithSessionID(context.Background(), "terminal")
-	first, err := e.ExecCodeMode(ctx, `text('ready');await tools.read_file({path:'file'});store('bad',1)`, time.Second, 0)
+	const sessionID = "terminal"
+	ctx, cancel := context.WithTimeout(core.ContextWithSessionID(t.Context(), sessionID), 20*time.Second)
+	defer cancel()
+	receive := func(want string) tea.Msg {
+		t.Helper()
+		select {
+		case msg := <-messages:
+			return msg
+		case <-ctx.Done():
+			t.Fatalf("waiting for %s: %v; cells: %+v", want, ctx.Err(), e.CodeModeCells(sessionID))
+			return nil
+		}
+	}
+
+	// The spawn receipt only acknowledges admission. Wait for the actual
+	// terminal prompt, allowing for cold WASM compilation under -race.
+	first, err := e.ExecCodeMode(ctx, `await tools.read_file({path:'file'});store('bad',1)`, 0, 0)
 	if err != nil || first.IsError {
 		t.Fatalf("first %+v %v", first, err)
 	}
-	var request tuichat.ApprovalRequestMsg
-	select {
-	case msg := <-messages:
-		var ok bool
-		request, ok = msg.(tuichat.ApprovalRequestMsg)
-		if !ok {
-			t.Fatalf("request %T", msg)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("no terminal prompt")
+	msg := receive("first terminal prompt")
+	request, ok := msg.(tuichat.ApprovalRequestMsg)
+	if !ok {
+		t.Fatalf("first terminal prompt: got %T", msg)
 	}
 	if request.Context == nil || !request.NoAutoApprove {
 		t.Fatal("terminal prompt lost original cell authority/context")
 	}
-	second, err := e.ExecCodeMode(ctx, `text('ready');await tools.read_file({path:'file'})`, time.Second, 0)
+
+	second, err := e.ExecCodeMode(ctx, `await tools.read_file({path:'file'})`, 0, 0)
 	if err != nil || second.IsError {
 		t.Fatalf("second %+v %v", second, err)
 	}
-	select {
-	case msg := <-messages:
-		t.Fatalf("single-foreground terminal received concurrent prompt %T", msg)
-	default:
+	// Wait until the second cell reaches approval while the first prompt is
+	// still open. Script output before read_file would not prove this.
+	poll := time.NewTicker(5 * time.Millisecond)
+	defer poll.Stop()
+waiting:
+	for {
+		for _, cell := range e.CodeModeCells(sessionID) {
+			if cell.CellID == second.CellID && cell.Status == "awaiting_approval" {
+				break waiting
+			}
+		}
+		select {
+		case msg := <-messages:
+			t.Fatalf("single-foreground terminal received concurrent prompt %T", msg)
+		case <-ctx.Done():
+			t.Fatalf("second cell did not reach approval: %+v", e.CodeModeCells(sessionID))
+		case <-poll.C:
+		}
 	}
+
 	// A later yolo toggle must not widen either admitted prompt-mode cell.
 	manager.ApprovalMgr.SetApprovalMode(tools.ModeYolo)
 	cancelled, err := e.CancelCodeMode(ctx, first.CellID)
 	if err != nil || cancelled.Status != "cancelled" {
 		t.Fatalf("cancel %+v %v", cancelled, err)
 	}
-	deadline := time.After(3 * time.Second)
-	dismissed, next := false, false
-	for !dismissed || !next {
-		select {
-		case msg := <-messages:
-			switch msg := msg.(type) {
-			case tuichat.DismissApprovalMsg:
-				dismissed = dismissed || msg.DoneCh == request.DoneCh
-			case tuichat.ApprovalRequestMsg:
-				next = true
-				if !msg.NoAutoApprove {
-					t.Fatal("live yolo widened sibling authority")
-				}
-			}
-		case <-deadline:
-			t.Fatal("cell cancellation did not release terminal transport")
-		}
+	msg = receive("first terminal prompt dismissal")
+	if dismiss, ok := msg.(tuichat.DismissApprovalMsg); !ok || dismiss.DoneCh != request.DoneCh {
+		t.Fatalf("expected first prompt to be dismissed before the next prompt, got %T", msg)
 	}
-	e.InterruptCodeModeSession("terminal")
-	last, err := e.WaitCodeMode(ctx, second.CellID, time.Second, 0)
+	msg = receive("second terminal prompt")
+	next, ok := msg.(tuichat.ApprovalRequestMsg)
+	if !ok || next.DoneCh == request.DoneCh || next.Context == nil || !next.NoAutoApprove {
+		t.Fatalf("second cell did not get its own prompt after the yolo toggle: %+v", msg)
+	}
+
+	e.InterruptCodeModeSession(sessionID)
+	msg = receive("second terminal prompt dismissal")
+	if dismiss, ok := msg.(tuichat.DismissApprovalMsg); !ok || dismiss.DoneCh != next.DoneCh {
+		t.Fatalf("Stop did not dismiss second prompt, got %T", msg)
+	}
+	last, err := e.WaitCodeMode(ctx, second.CellID, 20*time.Second, 0)
 	if err != nil || last.Status != "cancelled" {
 		t.Fatalf("Stop %+v %v", last, err)
 	}
-	deadline = time.After(3 * time.Second)
 	for e.HasAnyCodeModeCells() {
 		select {
-		case <-deadline:
-			t.Fatal("terminal approval kept actual lease/admission place")
-		default:
-			runtime.Gosched()
+		case <-ctx.Done():
+			t.Fatalf("terminal approval kept actual lease/admission place: %+v", e.CodeModeCells(sessionID))
+		case <-poll.C:
 		}
 	}
 }
