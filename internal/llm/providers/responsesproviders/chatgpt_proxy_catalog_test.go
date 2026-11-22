@@ -17,6 +17,9 @@ import (
 )
 
 func TestChatGPTProxyCatalogSharedAcrossProvidersAndScopedToRoute(t *testing.T) {
+	if !runProxyCatalogTestInChild(t) {
+		return
+	}
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	const origin = "https://chatgpt-catalog-cache.example.test"
 	const first = origin + "/first"
@@ -46,7 +49,11 @@ func TestChatGPTProxyCatalogSharedAcrossProvidersAndScopedToRoute(t *testing.T) 
 	}
 	ctx := context.Background()
 	for _, root := range []string{first, second} {
-		key := root + "\x00" + provider(root).creds.AccountID
+		scope, err := provider(root).delegatedCatalogScope()
+		if err != nil {
+			t.Fatal(err)
+		}
+		key := scope.id
 		t.Cleanup(func() {
 			proxyChatGPTCatalogs.Lock()
 			delete(proxyChatGPTCatalogs.entries, key)
@@ -68,7 +75,18 @@ func TestChatGPTProxyCatalogSharedAcrossProvidersAndScopedToRoute(t *testing.T) 
 		t.Fatalf("a caller mutated cached metadata: %s", got)
 	}
 	assertCatalog(second, "second-1")
-	assertCatalog(first, "first-1")
+	scope, err := provider(first).delegatedCatalogScope()
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegatedPath, err := scope.path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(delegatedPath); err != nil {
+		t.Fatal(err)
+	}
+	assertCatalog(first, "first-1") // Warm discovery does not need the disk file.
 	if calls["/first"] != 1 || calls["/second"] != 1 {
 		t.Fatalf("expected one catalog request per route: %v", calls)
 	}
@@ -78,12 +96,20 @@ func TestChatGPTProxyCatalogSharedAcrossProvidersAndScopedToRoute(t *testing.T) 
 	}
 	assertCatalog(first, "first-2")
 
-	key := first + "\x00" + provider(first).creds.AccountID
+	key := scope.id
+	forgetChatGPTProxyCatalog(scope)
+	assertCatalog(first, "first-2") // Disk hit after dropping the in-process entry.
+	if calls["/first"] != 2 {
+		t.Fatalf("disk hit unexpectedly fetched the catalog: %v", calls)
+	}
 	proxyChatGPTCatalogs.Lock()
 	entry := proxyChatGPTCatalogs.entries[key]
 	entry.FetchedAt = time.Now().Add(-chatGPTModelsCacheTTL - time.Second)
 	proxyChatGPTCatalogs.entries[key] = entry
 	proxyChatGPTCatalogs.Unlock()
+	if err := scope.save(entry); err != nil {
+		t.Fatal(err)
+	}
 	assertCatalog(first, "first-3")
 	path, err := chatGPTModelsCachePath()
 	if err != nil {
@@ -95,9 +121,19 @@ func TestChatGPTProxyCatalogSharedAcrossProvidersAndScopedToRoute(t *testing.T) 
 }
 
 func TestChatGPTProxyStreamResolvesEffortFromRouteCatalog(t *testing.T) {
+	if !runProxyCatalogTestInChild(t) {
+		return
+	}
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	if err := saveChatGPTModelsCache(chatGPTModelsCache{
+		ClientVersion: chatGPTModelsClientVersion, FetchedAt: time.Now(),
+		Models: []ModelInfo{{ID: "gpt-6.2-sol", ServiceTiers: []ModelServiceTier{{ID: "priority"}}, ReasoningEfforts: []string{"high"}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	type wireRequest struct {
 		Model     string `json:"model"`
+		Tier      string `json:"service_tier"`
 		Reasoning struct {
 			Effort string `json:"effort"`
 		} `json:"reasoning"`
@@ -106,9 +142,9 @@ func TestChatGPTProxyStreamResolvesEffortFromRouteCatalog(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/variants/models":
-			fmt.Fprint(w, `{"models":[{"slug":"gpt-6.2-sol","supported_reasoning_levels":["low","medium","high"]}]}`)
+			fmt.Fprint(w, `{"models":[{"slug":"gpt-6.2-sol","context_window":12345,"supported_reasoning_levels":["low","medium","high"],"service_tiers":[{"id":"priority"}]}]}`)
 		case "/literal/models":
-			fmt.Fprint(w, `{"models":[{"slug":"gpt-6.2-sol","supported_reasoning_levels":["medium"]},{"slug":"gpt-6.2-sol-medium"}]}`)
+			fmt.Fprint(w, `{"models":[{"slug":"gpt-6.2-sol","supported_reasoning_levels":["medium"]},{"slug":"gpt-6.2-sol-medium"},{"slug":"gpt-6.2-sol-high-fast"}]}`)
 		case "/variants/responses", "/literal/responses":
 			var got wireRequest
 			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
@@ -132,13 +168,21 @@ func TestChatGPTProxyStreamResolvesEffortFromRouteCatalog(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name, route, configured, override, explicitEffort, wantModel, wantEffort string
+		name, route, configured, override, explicitEffort, wantModel, wantEffort, wantTier string
+		explicitTier                                                                       bool
 	}{
 		{name: "cold configured default", route: "variants", configured: "gpt-6.2-sol-medium", wantModel: "gpt-6.2-sol", wantEffort: "medium"},
 		{name: "request suffix", route: "variants", configured: "gpt-6.2-sol-medium", override: "gpt-6.2-sol-high", wantModel: "gpt-6.2-sol", wantEffort: "high"},
 		{name: "explicit effort", route: "variants", configured: "gpt-6.2-sol-medium", override: "gpt-6.2-sol-high", explicitEffort: "low", wantModel: "gpt-6.2-sol", wantEffort: "low"},
 		{name: "suffix-free override inherits default", route: "variants", configured: "gpt-6.2-sol-medium", override: "gpt-6.2-sol", wantModel: "gpt-6.2-sol", wantEffort: "medium"},
 		{name: "unsupported suffix stays literal", route: "variants", configured: "gpt-6.2-sol-max", wantModel: "gpt-6.2-sol-max"},
+		{name: "plain fast default", route: "variants", configured: "gpt-6.2-sol-fast", wantModel: "gpt-6.2-sol", wantTier: "priority"},
+		{name: "effort fast default", route: "variants", configured: "gpt-6.2-sol-high-fast", wantModel: "gpt-6.2-sol", wantEffort: "high", wantTier: "priority"},
+		{name: "effort fast override", route: "variants", configured: "gpt-6.2-sol", override: "gpt-6.2-sol-high-fast", wantModel: "gpt-6.2-sol", wantEffort: "high", wantTier: "priority"},
+		{name: "explicit tier clears fast", route: "variants", configured: "gpt-6.2-sol-high-fast", explicitTier: true, wantModel: "gpt-6.2-sol", wantEffort: "high"},
+		{name: "unsupported effort fast stays literal", route: "variants", configured: "gpt-6.2-sol-max-fast", wantModel: "gpt-6.2-sol-max-fast"},
+		{name: "unadvertised fast stays literal on another route", route: "literal", configured: "gpt-6.2-sol-fast", wantModel: "gpt-6.2-sol-fast"},
+		{name: "exact fast ID on another route", route: "literal", configured: "gpt-6.2-sol-high-fast", wantModel: "gpt-6.2-sol-high-fast"},
 		{name: "exact ID on another route", route: "literal", configured: "gpt-6.2-sol-medium", wantModel: "gpt-6.2-sol-medium"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,16 +192,21 @@ func TestChatGPTProxyStreamResolvesEffortFromRouteCatalog(t *testing.T) {
 				t.Fatal(err)
 			}
 			stream, err := p.Stream(context.Background(), Request{
-				Model: tc.override, ReasoningEffort: tc.explicitEffort, Messages: []Message{UserText("hello")},
+				Model: tc.override, ReasoningEffort: tc.explicitEffort, ServiceTierSet: tc.explicitTier, Messages: []Message{UserText("hello")},
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer stream.Close()
 			drainStreamToDone(t, stream)
+			if tc.wantTier == "priority" {
+				if limit, err := p.effectiveInputLimit(context.Background(), chooseModel(tc.override, tc.configured)); err != nil || limit != 12345 {
+					t.Fatalf("context limit = %d, %v; want 12345", limit, err)
+				}
+			}
 			got := <-requests
-			if got.Model != tc.wantModel || got.Reasoning.Effort != tc.wantEffort {
-				t.Fatalf("wire model/effort = %q/%q, want %q/%q", got.Model, got.Reasoning.Effort, tc.wantModel, tc.wantEffort)
+			if got.Model != tc.wantModel || got.Reasoning.Effort != tc.wantEffort || got.Tier != tc.wantTier {
+				t.Fatalf("wire model/effort/tier = %q/%q/%q, want %q/%q/%q", got.Model, got.Reasoning.Effort, got.Tier, tc.wantModel, tc.wantEffort, tc.wantTier)
 			}
 		})
 	}

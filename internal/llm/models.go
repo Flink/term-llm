@@ -634,27 +634,9 @@ func ReasoningEffortsForProviderModel(provider, model string) []string {
 // Existing effort-suffixed entries are kept but not expanded again. Output is
 // de-duplicated while preserving first-seen order.
 func ExpandWithEffortVariantsForProvider(provider string, models []string) []string {
-	var expanded []string
-	seen := make(map[string]bool, len(models))
-	appendModel := func(model string) {
-		if model == "" || seen[model] {
-			return
-		}
-		seen[model] = true
-		expanded = append(expanded, model)
-	}
-
-	for _, m := range models {
-		appendModel(m)
-		base, effort := BaseModelAndEffortForProvider(provider, m)
-		if effort != "" || base != m {
-			continue
-		}
-		for _, v := range ReasoningEffortsForProviderModel(provider, base) {
-			appendModel(base + "-" + v)
-		}
-	}
-	return expanded
+	return expandEffortVariants(models, func(model string) []string {
+		return providerBaseEfforts(provider, model)
+	})
 }
 
 // ExpandWithEffortVariants expands a model list by appending legacy
@@ -962,9 +944,9 @@ func completeProviderModels(provider, modelPrefix string, isImage bool, cfg *con
 	if !isImage && config.InferProviderType(provider, providerCfg.Type) == config.ProviderTypeOpenCodeGo {
 		rp.PrimeOpenCodeGoCatalogScope(resolvedProviderAPIKey(cfg, provider), providerCfg.BaseURL)
 	}
-	models, configured := configuredCompletionModels(provider, isImage, providerCfg)
+	models, configured := configuredCompletionModels(cfg, provider, isImage, providerCfg)
 	if !configured {
-		models, _ = completionModelCandidates(provider, isImage, providerCfg, cfg, getModelIDs)
+		models = cachedCompletionCandidates(provider, isImage, providerCfg, cfg, getModelIDs)
 		if !isImage && len(models) == 0 {
 			models = ProviderAllowedModelIDs(cfg, provider)
 		}
@@ -978,28 +960,7 @@ func completeProviderModels(provider, modelPrefix string, isImage bool, cfg *con
 		models = ExpandProviderModelIDsForDiscovery(cfg, provider, models)
 	}
 
-	// Reveal suffixes only after their parent model name is fully typed.
-	var completions []string
-	for _, model := range models {
-		if !isImage {
-			base, effort := BaseModelAndEffortForProvider(provider, model)
-			if effort != "" && !strings.HasPrefix(modelPrefix, base) {
-				continue
-			}
-		}
-		if strings.HasPrefix(model, modelPrefix) {
-			completions = append(completions, provider+":"+model)
-		}
-		if !isImage && config.InferProviderType(provider, providerCfg.Type) == config.ProviderTypeChatGPT && strings.HasPrefix(modelPrefix, model) {
-			fast := model + "-fast"
-			if strings.HasPrefix(fast, modelPrefix) && !slices.Contains(models, fast) {
-				if _, tier := rp.ChatGPTModelServiceTier(fast); tier != "" && CheckProviderModelAllowed(cfg, provider, fast) == nil {
-					completions = append(completions, provider+":"+fast)
-				}
-			}
-		}
-	}
-	return completions
+	return filterModelCompletions(cfg, provider, modelPrefix, isImage, models, providerCfg)
 }
 
 func providerConfigForCompletion(provider string, isImage bool, cfg *config.Config) config.ProviderConfig {
@@ -1016,7 +977,7 @@ func providerConfigForCompletion(provider string, isImage bool, cfg *config.Conf
 	return providerCfg
 }
 
-func configuredCompletionModels(provider string, isImage bool, providerCfg config.ProviderConfig) ([]string, bool) {
+func configuredCompletionModels(cfg *config.Config, provider string, isImage bool, providerCfg config.ProviderConfig) ([]string, bool) {
 	configModels := providerCfg.Models
 	if len(configModels) == 0 {
 		return nil, false
@@ -1024,7 +985,7 @@ func configuredCompletionModels(provider string, isImage bool, providerCfg confi
 
 	// ChatGPT model metadata augments, rather than replaces, discovery.
 	if !isImage && config.InferProviderType(provider, providerCfg.Type) == config.ProviderTypeChatGPT {
-		configModels = append(append([]string(nil), configModels...), ProviderModelIDs("chatgpt")...)
+		configModels = append(append([]string(nil), configModels...), chatGPTCompletionCatalogIDs(cfg, provider)...)
 	}
 
 	// Use config-defined models list, plus configured model (deduped)

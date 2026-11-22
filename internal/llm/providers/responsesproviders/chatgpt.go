@@ -101,11 +101,11 @@ func NewChatGPTProviderWithCredsAndOptions(creds *credentials.ChatGPTCredentials
 		model = chatGPTDefaultModel
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
-	model, tier := chatGPTModelServiceTier(model)
-	actualModel, effort := model, ""
-	// Keep the raw selection for delegation; the route's catalog may list
-	// this exact ID or advertise variants missing from the local parser.
+	actualModel, effort, tier := model, "", ""
+	// Keep the raw selection for delegation; only the route's own catalog can
+	// distinguish its exact IDs from effort and service-tier suffixes.
 	if baseURL == "" || !creds.Delegated() {
+		model, tier = chatGPTModelServiceTier(model)
 		actualModel, effort = parseModelEffortForProvider("chatgpt", model)
 	}
 	return &ChatGPTProvider{
@@ -242,12 +242,32 @@ func (p *ChatGPTProvider) NativeToolDiscoverySupport(model string) NativeToolDis
 	if p == nil || !p.useWebSocket {
 		return NativeToolDiscoverySupport{Reason: "ChatGPT native tool discovery requires Responses WebSocket transport"}
 	}
-	model, _ = chatGPTModelServiceTier(chooseModel(model, p.model))
-	actualModel, _ := parseModelEffortForProvider("chatgpt", model)
+	actualModel := chooseModel(model, p.model)
+	if p.baseURL != "" && p.creds.Delegated() {
+		actualModel, _, _ = delegatedChatGPTSelection(p.cachedDelegatedModelFacts, actualModel)
+	} else {
+		actualModel, _ = chatGPTModelServiceTier(actualModel)
+		actualModel, _ = parseModelEffortForProvider("chatgpt", actualModel)
+	}
+	return p.nativeToolDiscoverySupportForModel(actualModel)
+}
+
+func (p *ChatGPTProvider) nativeToolDiscoverySupportForModel(actualModel string) NativeToolDiscoverySupport {
+	if !p.useWebSocket {
+		return NativeToolDiscoverySupport{Reason: "ChatGPT native tool discovery requires Responses WebSocket transport"}
+	}
 	if !chatGPTNativeToolDiscoveryModels[actualModel] {
 		return NativeToolDiscoverySupport{Reason: fmt.Sprintf("ChatGPT native tool discovery is verified only for %s, not %s", strings.Join(chatGPTNativeToolDiscoveryModelList(), ", "), actualModel)}
 	}
 	return NativeToolDiscoverySupport{Supported: true, Name: "chatgpt-oauth-responses-websocket/tool_search", Reason: "exact verified " + actualModel + " WebSocket path"}
+}
+
+// A delegated request has already resolved its model against its route catalog.
+func (p *ChatGPTProvider) requestNativeToolDiscoverySupport(model string) NativeToolDiscoverySupport {
+	if p.baseURL != "" && p.creds.Delegated() {
+		return p.nativeToolDiscoverySupportForModel(model)
+	}
+	return p.NativeToolDiscoverySupport(model)
 }
 
 func (p *ChatGPTProvider) Stream(ctx context.Context, req Request) (Stream, error) {
@@ -276,9 +296,7 @@ func (p *ChatGPTProvider) Stream(ctx context.Context, req Request) (Stream, erro
 	}
 
 	// Effort precedence: req.ReasoningEffort wins over model suffix, which wins over provider-level effort.
-	reqModel, tier := chatGPTModelServiceTier(chooseModel(req.Model, p.model))
-	explicitEffort := strings.TrimSpace(req.ReasoningEffort)
-	model, effort := p.requestModelEffort(ctx, reqModel, explicitEffort)
+	model, effort, tier := p.requestModelSelection(ctx, chooseModel(req.Model, p.model), strings.TrimSpace(req.ReasoningEffort))
 
 	responsesOptions := mergeResponsesOptions(p.responsesOptions, req.Responses, req.Ephemeral)
 	if _, err := validateResponsesOptions("chatgpt", model, &responsesOptions, req.Tools); err != nil {
@@ -290,7 +308,7 @@ func (p *ChatGPTProvider) Stream(ctx context.Context, req Request) (Stream, erro
 	tools, strictTools := buildChatGPTTools(req.Tools)
 	var toolSearch *ResponsesToolSearchTool
 	if req.NativeToolDiscovery != nil {
-		support := p.NativeToolDiscoverySupport(model)
+		support := p.requestNativeToolDiscoverySupport(model)
 		if !support.Supported {
 			return nil, fmt.Errorf("native tool discovery unsupported: %s", support.Reason)
 		}
@@ -340,7 +358,7 @@ func (p *ChatGPTProvider) Stream(ctx context.Context, req Request) (Stream, erro
 		ForceWebSocket: req.NativeToolDiscovery != nil || history.HasDiscoveryParts,
 	}
 
-	responsesReq.ServiceTier = firstNonEmpty(tier, p.serviceTier)
+	responsesReq.ServiceTier = tier
 	if req.ServiceTierSet || strings.TrimSpace(req.ServiceTier) != "" {
 		responsesReq.ServiceTier = NormalizeServiceTier(req.ServiceTier)
 	}

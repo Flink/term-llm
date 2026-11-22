@@ -2929,7 +2929,7 @@ func (s *serveServer) getLocalModelsForProvider(effectiveName, queryProvider str
 			}
 		}
 	}
-	return appendModelIDs(models, llm.ResolveProviderModelIDs(effectiveName))
+	return appendLocalModelCatalog(models, s.cfgRef, effectiveName)
 }
 
 func (s *serveServer) getCachedModelsForProvider(name string) []core.ModelInfo {

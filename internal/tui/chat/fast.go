@@ -57,6 +57,8 @@ func (m *Model) canLoadModelMetadata() bool {
 	switch m.providerType() {
 	case config.ProviderTypeChatGPT, config.ProviderTypeOpenCodeGo, config.ProviderTypeZen:
 		return true
+	case config.ProviderTypeGrok, config.ProviderTypeCopilot:
+		return llm.UsesDelegatedModelCatalog(m.config, m.providerKey)
 	default:
 		return false
 	}

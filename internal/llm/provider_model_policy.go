@@ -12,24 +12,30 @@ import (
 // Configured aliases are matched by upstream identity; moving backend aliases
 // such as Claude Code's "opus" are not resolved to a pinned generation.
 func CheckProviderModelAllowed(cfg *config.Config, provider, model string) error {
-	if cfg == nil {
-		return nil
+	return providerModelCheck(cfg, provider)(model)
+}
+
+// providerModelCheck shares one catalog snapshot and validated allowlist
+// across a batch. Unrestricted providers do not need a catalog read.
+func providerModelCheck(cfg *config.Config, provider string) func(string) error {
+	if cfg == nil || len(cfg.Providers[provider].AllowedModels) == 0 {
+		return func(string) error { return nil }
 	}
 	pc := cfg.Providers[provider]
-	if len(pc.AllowedModels) == 0 {
-		return nil
-	}
 	if err := config.ValidateProviderAllowedModels(provider, pc.AllowedModels); err != nil {
-		return err
+		return func(string) error { return err }
 	}
-	selected := providerPolicyModel(cfg, provider, model)
-	for _, allowed := range pc.AllowedModels {
-		allowed = config.UpstreamModelForProviderModel(cfg, provider, allowed)
-		if IsModelOrEffortVariantForConfig(cfg, provider, selected, allowed) {
-			return nil
+	catalog, _, _ := DelegatedModelCatalog(cfg, provider)
+	allowed := ProviderAllowedModelIDs(cfg, provider)
+	return func(model string) error {
+		selected := providerPolicyModel(cfg, provider, model)
+		for _, base := range allowed {
+			if isModelOrEffortVariantForConfig(cfg, provider, selected, base, catalog) {
+				return nil
+			}
 		}
+		return fmt.Errorf("model %q is not allowed by providers.%s.allowed_models (allowed: %s)", provider+":"+selected, provider, strings.Join(pc.AllowedModels, ", "))
 	}
-	return fmt.Errorf("model %q is not allowed by providers.%s.allowed_models (allowed: %s)", provider+":"+selected, provider, strings.Join(pc.AllowedModels, ", "))
 }
 
 func providerPolicyModel(cfg *config.Config, provider, model string) string {

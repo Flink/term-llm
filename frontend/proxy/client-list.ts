@@ -1,6 +1,8 @@
 import type { ProxyCaller, ProxyClient } from '../src/api/proxy-client';
 import type { ProviderGroup } from './provider-groups';
-import { actions, badge, confirmAction, dateTime, disclosure, el, type UIContext } from './dom';
+import { actions, confirmAction, dateTime, disclosure, el, type UIContext } from './dom';
+
+const byProviderName = new Intl.Collator(undefined, { sensitivity: 'accent', numeric: true });
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -69,33 +71,95 @@ function nameNode(caller: ProxyCaller, suffixes: Map<string, string>): Node[] {
   return [document.createTextNode(`${caller.name} `), id];
 }
 
-// Approvals are provider-wide, so the row summarizes providers, not routes.
-// Revoked rows still show the approvals they held: providerApproval() answers
-// for live access and reports none once a client is revoked.
-function approvalBadges(caller: ProxyCaller, groups: ProviderGroup[]): HTMLElement {
-  const nodes: HTMLElement[] = [];
-  for (const group of [...groups].sort((a, b) => a.label.localeCompare(b.label))) {
-    const covered = group.routes.filter((route) => caller.grants.includes(route.name)).length;
+interface ProviderLabel {
+  name: string;
+  note?: string;
+  caution?: boolean;
+}
+
+// Revoked rows summarize their former access, including legacy partial grants.
+function approvalLabels(caller: ProxyCaller, groups: ProviderGroup[]): ProviderLabel[] {
+  const labels: ProviderLabel[] = [];
+  const granted = new Set(caller.grants);
+  const grouped = new Set<string>();
+  for (const group of groups) {
+    let covered = 0;
+    for (const route of group.routes) {
+      grouped.add(route.name);
+      if (granted.has(route.name)) covered++;
+    }
     if (!covered) continue;
     const partial = covered < group.routes.length;
-    const label = !partial
-      ? group.label
-      : caller.revoked
-        ? `${group.label} (partial)`
-        : `${group.label} (needs approval)`;
-    nodes.push(
-      badge(
-        label,
-        partial ? (caller.revoked ? '' : 'caution') : caller.revoked ? '' : 'credential',
-      ),
-    );
+    labels.push({
+      name: group.label,
+      note: partial ? (caller.revoked ? ' (partial)' : ' (needs approval)') : '',
+      caution: partial && !caller.revoked,
+    });
   }
-  // A grant to a route no longer in a group still represents access; never hide it.
-  const grouped = new Set(groups.flatMap((group) => group.routes.map((route) => route.name)));
-  for (const grant of [...caller.grants].sort()) if (!grouped.has(grant)) nodes.push(badge(grant));
-  const node = el('div', ...(nodes.length ? nodes : [badge('No providers')]));
-  node.className = 'route-badges client-grants';
-  return node;
+  // Ungrouped grants still represent access and belong in the same sorted list.
+  for (const name of granted) if (!grouped.has(name)) labels.push({ name });
+  return labels.sort((a, b) => byProviderName.compare(a.name, b.name));
+}
+
+function providerSummary(labels: ProviderLabel[]): HTMLElement {
+  const names = labels.map(({ name, note, caution }) => {
+    const span = el('span', name + (note ?? ''));
+    if (caution) span.className = 'client-grant-caution';
+    return span;
+  });
+  const line = el('span');
+  line.className = 'client-provider-line';
+  const cell = el('div', line);
+  cell.className = 'client-grants';
+  if (!names.length) {
+    line.textContent = 'No providers';
+    return cell;
+  }
+  const full = names.map((n) => n.textContent).join(', ');
+  cell.setAttribute('role', 'group');
+  cell.setAttribute('aria-label', `Providers: ${full}`);
+  line.setAttribute('aria-hidden', 'true');
+  cell.title = full;
+  function show(count: number) {
+    const parts: (Node | string)[] = [];
+    for (const span of names.slice(0, count)) {
+      if (parts.length) parts.push(', ');
+      parts.push(span);
+    }
+    if (count < names.length) {
+      const more = el(
+        'span',
+        count
+          ? ` and ${names.length - count} more`
+          : `${names.length} provider${names.length === 1 ? '' : 's'}`,
+      );
+      more.className = 'client-grant-more';
+      parts.push(more);
+    }
+    line.replaceChildren(...parts);
+  }
+  show(names.length);
+  if (typeof ResizeObserver !== 'undefined') {
+    const observer = new ResizeObserver(([entry]) => {
+      if (!cell.isConnected) return observer.disconnect();
+      const width = entry.contentRect.width;
+      if (!width) return; // A closed revoked-clients disclosure has no layout yet.
+      show(names.length);
+      if (line.getBoundingClientRect().width <= width) return;
+      // Reserve room for the actual suffix, not an estimated character count.
+      let lo = 0,
+        hi = names.length - 1;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        show(mid);
+        if (line.getBoundingClientRect().width <= width) lo = mid;
+        else hi = mid - 1;
+      }
+      show(lo);
+    });
+    observer.observe(cell);
+  }
+  return cell;
 }
 
 function lastUsed(caller: ProxyCaller, now: Date): HTMLElement {
@@ -140,7 +204,12 @@ export function clientRow(
   const metadataNodes: HTMLElement[] = metadata.map((text) => el('p', el('small', text)));
   if ('action' in options) metadataNodes.push(options.action);
   const identity = metadataNodes.length ? el('div', heading, ...metadataNodes) : heading;
-  const main = el('div', identity, approvalBadges(caller, groups), lastUsed(caller, now));
+  const main = el(
+    'div',
+    identity,
+    providerSummary(approvalLabels(caller, groups)),
+    lastUsed(caller, now),
+  );
   main.className = 'client-row-main';
   const row = el('article', main);
   row.className = 'client-row';

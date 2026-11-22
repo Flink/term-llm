@@ -3,6 +3,8 @@ package chat
 import (
 	"github.com/term-llm/term-llm/internal/config"
 	"github.com/term-llm/term-llm/internal/llm"
+	"github.com/term-llm/term-llm/internal/llm/core"
+	"github.com/term-llm/term-llm/internal/llm/providers/responsesproviders"
 )
 
 // ProviderInfo holds provider and model information
@@ -29,7 +31,7 @@ func GetAvailableProviders(cfg *config.Config) []ProviderInfo {
 		if cfg.ProviderConfiguredVia(name, providerHasLocalCredentials) == "" {
 			continue
 		}
-		curated := llm.ProviderModelIDs(name)
+		curated := llm.ModelIDsForConfiguredProvider(cfg, name)
 		curated = llm.ProviderModelIDsForDiscovery(cfg, name, curated)
 		if len(curated) == 0 {
 			continue
@@ -54,8 +56,8 @@ func GetAvailableProviders(cfg *config.Config) []ProviderInfo {
 				continue
 			}
 			source := providerCfg.Models
-			if len(source) == 0 {
-				source = llm.ResolveProviderModelIDs(name)
+			if llm.UsesDelegatedModelCatalog(cfg, name) || len(source) == 0 {
+				source = llm.ModelIDsForConfiguredProvider(cfg, name)
 			}
 			source = llm.ProviderModelIDsForDiscovery(cfg, name, source)
 			ordered := llm.SortModelIDsByPopularity(name, providerCfg.Model, source)
@@ -70,4 +72,11 @@ func GetAvailableProviders(cfg *config.Config) []ProviderInfo {
 	}
 
 	return providers
+}
+
+func cachedOAuthPickerModels(cfg *config.Config, provider string) ([]core.ModelInfo, bool, error) {
+	if models, fresh, delegated := llm.DelegatedModelCatalog(cfg, provider); delegated {
+		return models, fresh, nil
+	}
+	return responsesproviders.CachedChatGPTModels()
 }

@@ -2,13 +2,11 @@ package clibin
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"github.com/term-llm/term-llm/internal/llm/core"
-	"os"
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/cache"
+	"github.com/term-llm/term-llm/internal/llm/core"
 )
 
 const agyBinModelCacheKey = "agy-bin"
@@ -175,7 +173,11 @@ func defaultAgyModelsCommandOutput(ctx context.Context, p *AgyBinProvider) ([]by
 		return nil, err
 	}
 	if binding != nil {
-		return p.boundAgyModels(ctx, binding)
+		worker := NewAgyBinProvider(p.model, p.extraEnv)
+		if err := worker.resolveBinary(); err != nil {
+			return nil, err
+		}
+		return worker.runBoundAgyCommand(ctx, binding, "models")
 	}
 	cmd, err := newCLICommand(ctx, "agy", []string{"models"}, "")
 	if err != nil {
@@ -188,31 +190,6 @@ func defaultAgyModelsCommandOutput(ctx context.Context, p *AgyBinProvider) ([]by
 	}
 	cmd.Env = auditedEnv
 	defer stopCLIWireAudit(wireAudit)
-	return cmd.Output()
-}
-
-// Use a scratch home rather than the live generation session (which may be
-// streaming). Each process independently seeds aliases from discovery.
-func (p *AgyBinProvider) boundAgyModels(ctx context.Context, binding *agyBoundRoute) (out []byte, retErr error) {
-	worker := NewAgyBinProvider(p.model, p.extraEnv)
-	if err := worker.resolveBinary(); err != nil {
-		return nil, err
-	}
-	if err := worker.prepareHome(true, true); err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(worker.agyHome)
-	defer worker.cleanupRuntime()
-	finish, err := worker.startNativeProxyWorker(ctx, binding)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { retErr = errors.Join(retErr, finish()) }()
-	cmd, err := worker.newAgyCommand(ctx, []string{"models"})
-	if err != nil {
-		return nil, err
-	}
-	cmd.Env = worker.proxyEnv
 	return cmd.Output()
 }
 

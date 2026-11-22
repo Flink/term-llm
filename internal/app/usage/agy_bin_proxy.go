@@ -1,28 +1,32 @@
 package usage
 
 import (
-	"context"
 	"errors"
 	"strings"
 
-	"github.com/term-llm/term-llm/internal/app/proxyrun"
+	"github.com/term-llm/term-llm/internal/proxyclient"
 )
-
-// agyUsageProxiedCommand runs agy's read-only /usage print command as a shared
-// worker through the configured scoped route. It is a seam for tests.
-var agyUsageProxiedCommand = func(ctx context.Context, binary string, connection proxyrun.Connection) ([]byte, error) {
-	return proxyrun.AgySharedOutput(ctx, connection, binary, "--output-format", "json", "-p=/usage")
-}
 
 // configuredAgyUsageProxy resolves only an explicitly configured agy-bin
 // binding. A configured but invalid binding fails closed with no local
 // Antigravity login fallback.
-func configuredAgyUsageProxy() (proxyrun.Connection, bool, error) {
+func configuredAgyUsageProxy() (*proxyclient.Binding, error) {
 	cfg, err := loadProviderUsageConfig()
 	if err != nil {
-		return proxyrun.Connection{}, false, errors.New("could not load Antigravity proxy usage configuration")
+		return nil, errors.New("could not load Antigravity proxy usage configuration")
 	}
-	return proxyrun.ResolveConfiguredAgyConnection(cfg)
+	if cfg == nil {
+		return nil, nil
+	}
+	provider := cfg.GetProviderConfig(proxyclient.AgyNativeKind)
+	if provider == nil || strings.TrimSpace(provider.ProxyBinding) == "" {
+		return nil, nil
+	}
+	binding, err := proxyclient.ResolveAgyNativeBinding(provider.ProxyBinding)
+	if err != nil {
+		return nil, err
+	}
+	return &binding, nil
 }
 
 // redactAgyProxyToken keeps the scoped token out of agy-provided response text.

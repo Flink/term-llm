@@ -573,6 +573,64 @@ test('Clients creates one client for approved providers without per-route contro
   ).not.toContain('provider-client-token');
 });
 
+test('Clients fits the longest alphabetic provider summary as the row resizes', async ({
+  page,
+}) => {
+  // The long third label forces truncation on mobile; the short last label
+  // would fit, but must not be picked out of alphabetic order.
+  const longName = 'Gamma Worldwide Managed Model Workspace West';
+  const labels = ['Zulu', longName, 'Beta', 'alpha'];
+  const routes = labels.map((_, index) => ({
+    name: `route-${index}`,
+    provider: `provider-${index}`,
+    enabled: true,
+    profile: '',
+    serves: [],
+    local_prefix: `/route-${index}/`,
+    upstream: 'https://example.test/v1',
+    allow_insecure_http: false,
+    caller_auth: { header: 'Authorization', prefix: 'Bearer ' },
+    set_headers: {},
+  }));
+  const state: ProxyState = {
+    ...snapshot,
+    routes,
+    providers: routes.map((route, index) => ({
+      id: route.provider,
+      label: labels[index],
+      family: 'inference',
+      status: 'green',
+      reason: '',
+      routes: [route.name],
+    })),
+    callers: [
+      { id: 'all', name: 'All approvals', grants: routes.map((route) => route.name) },
+      { id: 'pair', name: 'Two approvals', grants: [routes[0].name, routes[1].name] },
+    ].map((caller) => ({ ...caller, created: 1, created_by: '', external_id: '', revoked: false })),
+  };
+  await page.route('http://proxy.test/_proxy/api/state', (route) => route.fulfill({ json: state }));
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('http://proxy.test/_proxy/?tab=clients');
+  const row = page.locator('[data-focus="caller:all"]');
+  const all = row.locator('.client-grants');
+  const pair = page.locator('[data-focus="caller:pair"] .client-grants');
+  const full = `alpha, Beta, ${longName}, Zulu`;
+  await expect(all).toHaveText(full, { useInnerText: true });
+  await expect(pair).toHaveText(`${longName}, Zulu`, { useInnerText: true });
+
+  await page.setViewportSize({ width: 320, height: 900 });
+  await expect(all).toHaveText('alpha, Beta and 2 more', { useInnerText: true });
+  await expect(pair).toHaveText('2 providers', { useInnerText: true });
+  await row.locator('.client-toggle').click();
+  const approvals = row.getByRole('group', { name: 'Provider approvals' });
+  for (const name of labels) {
+    await expect(approvals.getByRole('checkbox', { name, exact: true })).toBeChecked();
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(all).toHaveText(full, { useInnerText: true });
+  await expect(pair).toHaveText(`${longName}, Zulu`, { useInnerText: true });
+});
+
 test('Clients preserves legacy partial approvals and edits only explicit providers', async ({
   page,
 }) => {

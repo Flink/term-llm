@@ -72,6 +72,7 @@ func refreshProviderCompletionCaches(toComplete string, cfg *config.Config) {
 	}
 	refreshAgyBinCompletionCache(toComplete, cfg)
 	refreshGrokBinCompletionCache(toComplete, cfg)
+	refreshDelegatedCompletionCache(toComplete, cfg)
 	refreshClaudeBinCompletionCache(toComplete, cfg)
 	refreshOllamaCompletionCache(toComplete, cfg)
 	refreshZenCompletionCache(toComplete, cfg)
@@ -127,6 +128,23 @@ func refreshAnthropicCompletionCache(toComplete string, cfg *config.Config) {
 	case <-done:
 	case <-ctx.Done():
 	}
+}
+
+func refreshDelegatedCompletionCache(toComplete string, cfg *config.Config) {
+	if provider, _, ok := strings.Cut(toComplete, ":"); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), endpointCompletionRefreshTimeout)
+		defer cancel()
+		llm.RefreshDelegatedModelDiscovery(ctx, cfg, provider)
+	}
+}
+
+func configModelCandidates(provider string, cfg *config.Config) []string {
+	refreshDelegatedCompletionCache(provider+":", cfg)
+	models := ollamaModelCompletions(provider, cfg)
+	if len(models) == 0 {
+		models = llm.ModelIDsForConfiguredProvider(cfg, provider)
+	}
+	return llm.ProviderModelIDsForDiscovery(cfg, provider, models)
 }
 
 func refreshAgyBinCompletionCache(toComplete string, cfg *config.Config) {

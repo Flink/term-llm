@@ -51,6 +51,16 @@ func init() {
 // Runtime-aware providers must win over canonical model-prefix tables.
 func providerRuntimeInputLimit(ctx context.Context, provider core.Provider, providerName, modelName string) (int, bool, error) {
 	if scoped, ok := provider.(interface {
+		DelegatedCopilotInputLimit(context.Context, string) (int, bool)
+	}); ok {
+		if limit, delegated := scoped.DelegatedCopilotInputLimit(ctx, modelName); delegated {
+			if limit == 0 {
+				limit = configInputLimitForProvider(providerName, modelName)
+			}
+			return limit, true, nil
+		}
+	}
+	if scoped, ok := provider.(interface {
 		EffectiveInputLimitForProvider(context.Context, string, string) (int, error)
 	}); ok {
 		if _, hasLimiter := runtimeLimiter(provider); hasLimiter {
@@ -109,12 +119,7 @@ func refreshDynamicModelLimitsForContext(provider core.Provider, providerName, m
 	if !ok {
 		return
 	}
-	models, err := lister.ListModels(ctx)
-	if err != nil {
+	if _, err := lister.ListModels(ctx); err != nil {
 		runtimeoutput.Debug("failed to refresh dynamic model metadata for context limits", "provider", providerName, "model", modelName, "error", err)
-		return
-	}
-	if providerType == "copilot" {
-		rp.RefreshCopilotCacheSync(models)
 	}
 }

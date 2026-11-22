@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/term-llm/term-llm/internal/proxyclient"
 	"io"
 	"net/http"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"github.com/term-llm/term-llm/internal/credentials"
 	"github.com/term-llm/term-llm/internal/grokprotocol"
 	"github.com/term-llm/term-llm/internal/oauth"
+	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 const (
@@ -82,7 +82,14 @@ func (p *GrokProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 }
 
 func (p *GrokProvider) ListModelsWithFreshness(ctx context.Context) ([]ModelInfo, bool, error) {
-	if p.baseURL != "" {
+	if p.baseURL != "" || p.creds.Delegated() {
+		if _, ok := proxyclient.Lookup(p.baseURL); ok {
+			models, err := listDelegatedGrokModels(ctx, p.baseURL)
+			return models, err == nil, err
+		}
+		if p.creds.Delegated() {
+			return nil, false, errGrokCatalogBinding
+		}
 		models, err := p.fetchGrokModels(ctx)
 		return models, err == nil, err
 	}
@@ -111,55 +118,62 @@ func (p *GrokProvider) fetchGrokModels(ctx context.Context) ([]ModelInfo, error)
 		ctx, cancel = context.WithTimeout(ctx, grokModelsTimeout)
 		defer cancel()
 	}
-	for attempt := 0; attempt < 2; attempt++ {
-		endpoint := grokModelsURL
-		if p.baseURL != "" {
-			endpoint = p.baseURL + "/models"
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Accept", "application/json")
-		req.Header.Set("Authorization", "Bearer "+p.creds.AccessToken)
-		req.Header.Set("X-XAI-Token-Auth", "xai-grok-cli")
-		req.Header.Set("x-userid", p.creds.AccountID)
-		req.Header.Set("x-grok-client-version", grokProxyCompatibilityVersion)
-		// Canonical defines this as a client_mode metrics label, not auth.
-		// The provider lacks a reliable runtime interactive signal.
-		req.Header.Set("x-grok-client-mode", grokprotocol.ClientModeHeadless)
-		req.Header.Set("User-Agent", grokUserAgent)
-		client := grokHTTPClient
-		if client == nil {
-			client = defaultHTTPClient
-		}
-		resp, err := proxyclient.Do(client, req)
-		if err != nil {
-			return nil, fmt.Errorf("Grok models request failed: %w", err)
-		}
-		body, readErr := readBoundedGrokModelsBody(resp.Body)
-		resp.Body.Close()
-		if readErr != nil {
-			return nil, readErr
-		}
-		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
-			if err := refreshGrokSession(ctx, p.creds, true); err != nil {
-				return nil, fmt.Errorf("refresh Grok session: %w", err)
-			}
-			continue
-		}
-		if resp.StatusCode == http.StatusForbidden {
-			return nil, errors.New("Grok model catalog access was denied (403); verify subscription and CLI entitlement")
-		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			return nil, &RateLimitError{Message: "Grok model catalog rate limit exceeded", RetryAfter: grokRetryAfter(resp.Header.Get("Retry-After"))}
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("Grok models request failed: HTTP %d", resp.StatusCode)
-		}
-		return parseGrokModels(body)
+	endpoint := grokModelsURL
+	if p.baseURL != "" {
+		endpoint = p.baseURL + "/models"
 	}
-	return nil, errors.New("Grok models authentication failed after refresh")
+	models, err := requestGrokModels(ctx, endpoint, p.creds.AccessToken, p.creds.AccountID)
+	if !errors.Is(err, errGrokModelsUnauthorized) {
+		return models, err
+	}
+	if err := refreshGrokSession(ctx, p.creds, true); err != nil {
+		return nil, fmt.Errorf("refresh Grok session: %w", err)
+	}
+	return requestGrokModels(ctx, endpoint, p.creds.AccessToken, p.creds.AccountID)
+}
+
+var errGrokModelsUnauthorized = errors.New("Grok models request failed: HTTP 401")
+
+func requestGrokModels(ctx context.Context, endpoint, token, accountID string) ([]ModelInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-XAI-Token-Auth", "xai-grok-cli")
+	if accountID != "" {
+		req.Header.Set("x-userid", accountID)
+	}
+	req.Header.Set("x-grok-client-version", grokProxyCompatibilityVersion)
+	// Canonical defines this as a client_mode metrics label, not auth.
+	req.Header.Set("x-grok-client-mode", grokprotocol.ClientModeHeadless)
+	req.Header.Set("User-Agent", grokUserAgent)
+	client := grokHTTPClient
+	if client == nil {
+		client = defaultHTTPClient
+	}
+	resp, err := proxyclient.Do(client, req)
+	if err != nil {
+		return nil, fmt.Errorf("Grok models request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := readBoundedGrokModelsBody(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	switch resp.StatusCode {
+	case http.StatusUnauthorized:
+		return nil, errGrokModelsUnauthorized
+	case http.StatusForbidden:
+		return nil, errors.New("Grok model catalog access was denied (403); verify subscription and CLI entitlement")
+	case http.StatusTooManyRequests:
+		return nil, &RateLimitError{Message: "Grok model catalog rate limit exceeded", RetryAfter: grokRetryAfter(resp.Header.Get("Retry-After"))}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("Grok models request failed: HTTP %d", resp.StatusCode)
+	}
+	return parseGrokModels(body)
 }
 
 func readBoundedGrokModelsBody(body io.Reader) ([]byte, error) {
@@ -358,19 +372,35 @@ func containsGrokString(values []string, target string) bool {
 	return false
 }
 
+type grokCatalogScope struct {
+	file, accountID, origin string
+}
+
+func directGrokCatalog(accountID string) grokCatalogScope {
+	return grokCatalogScope{file: grokModelsCacheFile, accountID: accountID, origin: grokModelsURL}
+}
+
 func grokModelsCachePath() (string, error) {
+	return directGrokCatalog("").path()
+}
+
+func (scope grokCatalogScope) path() (string, error) {
 	dataDir, err := appdata.GetDataDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dataDir, grokModelsCacheFile), nil
+	return filepath.Join(dataDir, scope.file), nil
 }
 
 func loadGrokModelsCache(accountID string) (grokModelsCache, error) {
-	if !oauth.ValidGrokAccountID(accountID) {
+	return directGrokCatalog(accountID).load()
+}
+
+func (scope grokCatalogScope) load() (grokModelsCache, error) {
+	if !oauth.ValidGrokAccountID(scope.accountID) {
 		return grokModelsCache{}, errors.New("cached Grok model catalog account is invalid")
 	}
-	path, err := grokModelsCachePath()
+	path, err := scope.path()
 	if err != nil {
 		return grokModelsCache{}, err
 	}
@@ -398,7 +428,7 @@ func loadGrokModelsCache(accountID string) (grokModelsCache, error) {
 	if err := json.Unmarshal(data, &cache); err != nil {
 		return grokModelsCache{}, err
 	}
-	if cache.AccountID != accountID || cache.Origin != grokModelsURL || cache.ClientVersion != grokProxyCompatibilityVersion || len(cache.Models) == 0 || len(cache.Models) > maxGrokModels {
+	if cache.AccountID != scope.accountID || cache.Origin != scope.origin || cache.ClientVersion != grokProxyCompatibilityVersion || len(cache.Models) == 0 || len(cache.Models) > maxGrokModels {
 		return grokModelsCache{}, errors.New("cached Grok model catalog is invalid")
 	}
 	for i := range cache.Models {
@@ -428,14 +458,19 @@ func loadGrokModelsCache(accountID string) (grokModelsCache, error) {
 }
 
 func saveGrokModelsCache(cache grokModelsCache) error {
-	if !oauth.ValidGrokAccountID(cache.AccountID) {
+	return directGrokCatalog(cache.AccountID).save(cache)
+}
+
+func (scope grokCatalogScope) save(cache grokModelsCache) error {
+	if !oauth.ValidGrokAccountID(scope.accountID) {
 		return errors.New("invalid Grok model cache account")
 	}
 	// Cache entries are endpoint- and wire-version-specific because catalog
 	// metadata must never cross subscription proxy origins or protocol versions.
-	cache.Origin = grokModelsURL
+	cache.AccountID = scope.accountID
+	cache.Origin = scope.origin
 	cache.ClientVersion = grokProxyCompatibilityVersion
-	path, err := grokModelsCachePath()
+	path, err := scope.path()
 	if err != nil {
 		return err
 	}

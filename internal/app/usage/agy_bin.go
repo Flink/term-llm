@@ -78,10 +78,13 @@ func validateAgyBinUsageFlags(cmd interface{ Flags() *pflag.FlagSet }) error {
 	return nil
 }
 
-func runAgyBinUsage(parent context.Context, out io.Writer, jsonOutput bool) error {
-	connection, proxied, err := configuredAgyUsageProxy()
+func runAgyBinUsage(parent context.Context, out io.Writer, jsonOutput bool) (retErr error) {
+	binding, err := configuredAgyUsageProxy()
 	if err != nil {
 		return err
+	}
+	if binding != nil {
+		defer func() { retErr = redactAgyProxyToken(retErr, binding.Token) }()
 	}
 	binary, err := agyUsageLookPath("agy")
 	if err != nil {
@@ -94,8 +97,8 @@ func runAgyBinUsage(parent context.Context, out io.Writer, jsonOutput bool) erro
 	defer cancel()
 
 	var output []byte
-	if proxied {
-		output, err = agyUsageProxiedCommand(ctx, binary, connection)
+	if binding != nil {
+		output, err = clibin.ReadAgyProxyUsage(ctx, binary, binding.Root)
 	} else {
 		output, err = agyUsageCommand(ctx, binary)
 	}
@@ -104,9 +107,6 @@ func runAgyBinUsage(parent context.Context, out io.Writer, jsonOutput bool) erro
 	}
 	raw, report, err := parseAgyBinUsageOutput(output)
 	if err != nil {
-		if proxied {
-			return redactAgyProxyToken(err, connection.Token)
-		}
 		return err
 	}
 	if jsonOutput {
@@ -118,7 +118,7 @@ func runAgyBinUsage(parent context.Context, out io.Writer, jsonOutput bool) erro
 		return err
 	}
 	source := "Live from agy"
-	if proxied {
+	if binding != nil {
 		source = "Live through credential proxy"
 	}
 	return writeAgyBinUsageWithSource(out, report, time.Now(), providerUsageFormatOptions(out), source)

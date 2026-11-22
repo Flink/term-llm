@@ -1141,7 +1141,7 @@ button.route-preset-custom {
 .client-list-head,
 .client-row-main {
   display: grid;
-  grid-template-columns: minmax(10rem, 1.3fr) minmax(0, 2fr) 10rem 1rem;
+  grid-template-columns: clamp(9rem, 18vw, 13rem) minmax(0, 1fr) 8rem 1rem;
   align-items: center;
   gap: 0.75rem;
   padding: 0.5rem 0.85rem;
@@ -1179,8 +1179,24 @@ button.route-preset-custom {
   background: var(--surface-2);
 }
 
-.client-row.expanded .badge {
-  background: var(--surface-3);
+.client-grants {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.client-provider-line {
+  display: inline-block;
+  width: max-content;
+}
+
+.client-grant-more {
+  color: var(--muted);
+}
+
+.client-grant-caution {
+  color: var(--warn);
 }
 
 h2.client-name {

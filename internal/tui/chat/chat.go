@@ -1102,8 +1102,8 @@ func NewWithFastProviderAndApproval(cfg *config.Config, provider core.Provider, 
 	providerIsChatGPT = providerType == config.ProviderTypeChatGPT
 	fastMode = fastProviderDefault
 	fastMetadataStale := false
-	if providerIsChatGPT {
-		if cached, fresh, err := responsesproviders.CachedChatGPTModels(); err == nil {
+	if providerIsChatGPT || llm.UsesDelegatedModelCatalog(cfg, providerKey) {
+		if cached, fresh, err := cachedOAuthPickerModels(cfg, providerKey); err == nil && len(cached) > 0 {
 			modelMetadata = cached
 			fastMetadataLoaded = true
 			fastMetadataStale = !fresh

@@ -280,6 +280,8 @@ type listingProvider struct {
 
 func (p *listingProvider) ListModels(context.Context) ([]core.ModelInfo, error) {
 	p.calls++
+	// Like the native Copilot lister, the provider owns the cache write.
+	rp.RefreshCopilotCacheSync(p.models)
 	return p.models, nil
 }
 

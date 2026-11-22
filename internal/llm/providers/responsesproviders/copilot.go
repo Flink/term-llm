@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/term-llm/term-llm/internal/proxyclient"
 	"io"
 	"net/http"
 	"os"
@@ -15,6 +14,7 @@ import (
 	"github.com/term-llm/term-llm/internal/config"
 	"github.com/term-llm/term-llm/internal/credentials"
 	"github.com/term-llm/term-llm/internal/oauth"
+	"github.com/term-llm/term-llm/internal/proxyclient"
 	"github.com/term-llm/term-llm/internal/runtimeoutput"
 	"github.com/term-llm/term-llm/internal/signal"
 	"golang.org/x/term"
@@ -306,7 +306,7 @@ func (p *CopilotProvider) streamChatCompletions(ctx context.Context, req Request
 		}
 
 		// Set required Copilot headers
-		p.setCopilotAPIHeaders(httpReq, sessionToken)
+		setCopilotAPIHeaders(httpReq, sessionToken)
 		httpReq.Header.Set("Copilot-Vision-Request", "true")
 		httpReq.Header.Set("Accept", "text/event-stream")
 
@@ -601,20 +601,35 @@ func copilotInputLimit(contextWindow, maxOutput int) int {
 	return contextWindow - reserve
 }
 
-// ListModels returns available models from the GitHub Copilot API
+// ListModels fetches the live catalog. Only native and exactly registered
+// Copilot routes update an offline catalog.
 func (p *CopilotProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
-	// Ensure we have a valid session token
+	if _, bound := proxyclient.Lookup(p.overrideBaseURL); bound || p.creds.Delegated() {
+		return listDelegatedCopilotModels(ctx, p.overrideBaseURL)
+	}
+
 	if err := p.ensureValidSession(ctx); err != nil {
 		return nil, fmt.Errorf("failed to initialize Copilot: %w", err)
 	}
+	endpoint := p.apiBaseURL + "/models"
+	if _, bound := proxyclient.Lookup(endpoint); bound {
+		return nil, errCopilotCatalogBinding
+	}
+	models, err := fetchCopilotModels(ctx, endpoint, p.sessionToken)
+	if err == nil && p.overrideBaseURL == "" {
+		RefreshCopilotCacheSync(models)
+	}
+	return models, err
+}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "GET", p.apiBaseURL+"/models", nil)
+func fetchCopilotModels(ctx context.Context, endpoint, token string) ([]ModelInfo, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	// Set required Copilot headers
-	p.setCopilotAPIHeaders(httpReq, p.sessionToken)
+	setCopilotAPIHeaders(httpReq, token)
 	httpReq.Header.Set("Accept", "application/json")
 
 	resp, err := proxyclient.Do(copilotHTTPClient, httpReq)
@@ -653,8 +668,6 @@ func (p *CopilotProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 			InputLimit:  m.inputLimit(),
 		})
 	}
-	RefreshCopilotCacheSync(models)
-
 	return models, nil
 }
 
@@ -719,7 +732,7 @@ func (p *CopilotProvider) refreshSession(ctx context.Context) error {
 }
 
 // setCopilotAPIHeaders sets the standard headers required for Copilot API requests.
-func (p *CopilotProvider) setCopilotAPIHeaders(req *http.Request, token string) {
+func setCopilotAPIHeaders(req *http.Request, token string) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", copilotUserAgent)
@@ -776,8 +789,14 @@ func (p *CopilotProvider) fetchCopilotTokenInfo(ctx context.Context) (*copilotSe
 
 // SetBaseURL overrides the inference API, not the GitHub token exchange.
 func (p *CopilotProvider) SetBaseURL(baseURL string) {
-	p.overrideBaseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if p.overrideBaseURL != "" {
-		p.apiBaseURL = p.overrideBaseURL
+	override := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if override == "" && p.overrideBaseURL != "" {
+		// Re-resolve the native API root before reusing the session. Otherwise
+		// a cleared override could still populate the native catalog.
+		p.sessionTokenExpiry = time.Time{}
+	}
+	p.overrideBaseURL = override
+	if override != "" {
+		p.apiBaseURL = override
 	}
 }

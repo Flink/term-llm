@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/term-llm/term-llm/internal/cliwire"
 	"github.com/term-llm/term-llm/internal/proxyclient"
@@ -23,15 +25,62 @@ func (p *AgyBinProvider) nativeProxyBinding() (*agyBoundRoute, error) {
 	if root == "" {
 		return nil, nil
 	}
-	b, err := proxyclient.ResolveAgyNativeBinding(root)
+	return resolveAgyBoundRoute(root)
+}
+
+func resolveAgyBoundRoute(root string) (*agyBoundRoute, error) {
+	binding, err := proxyclient.ResolveAgyNativeBinding(root)
 	if err != nil {
 		return nil, err
 	}
-	dir, err := proxyclient.AgyNativeStateDir(b.Root, b.Token)
+	dir, err := proxyclient.AgyNativeStateDir(binding.Root, binding.Token)
 	if err != nil {
 		return nil, err
 	}
-	return &agyBoundRoute{Binding: b, dir: dir}, nil
+	return &agyBoundRoute{Binding: binding, dir: dir}, nil
+}
+
+// ReadAgyProxyUsage runs agy's read-only quota command using a registered
+// agy-bin binding, with the same isolation as a bound inference worker.
+func ReadAgyProxyUsage(ctx context.Context, binary, root string) ([]byte, error) {
+	route, err := resolveAgyBoundRoute(root)
+	if err != nil {
+		return nil, err
+	}
+	worker := NewAgyBinProvider("", nil)
+	worker.agyBinary = binary
+	return worker.runBoundAgyCommand(ctx, route, "--output-format", "json", "-p=/usage")
+}
+
+// runBoundAgyCommand uses a scratch home instead of the generation session's
+// home. The worker must be fresh and have its agy executable already resolved.
+func (p *AgyBinProvider) runBoundAgyCommand(ctx context.Context, binding *agyBoundRoute, args ...string) (out []byte, retErr error) {
+	if err := p.prepareHome(true, true); err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(p.agyHome)
+	defer p.cleanupRuntime()
+	finish, err := p.startNativeProxyWorker(ctx, binding)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { retErr = errors.Join(retErr, finish()) }()
+	cmd, err := p.newAgyCommand(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	cmd.Env = p.proxyEnv
+	cmd.WaitDelay = 2 * time.Second
+	// Do not surface child diagnostics that could contain proxy credentials.
+	cmd.Stderr = io.Discard
+	out, err = cmd.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("agy through the Antigravity proxy was canceled or timed out: %w", ctx.Err())
+		}
+		return nil, fmt.Errorf("run agy through the Antigravity proxy: %w", err)
+	}
+	return out, nil
 }
 
 // agyHomeBase keeps bound sessions out of the direct agy-bin home cache and

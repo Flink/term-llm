@@ -73,6 +73,7 @@ func NewGrokProviderWithOptions(model string, opts GrokProviderOptions) (*GrokPr
 	if err := validateGrokModel(actualModel); err != nil {
 		return nil, err
 	}
+	opts.BaseURL = strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
 	creds, err := credentials.GetGrokCredentialsForEndpoint(opts.BaseURL)
 	if err != nil {
 		creds, err = PromptForGrokAuth()
@@ -105,7 +106,12 @@ func NewGrokProviderWithCredsAndOptions(creds *credentials.GrokCredentials, mode
 	if model == "" {
 		model = grokDefaultModel
 	}
-	actualModel, effort := parseModelEffortForProvider("grok", model)
+	actualModel, effort := model, ""
+	if !creds.Delegated() {
+		actualModel, effort = parseModelEffortForProvider("grok", model)
+	}
+	// Retain the delegated selection so later catalog refreshes can resolve
+	// its suffix (or recognize it as an exact ID).
 	return &GrokProvider{
 		baseURL:          strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/"),
 		creds:            creds,
@@ -193,10 +199,11 @@ func LogoutGrok(ctx context.Context) (warning string, err error) {
 }
 
 func (p *GrokProvider) Name() string {
-	if p.effort != "" {
-		return fmt.Sprintf("Grok Subscription (%s, effort=%s)", p.model, p.effort)
+	model, effort, _ := p.resolveGrokModel(nil, "")
+	if effort != "" {
+		return fmt.Sprintf("Grok Subscription (%s, effort=%s)", model, effort)
 	}
-	return fmt.Sprintf("Grok Subscription (%s)", p.model)
+	return fmt.Sprintf("Grok Subscription (%s)", model)
 }
 
 func (p *GrokProvider) Credential() string { return "grok" }
@@ -220,12 +227,7 @@ func (p *GrokProvider) Stream(ctx context.Context, req Request) (Stream, error) 
 			p.responsesClient.BaseURL = p.baseURL + "/responses"
 		}
 	}
-	reqModel, reqEffort := parseModelEffortForProvider("grok", req.Model)
-	model := chooseModel(reqModel, p.model)
-	effort := p.effort
-	if reqEffort != "" {
-		effort = reqEffort
-	}
+	model, effort, catalog := p.resolveGrokModel(ctx, req.Model)
 	if strings.TrimSpace(req.ReasoningEffort) != "" {
 		effort = strings.TrimSpace(req.ReasoningEffort)
 	}
@@ -254,7 +256,7 @@ func (p *GrokProvider) Stream(ctx context.Context, req Request) (Stream, error) 
 		Messages:                        req.Messages,
 		ExtractInstructionsFromMessages: true,
 		Tools:                           tools,
-		MaxOutputTokens:                 clampGrokOutputTokens(req.MaxOutputTokens, model),
+		MaxOutputTokens:                 p.clampOutputTokens(req.MaxOutputTokens, model, catalog),
 		Text:                            &ResponsesText{Verbosity: "low"},
 		Include:                         []string{"reasoning.encrypted_content"},
 		PromptCacheKey:                  promptCacheKey,

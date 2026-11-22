@@ -1,6 +1,8 @@
 package responsesproviders
 
 import (
+	"strings"
+
 	"github.com/term-llm/term-llm/internal/credentials"
 	"github.com/term-llm/term-llm/internal/proxyclient"
 )
@@ -8,6 +10,7 @@ import (
 // NewCopilotProviderWithBaseURL selects delegated auth before the native
 // constructor can read or prompt for a local GitHub login.
 func NewCopilotProviderWithBaseURL(model, baseURL string) (*CopilotProvider, error) {
+	baseURL = strings.TrimSpace(baseURL)
 	if binding, ok := proxyclient.Lookup(baseURL); ok && binding.Kind == "copilot" {
 		creds, err := credentials.GetCopilotCredentialsForEndpoint(baseURL)
 		if err != nil {

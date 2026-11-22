@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/config"
+	"github.com/term-llm/term-llm/internal/llm/core"
+	"github.com/term-llm/term-llm/internal/llm/providers/responsesproviders"
 )
 
 // IsKnownProviderModel reports whether the provider has catalog or configured
@@ -77,22 +79,25 @@ func IsModelOrEffortVariant(provider, selected, base string) bool {
 // IsModelOrEffortVariantForConfig applies configured model IDs and aliases as
 // catalog facts before considering an unknown-ID suffix heuristic.
 func IsModelOrEffortVariantForConfig(cfg *config.Config, provider, selected, base string) bool {
+	catalog, _, _ := DelegatedModelCatalog(cfg, provider)
+	return isModelOrEffortVariantForConfig(cfg, provider, selected, base, catalog)
+}
+
+func isModelOrEffortVariantForConfig(cfg *config.Config, provider, selected, base string, catalog []core.ModelInfo) bool {
 	if selected == base {
 		return true
 	}
 	if cfg != nil {
 		if pc, ok := cfg.Providers[provider]; ok {
-			for _, id := range pc.Models {
-				if id == base {
-					return configuredEffortVariant(cfg, provider, selected, base)
-				}
-			}
 			for _, entry := range pc.ModelConfigs {
 				if entry.ID == base || entry.DisplayName() == base {
 					return configuredEffortVariant(cfg, provider, selected, base)
 				}
 			}
 		}
+	}
+	if parsed, effort, _, known := responsesproviders.SplitCatalogModelEffort(catalog, selected); known {
+		return parsed == base && effort != ""
 	}
 	return IsModelOrEffortVariant(provider, selected, base)
 }

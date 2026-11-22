@@ -97,7 +97,7 @@ func BuildListWith(cfg *config.Config, hasLocalCredentials func(string) bool) []
 	for _, spec := range config.BuiltinProviders() {
 		info := newInfo(cfg, spec.Name, spec, hasLocalCredentials)
 		info.IsBuiltin = true
-		info.Models = llm.ProviderModelIDsForDiscovery(cfg, spec.Name, llm.ProviderModelIDs(spec.Name))
+		info.Models = llm.ProviderModelIDsForDiscovery(cfg, spec.Name, llm.ModelIDsForConfiguredProvider(cfg, spec.Name))
 		providers = append(providers, info)
 	}
 	if cfg != nil {
@@ -114,7 +114,9 @@ func BuildListWith(cfg *config.Config, hasLocalCredentials func(string) bool) []
 			}
 			info := newInfo(cfg, name, spec, hasLocalCredentials)
 			info.EnvVar = ""
-			if len(provCfg.Models) > 0 {
+			if llm.UsesDelegatedModelCatalog(cfg, name) {
+				info.Models = llm.ModelIDsForConfiguredProvider(cfg, name)
+			} else if len(provCfg.Models) > 0 {
 				info.Models = provCfg.Models
 			} else if provCfg.Model != "" {
 				info.Models = []string{provCfg.Model}

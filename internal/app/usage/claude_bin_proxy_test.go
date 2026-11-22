@@ -66,8 +66,15 @@ func usageProxyTestCIDR(t *testing.T, raw string) *net.IPNet {
 	return network
 }
 
-func usageProxyTestCA(t *testing.T) []byte {
+func usageProxyTestCA(t *testing.T, hosts ...string) []byte {
 	t.Helper()
+	if len(hosts) == 0 {
+		hosts = []string{"api.anthropic.com", "platform.claude.com"}
+	}
+	var subdomains []string
+	for _, host := range hosts {
+		subdomains = append(subdomains, "."+host)
+	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -84,8 +91,8 @@ func usageProxyTestCA(t *testing.T) []byte {
 		KeyUsage:                    x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		ExtKeyUsage:                 []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		PermittedDNSDomainsCritical: true,
-		PermittedDNSDomains:         []string{"api.anthropic.com", "platform.claude.com"},
-		ExcludedDNSDomains:          []string{".api.anthropic.com", ".platform.claude.com"},
+		PermittedDNSDomains:         hosts,
+		ExcludedDNSDomains:          subdomains,
 		ExcludedIPRanges:            []*net.IPNet{usageProxyTestCIDR(t, "0.0.0.0/0"), usageProxyTestCIDR(t, "::/0")},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)

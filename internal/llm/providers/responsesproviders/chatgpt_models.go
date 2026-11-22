@@ -111,11 +111,12 @@ func CachedChatGPTModels() (models []ModelInfo, fresh bool, err error) {
 }
 
 func cachedChatGPTModelFacts() (models []ModelInfo, fresh bool, err error) {
+	if proxyclient.KindActive("chatgpt") {
+		return nil, false, os.ErrNotExist
+	}
 	accountID := ""
-	if !proxyclient.KindActive("chatgpt") {
-		if creds, credErr := credentials.GetChatGPTCredentials(); credErr == nil {
-			accountID = creds.AccountID
-		}
+	if creds, err := credentials.GetChatGPTCredentials(); err == nil {
+		accountID = creds.AccountID
 	}
 	cache, err := loadChatGPTModelsCacheForAccount(chatGPTModelsClientVersion, accountID)
 	if err != nil {
@@ -421,6 +422,16 @@ func (p *ChatGPTProvider) effectiveInputLimitForProvider(ctx context.Context, pr
 	models, _, err := p.chatGPTModelFacts(ctx)
 	if err != nil {
 		return 0, err
+	}
+	if p.baseURL != "" && p.creds.Delegated() {
+		base, _, _ := delegatedChatGPTSelection(func() []ModelInfo { return models }, model)
+		id := chatGPTConfiguredContextModelID(provider, base)
+		for _, info := range models {
+			if strings.EqualFold(info.ID, id) {
+				return resolveChatGPTContext(provider, info).InputLimit, nil
+			}
+		}
+		return resolveChatGPTContext(provider, ModelInfo{ID: id}).InputLimit, nil
 	}
 	model = chatGPTContextModelID(provider, model)
 	base, _ := trimKnownEffortSuffix(model)

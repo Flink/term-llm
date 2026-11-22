@@ -47,16 +47,13 @@ func providerModelsRestricted(cfg *config.Config, provider string) bool {
 // filterProviderModelIDs returns only the IDs the provider's allowed_models
 // permits. Effort variants of an allowed base remain; an entry that names one
 // variant admits only that variant. Unrestricted providers are returned as-is.
-func filterProviderModelIDs(cfg *config.Config, provider string, models []string) []string {
-	if !providerModelsRestricted(cfg, provider) {
-		return models
-	}
+func filterProviderModelIDs(models []string, check func(string) error) []string {
 	filtered := make([]string, 0, len(models))
 	for _, model := range models {
 		if strings.TrimSpace(model) == "" {
 			continue
 		}
-		if CheckProviderModelAllowed(cfg, provider, model) == nil {
+		if check(model) == nil {
 			filtered = append(filtered, model)
 		}
 	}
@@ -98,7 +95,7 @@ func ProviderModelIDsForDiscovery(cfg *config.Config, provider string, models []
 	if !providerModelsRestricted(cfg, provider) {
 		return models
 	}
-	return dedupeProviderModelsByUpstream(cfg, provider, mergeProviderAllowedModelIDs(cfg, provider, filterProviderModelIDs(cfg, provider, models)))
+	return dedupeProviderModelsByUpstream(cfg, provider, mergeProviderAllowedModelIDs(cfg, provider, filterProviderModelIDs(models, providerModelCheck(cfg, provider))))
 }
 
 func dedupeProviderModelsByUpstream(cfg *config.Config, provider string, models []string) []string {
@@ -120,12 +117,13 @@ func dedupeProviderModelsByUpstream(cfg *config.Config, provider string, models 
 // allowed effort variants, while merging afterwards makes an exact effort-only
 // entry discoverable even when its parent catalog entry is not.
 func ExpandProviderModelIDsForDiscovery(cfg *config.Config, provider string, models []string) []string {
-	expanded := ExpandWithEffortVariantsForProvider(provider, models)
+	expanded := expandModelIDsForDiscovery(cfg, provider, models)
 	if !providerModelsRestricted(cfg, provider) {
 		return expanded
 	}
-	filtered := mergeProviderAllowedModelIDs(cfg, provider, filterProviderModelIDs(cfg, provider, expanded))
-	return dedupeProviderModelsByUpstream(cfg, provider, filterProviderModelIDs(cfg, provider, ExpandWithEffortVariantsForProvider(provider, filtered)))
+	check := providerModelCheck(cfg, provider)
+	filtered := mergeProviderAllowedModelIDs(cfg, provider, filterProviderModelIDs(expanded, check))
+	return dedupeProviderModelsByUpstream(cfg, provider, filterProviderModelIDs(expandModelIDsForDiscovery(cfg, provider, filtered), check))
 }
 
 // ProviderModelsForDiscovery applies a provider allowlist to model metadata
@@ -135,10 +133,12 @@ func ProviderModelsForDiscovery(cfg *config.Config, provider string, models []co
 	if !providerModelsRestricted(cfg, provider) {
 		return models
 	}
+	check := providerModelCheck(cfg, provider)
+	split := discoveryEffortSplitter(cfg, provider)
 	ids := make([]string, 0, len(models))
 	byID := make(map[string]core.ModelInfo, len(models))
 	for _, model := range models {
-		if strings.TrimSpace(model.ID) == "" || CheckProviderModelAllowed(cfg, provider, model.ID) != nil {
+		if strings.TrimSpace(model.ID) == "" || check(model.ID) != nil {
 			continue
 		}
 		ids = append(ids, model.ID)
@@ -159,8 +159,8 @@ func ProviderModelsForDiscovery(cfg *config.Config, provider string, models []co
 		if !ok {
 			model = providerModelInfoForAllowedID(cfg, provider, id)
 		}
-		model.ReasoningEfforts = ProviderReasoningEffortsForDiscovery(cfg, provider, id, model.ReasoningEfforts)
-		if effort := model.DefaultReasoningEffort; effort != "" && len(ProviderReasoningEffortsForDiscovery(cfg, provider, id, []string{effort})) == 0 {
+		model.ReasoningEfforts = filterProviderReasoningEfforts(cfg, provider, id, model.ReasoningEfforts, check, split)
+		if effort := model.DefaultReasoningEffort; effort != "" && len(filterProviderReasoningEfforts(cfg, provider, id, []string{effort}, check, split)) == 0 {
 			model.DefaultReasoningEffort = ""
 		}
 		merged = append(merged, model)
@@ -184,7 +184,11 @@ func ProviderReasoningEffortsForDiscovery(cfg *config.Config, provider, model st
 	if len(efforts) == 0 || !providerModelsRestricted(cfg, provider) {
 		return efforts
 	}
-	base, _ := BaseModelAndEffortForProvider(provider, model)
+	return filterProviderReasoningEfforts(cfg, provider, model, efforts, providerModelCheck(cfg, provider), discoveryEffortSplitter(cfg, provider))
+}
+
+func filterProviderReasoningEfforts(cfg *config.Config, provider, model string, efforts []string, check func(string) error, split func(string) (string, string)) []string {
+	base, _ := split(model)
 	if entry, ok := config.ModelConfigForProviderModel(cfg, provider, model); ok {
 		base = trimDeclaredModelEffort(model, entry)
 	}
@@ -193,7 +197,7 @@ func ProviderReasoningEffortsForDiscovery(cfg *config.Config, provider, model st
 	}
 	allowed := make([]string, 0, len(efforts))
 	for _, effort := range efforts {
-		if CheckProviderModelAllowed(cfg, provider, base+"-"+effort) == nil {
+		if check(base+"-"+effort) == nil {
 			allowed = append(allowed, effort)
 		}
 	}

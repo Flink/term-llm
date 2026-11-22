@@ -108,6 +108,10 @@ func resolveChatGPTModels(provider string, models []ModelInfo) []ModelInfo {
 // chatGPTContextModelID resolves configured aliases before looking up account facts.
 func chatGPTContextModelID(provider, model string) string {
 	model, _ = chatGPTModelServiceTier(model)
+	return chatGPTConfiguredContextModelID(provider, model)
+}
+
+func chatGPTConfiguredContextModelID(provider, model string) string {
 	chatGPTContextConfig.RLock()
 	pc := chatGPTContextConfig.providers[provider]
 	chatGPTContextConfig.RUnlock()

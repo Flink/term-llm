@@ -301,9 +301,10 @@ endpoint `GET /oauth2/v2/userinfo` on `www.googleapis.com`. It does not proxy
 arbitrary Google APIs or browser traffic. See [Forwarding behavior](#forwarding-behavior) for the worker
 isolation requirements.
 
-On Linux, `term-llm usage -p agy-bin` runs agy's read-only `/usage` command through the
-same binding, as a shared worker in a fresh private profile. It reports the
-shared subscription's quota and does not fall back to your local agy login.
+On Linux and macOS, `term-llm usage -p agy-bin` runs agy's read-only `/usage`
+command through the same bound worker path as inference, in a fresh private
+profile. It reports the shared subscription's quota and does not fall back to
+your local agy login.
 
 ### Upgrade an existing native route
 

@@ -6,9 +6,12 @@ import (
 	"github.com/term-llm/term-llm/internal/cache"
 )
 
-const copilotModelCacheKey = "copilot"
+// The old "copilot" cache could contain results from delegated or custom
+// routes. Start with a new key rather than importing an unscoped catalog.
+const copilotModelCacheKey = "copilot-direct-v2"
 
-// GetCachedCopilotModels returns the last live model list fetched from Copilot.
+// GetCachedCopilotModels returns the last live model list fetched from the
+// native Copilot route.
 // It never performs network or auth work, so it is safe for shell completion and
 // provider pickers. Run `term-llm models --provider copilot` to refresh it.
 func GetCachedCopilotModels() []string {
@@ -34,11 +37,14 @@ func GetCachedCopilotModelInfos() []ModelInfo {
 }
 
 func copilotCachedInputLimit(model string) int {
+	return copilotCatalogInputLimit(GetCachedCopilotModelInfos(), model)
+}
+
+func copilotCatalogInputLimit(models []ModelInfo, model string) int {
 	model = strings.ToLower(strings.TrimSpace(model))
 	if model == "" {
 		return 0
 	}
-	models := GetCachedCopilotModelInfos()
 	lookup := func(id string) int {
 		for _, m := range models {
 			if strings.ToLower(strings.TrimSpace(m.ID)) == id {
