@@ -158,7 +158,7 @@ describe('proxy native usage tab', () => {
     expect(within(table).getByText('Neon · Hydrogen')).toBeTruthy();
     expect(within(table).getByText('6 hours')).toBeTruthy();
     expect(within(table).getByText('15%')).toBeTruthy();
-    expect(within(table).getByText('50%', { exact: false })).toBeTruthy();
+    expect(within(table).getByRole('cell', { name: /^15%\s*used$/ })).toBeVisible();
     expect(table.querySelectorAll('.usage-bar-pace')).toHaveLength(1);
     expect(within(table).getByText('78 remaining')).toBeTruthy();
     expect(within(table).getByText('Disabled')).toBeTruthy();

@@ -178,8 +178,7 @@
   white-space: normal;
 }
 
-.usage-previous,
-.usage-pace {
+.usage-previous {
   color: var(--muted);
   font-size: 0.79rem;
 }

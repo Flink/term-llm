@@ -16,7 +16,7 @@ import {
   usageWindowTiming,
 } from './usage-projection';
 
-const columns = ['Provider', 'Limit group', 'Window', 'Used / pace', 'Resets in', 'At this pace'];
+const columns = ['Provider', 'Limit group', 'Window', 'Used', 'Resets in', 'At this pace'];
 const intervalDefault = 15;
 const intervalMin = 10;
 const intervalMax = 1440;
@@ -85,16 +85,6 @@ function windowReading(window: ProxyUsageWindow, timing: ReturnType<typeof usage
       const marker = styled('span', 'usage-bar-pace');
       marker.style.left = `${pacePercent}%`;
       bar.append(marker);
-      const separator = el('span', ' / ');
-      separator.setAttribute('aria-hidden', 'true');
-      const pace = styled(
-        'span',
-        'usage-pace',
-        separator,
-        hidden(', even pace '),
-        `${Math.round(pacePercent)}%`,
-      );
-      text.append(pace);
     }
     reading.append(bar, text);
   }
