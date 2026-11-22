@@ -62,7 +62,7 @@ function snapshot(overrides: Partial<ProxyState> = {}): ProxyState {
         status: 'green',
         reason: '',
         id: 'chatgpt',
-        label: 'ChatGPT plan',
+        label: 'ChatGPT',
         routes: ['chatgpt', 'chatgpt-backend'],
       },
       {
@@ -139,14 +139,14 @@ describe('provider-wide client approval', () => {
     });
     const composer = root.querySelector<HTMLFormElement>('#client-composer')!;
     expect(composer.querySelectorAll('.grant-chip')).toHaveLength(2);
-    expect(getByLabelText(composer, 'ChatGPT plan')).not.toBeChecked();
+    expect(getByLabelText(composer, 'ChatGPT')).not.toBeChecked();
     expect(getByLabelText(composer, 'Venice')).not.toBeChecked();
     expect(queryByLabelText(composer, 'chatgpt-backend')).toBeNull();
     // Opening the composer never grants anything by itself.
     expect(createProviderCaller).not.toHaveBeenCalled();
 
     fireEvent.input(getByLabelText(root, 'Client name'), { target: { value: 'Alpha' } });
-    fireEvent.click(getByLabelText(composer, 'ChatGPT plan'));
+    fireEvent.click(getByLabelText(composer, 'ChatGPT'));
     fireEvent.click(getByRole(root, 'button', { name: 'Create client' }));
 
     await waitFor(() => expect(createProviderCaller).toHaveBeenCalledWith('Alpha', ['chatgpt'], 7));
@@ -183,7 +183,7 @@ describe('provider-wide client approval', () => {
     });
     const composer = root.querySelector<HTMLFormElement>('#client-composer')!;
     fireEvent.input(getByLabelText(composer, 'Client name'), { target: { value: 'Laptop' } });
-    fireEvent.click(getByLabelText(composer, 'ChatGPT plan'));
+    fireEvent.click(getByLabelText(composer, 'ChatGPT'));
     fireEvent.click(getByLabelText(composer, 'Venice'));
     fireEvent.click(getByRole(composer, 'button', { name: 'Create client' }));
 
@@ -224,9 +224,9 @@ describe('provider-wide client approval', () => {
       snapshot({ callers: [caller({ id: 'c1', grants: ['chatgpt'] })] }),
     );
     const row = getByRole(root, 'button', { name: 'Workstation' }).closest('article')!;
-    expect(row).toHaveTextContent('ChatGPT plan (needs approval)');
+    expect(row).toHaveTextContent('ChatGPT (needs approval)');
     const editor = openEditor(root);
-    const partial = getByLabelText(editor, 'ChatGPT plan (needs approval)') as HTMLInputElement;
+    const partial = getByLabelText(editor, 'ChatGPT (needs approval)') as HTMLInputElement;
     expect(partial.checked).toBe(false);
     expect(partial.indeterminate).toBe(true);
     expect(getByLabelText(editor, 'Venice')).not.toBeChecked();
@@ -275,7 +275,7 @@ describe('provider-wide client approval', () => {
     );
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const editor = openEditor(root);
-    fireEvent.click(getByLabelText(editor, 'ChatGPT plan'));
+    fireEvent.click(getByLabelText(editor, 'ChatGPT'));
     fireEvent.click(getByRole(root, 'button', { name: 'Save approvals' }));
     expect(confirm).toHaveBeenCalledWith(
       expect.stringContaining('All of its routes (chatgpt, chatgpt-backend)'),

@@ -69,15 +69,15 @@ function snapshot(overrides: Partial<ProxyState> = {}): ProxyState {
         status: 'green',
         reason: '',
         id: 'openai',
-        label: 'OpenAI API',
+        label: 'OpenAI',
         routes: [openai.name],
       },
     ],
     presets: [
-      preset(chat, 'ChatGPT plan', 'chatgpt'),
-      preset(usage, 'Usage', 'chatgpt'),
-      preset(media, 'Media', 'chatgpt'),
-      preset(openai, 'OpenAI API'),
+      preset(chat, 'ChatGPT', 'chatgpt'),
+      preset(usage, 'ChatGPT Usage & Dictation', 'chatgpt'),
+      preset(media, 'ChatGPT Embeddings & Live', 'chatgpt'),
+      preset(openai, 'OpenAI'),
     ],
     callers: [
       {
@@ -126,7 +126,7 @@ afterEach(() => document.body.replaceChildren());
 it('shows one row per provider with one approval summary and header Manage', () => {
   const { root } = fixture();
   const chat = getByRole(root, 'article', { name: 'ChatGPT' });
-  const api = getByRole(root, 'article', { name: 'OpenAI API' });
+  const api = getByRole(root, 'article', { name: 'OpenAI' });
   expect(root.querySelectorAll('.provider-card')).toHaveLength(2);
   expect(chat.querySelectorAll('.provider-route-line')).toHaveLength(3);
   expect(api.querySelectorAll('.provider-route-line')).toHaveLength(1);
@@ -182,8 +182,9 @@ it('adds a missing companion to its provider without changing other routes or ap
   const { root, config, context } = fixture(state);
   const manage = root.querySelector<HTMLDetailsElement>('.provider-manage')!;
   manage.open = true;
-  fireEvent.click(getByRole(manage, 'button', { name: 'Add Usage route' }));
+  fireEvent.click(getByRole(manage, 'button', { name: 'Add ChatGPT Usage & Dictation route' }));
   const form = manage.querySelector<HTMLElement>('.route-form')!;
+  expect(getByRole(manage, 'heading', { name: 'Set up ChatGPT Usage & Dictation' })).toBeVisible();
   expect(getByLabelText(form, 'Name')).toHaveValue(usage.name);
   expect(getByLabelText(form, 'Trusted account')).toHaveValue(chat.account);
   fireEvent.click(getByRole(form, 'button', { name: 'Save route' }));

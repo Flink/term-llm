@@ -16,7 +16,7 @@ const presets: ProxyPreset[] = [
   {
     family: 'classification',
     id: 'typesafe',
-    label: 'TypeSafe (Jev)',
+    label: 'TypeSafe',
     upstream: 'https://api.typesafe.ai',
     auth,
     billing: 'unspecified',
@@ -133,7 +133,7 @@ function fixtureState(overrides: Partial<ProxyState> = {}): ProxyState {
     providers: [
       {
         id: 'typesafe',
-        label: 'TypeSafe (Jev)',
+        label: 'TypeSafe',
         family: 'classification',
         status: 'green',
         reason: '',
@@ -165,13 +165,13 @@ it('groups classification presets and finds TypeSafe by searching for Jev', () =
   expect(
     [...picker.querySelectorAll('.route-preset-family h3')].map((node) => node.textContent),
   ).toEqual(['Classification']);
-  expect(getByRole(picker, 'button', { name: 'TypeSafe (Jev)' })).toBeVisible();
+  expect(getByRole(picker, 'button', { name: 'TypeSafe' })).toBeVisible();
   expect(getByRole(picker, 'button', { name: 'OpenAI Decisions' })).toBeVisible();
   expect(getByRole(picker, 'button', { name: 'Cloudflare Clef' })).toBeVisible();
 
   const search = getByRole(picker, 'searchbox', { name: 'Search providers' });
   fireEvent.input(search, { target: { value: 'Jev' } });
-  expect(getByRole(picker, 'button', { name: 'TypeSafe (Jev)' })).toBeVisible();
+  expect(getByRole(picker, 'button', { name: 'TypeSafe' })).toBeVisible();
   expect(picker.querySelector('[aria-label="OpenAI Decisions"]')).not.toBeVisible();
   fireEvent.keyDown(search, { key: 'Enter' });
 
@@ -200,7 +200,7 @@ it('creates a classifier with a saved bearer secret and no inference config', as
   await waitFor(() =>
     expect(create).toHaveBeenCalledWith(7, {
       name: 'typesafe',
-      label: 'TypeSafe (Jev)',
+      label: 'TypeSafe',
       preset: 'typesafe',
       value: 'synthetic-key',
     }),

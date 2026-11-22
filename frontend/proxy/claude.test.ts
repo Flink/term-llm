@@ -76,7 +76,7 @@ const agyRoute: ProxyAdminRoute = {
 const agyPreset: ProxyPreset = {
   family: 'inference',
   id: 'agy-bin',
-  label: 'Antigravity personal subscription',
+  label: 'Antigravity',
   account_kind: 'agy-bin',
 
   upstream: agyRoute.upstream,
@@ -86,7 +86,7 @@ const presets: ProxyPreset[] = [
   {
     family: 'inference',
     id: 'claude-bin',
-    label: 'Claude Code plan',
+    label: 'Claude Code',
     account_kind: 'claude-bin' as const,
     upstream: route.upstream,
     auth: route.caller_auth,
@@ -94,7 +94,7 @@ const presets: ProxyPreset[] = [
   {
     family: 'inference',
     id: 'openai',
-    label: 'OpenAI API',
+    label: 'OpenAI',
     upstream: other.upstream,
     auth: other.caller_auth,
   },
@@ -501,7 +501,7 @@ const clientProviders: ProxyState['providers'] = [
     status: 'green',
     reason: '',
     id: 'openai-api',
-    label: 'OpenAI API',
+    label: 'OpenAI',
     routes: [other.name],
   },
 ];
@@ -526,7 +526,7 @@ it('uses a native Claude launcher and curl examples for mixed provider approvals
   await click(root, 'New client');
   fireEvent.input(getByLabelText(root, 'Client name'), { target: { value: 'mixed' } });
   fireEvent.click(getByRole(root, 'checkbox', { name: 'Claude Code' }));
-  fireEvent.click(getByRole(root, 'checkbox', { name: 'OpenAI API' }));
+  fireEvent.click(getByRole(root, 'checkbox', { name: 'OpenAI' }));
   await click(root, 'Create client');
   expect(create).toHaveBeenCalledExactlyOnceWith('mixed', ['claude-plan', 'openai-api'], 7);
   await waitFor(() => expect(getByLabelText(root, 'Launcher command')).toBeVisible());
@@ -597,7 +597,7 @@ it.each(
     const native = getByRole(root, 'checkbox', {
       name: ready ? label : `${label} (shared subscription not ready)`,
     });
-    const openAI = getByRole(root, 'checkbox', { name: 'OpenAI API' });
+    const openAI = getByRole(root, 'checkbox', { name: 'OpenAI' });
     expect(openAI).toBeEnabled();
     if (ready) expect(native).toBeEnabled();
     else expect(native).toBeDisabled();
@@ -634,7 +634,10 @@ it('describes removing a shared grant without signing the subscription out', asy
 it('creates a shared Antigravity route and shows an operator-only login command', async () => {
   const { root, api } = setup(snapshot({ presets: [agyPreset] }));
   await click(root, 'Add provider');
-  await click(root, 'Antigravity personal subscription');
+  expect(getByRole(root, 'button', { name: 'Antigravity' })).toHaveTextContent(
+    'Personal subscriptions only',
+  );
+  await click(root, 'Antigravity');
   expect(root).toHaveTextContent('Personal subscriptions only, not Enterprise.');
   expect(root).toHaveTextContent('macOS credential isolation has not been verified');
   expect(queryByRole(root, 'button', { name: 'Connect new account' })).toBeNull();

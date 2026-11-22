@@ -59,7 +59,7 @@ func TestClassificationProfileSelectors(t *testing.T) {
 		if want[p.ID] == "" || p.ClassifyProvider != want[p.ID] || p.Family != "classification" || p.Parent != "" || p.WebSocket || len(p.Bindings) != 0 || InferenceCapable(p) {
 			t.Errorf("unexpected classification profile: %+v", p)
 		}
-		if p.ID == "typesafe" && p.Label != "TypeSafe (Jev)" || p.ID == "cloudflare-clef" && p.Upstream != "" {
+		if p.ID == "typesafe" && p.Label != "TypeSafe" || p.ID == "cloudflare-clef" && p.Upstream != "" {
 			t.Errorf("unexpected preset defaults: %+v", p)
 		}
 		delete(want, p.ID)
@@ -145,7 +145,7 @@ func TestChatGPTOpenAIAncillaryBillingIsNotClaimedAsPlan(t *testing.T) {
 		if p.ID != "chatgpt-openai" {
 			continue
 		}
-		if p.Billing != "unspecified" || strings.Contains(strings.ToLower(p.Label), "plan") || !strings.Contains(p.Label, "billing unspecified") {
+		if p.Billing != "unspecified" || strings.Contains(strings.ToLower(p.Label), "plan") {
 			t.Fatalf("billing=%q label=%q", p.Billing, p.Label)
 		}
 		return
@@ -184,7 +184,7 @@ func TestAntigravityPersonalCLIProfile(t *testing.T) {
 	p, ok := ForProvider(providerspec.TypeAgyBin)
 	if !ok || p.ID != "agy-bin" || p.Account != "agy-bin" || p.Upstream != "https://daily-cloudcode-pa.googleapis.com" ||
 		p.Header != "Authorization" || p.Prefix != "Bearer " || p.Billing != "plan" || p.WebSocket ||
-		p.CLIRootEnv != "TERM_LLM_AGY_PROXY_ROOT" || p.Gate != "" || p.Label != "Antigravity personal subscription" {
+		p.CLIRootEnv != "TERM_LLM_AGY_PROXY_ROOT" || p.Gate != "" || p.Label != "Antigravity" {
 		t.Fatalf("unexpected Personal Antigravity profile: %+v", p)
 	}
 }

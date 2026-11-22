@@ -85,6 +85,28 @@ describe('proxy native usage tab', () => {
     expect(usageRequests(fetcher)).toHaveLength(0);
   });
 
+  it.each([
+    ['claude-bin', 'Claude Code', false],
+    ['claude-bin', 'Work Claude plan', true],
+  ] as const)('shows the Usage label for %s as %s', async (id, label, renamed) => {
+    const { root } = setup(
+      () =>
+        Response.json({
+          ...empty,
+          providers: [{ id, report: { groups: [], detail: 'Quota details' } }],
+        } satisfies ProxyUsageSnapshot),
+      {
+        ...state,
+        providers: renamed
+          ? [{ id, label, routes: [id], family: 'inference', status: 'green', reason: '' }]
+          : [],
+      },
+    );
+    const table = await waitFor(() => getByRole(root, 'table', { name: 'Native usage limits' }));
+    expect(within(table).getByRole('rowheader')).toHaveTextContent(label);
+    expect(getByText(root, `${label}:`, { exact: true })).toBeVisible();
+  });
+
   it('keeps every native window and description visible, including non-percent and disabled limits', async () => {
     const note = 'Generic plan description. '.repeat(10).trim();
     const now = Date.now();

@@ -22,7 +22,7 @@ const presets: ProxyPreset[] = [
   {
     family: 'inference',
     id: 'openai',
-    label: 'OpenAI API',
+    label: 'OpenAI',
     upstream: 'https://api.openai.com/v1',
     auth: { header: 'Authorization', prefix: 'Bearer ' },
     billing: 'pay_as_you_go',
@@ -32,7 +32,7 @@ const presets: ProxyPreset[] = [
   {
     family: 'inference',
     id: 'chatgpt',
-    label: 'ChatGPT plan',
+    label: 'ChatGPT',
     upstream: 'https://chatgpt.com/backend-api/codex',
     auth: { header: 'Authorization', prefix: 'Bearer ' },
     billing: 'plan',
@@ -55,7 +55,7 @@ const featuredPresets: ProxyPreset[] = [
   {
     family: 'inference',
     id: 'claude-bin',
-    label: 'Claude Code plan',
+    label: 'Claude Code',
     upstream: 'https://api.anthropic.com',
     auth: { header: 'Authorization', prefix: 'Bearer ' },
     account_kind: 'claude-bin',
@@ -121,7 +121,7 @@ function choose(root: HTMLElement, label: string) {
 function chooseAdvancedSetup(root: HTMLElement, label: string) {
   choose(root, label);
   expect(getByRole(root, 'button', { name: `Sign in to ${label}` })).toBeVisible();
-  const setup = getByRole(root, 'heading', { name: `Set up ${label} plan` }).closest('section')!;
+  const setup = getByRole(root, 'heading', { name: `Set up ${label}` }).closest('section')!;
   const advanced = setup.querySelector<HTMLDetailsElement>(':scope > details')!;
   expect(advanced.querySelector('summary')).toHaveTextContent('Advanced');
   expect(advanced.open).toBe(false);
@@ -190,17 +190,55 @@ it('opens one grouped picker from one Add provider button', () => {
   expect(queryByLabelText(root, 'Provider')).toBeNull();
 });
 
+it.each([
+  { preset: presets[0], label: 'Example API' },
+  { preset: featuredPresets.find((preset) => preset.id === 'claude-bin')!, label: 'Example plan' },
+])('uses the exact preset label in the picker and setup heading ($label)', ({ preset, label }) => {
+  const { root } = setup({ presets: [{ ...preset, label }] });
+  choose(root, label);
+  expect(getByRole(root, 'heading', { name: `Set up ${label}` })).toBeVisible();
+});
+
+it('distinguishes subscription providers from their API key counterparts', () => {
+  const claude = featuredPresets.find((preset) => preset.id === 'claude-bin')!;
+  const { root } = setup({
+    presets: [
+      claude,
+      {
+        ...claude,
+        id: 'anthropic',
+        label: 'Anthropic',
+        billing: 'pay_as_you_go',
+        account_kind: undefined,
+      },
+      planCases[1].preset,
+      { ...presets[0], id: 'xai', label: 'xAI', upstream: 'https://api.x.ai/v1' },
+    ],
+  });
+  fireEvent.click(getByRole(root, 'button', { name: 'Add provider' }));
+  const picker = root.querySelector<HTMLElement>('.route-picker')!;
+  for (const [label, group] of [
+    ['Claude Code', 'Subscriptions'],
+    ['Grok', 'Subscriptions'],
+    ['Anthropic', 'API keys'],
+    ['xAI', 'API keys'],
+  ]) {
+    const choice = getByRole(picker, 'button', { name: label });
+    expect(choice.closest('.route-preset-group')?.querySelector('h4')).toHaveTextContent(group);
+  }
+});
+
 it('filters presets by search, hides companions and chooses the first match on Enter', () => {
   const { root } = setup({
     presets: [
       { ...presets[1], companions: ['chatgpt-backend'] },
-      { ...presets[1], id: 'chatgpt-backend', label: 'ChatGPT plan usage' },
+      { ...presets[1], id: 'chatgpt-backend', label: 'ChatGPT Usage & Dictation' },
       ...presets.filter((preset) => preset.id !== 'chatgpt'),
     ],
   });
   fireEvent.click(getByRole(root, 'button', { name: 'Add provider' }));
   const picker = root.querySelector<HTMLElement>('.route-picker')!;
-  expect(queryByRole(picker, 'button', { name: 'ChatGPT plan usage' })).toBeNull();
+  expect(queryByRole(picker, 'button', { name: 'ChatGPT Usage & Dictation' })).toBeNull();
   const search = getByRole(picker, 'searchbox', { name: 'Search providers' });
   fireEvent.input(search, { target: { value: 'embed' } });
   expect(getByRole(picker, 'button', { name: 'Jina' })).toBeVisible();
@@ -392,7 +430,7 @@ const planCases = [
     preset: {
       ...presets[1],
       id: 'grok',
-      label: 'Grok plan',
+      label: 'Grok',
       account_kind: 'grok',
       upstream: 'https://cli-chat-proxy.grok.com/v1',
     } satisfies ProxyPreset,
@@ -409,7 +447,7 @@ it.each(planCases)(
       accounts: accounts.filter((a) => a.kind !== preset.account_kind),
     });
     choose(root, label);
-    const panel = getByRole(root, 'heading', { name: `Set up ${label} plan` }).closest('section')!;
+    const panel = getByRole(root, 'heading', { name: `Set up ${label}` }).closest('section')!;
     expect(getByRole(panel, 'button', { name: `Sign in to ${label}` })).toBeVisible();
     if (label === 'Grok') expect(panel).not.toHaveTextContent('Advanced');
     expect(queryByLabelText(panel, 'Trusted account')).toBeNull();
@@ -422,6 +460,8 @@ it.each(planCases)(
   async ({ preset, label, saved }) => {
     const { root, create } = setup({ presets: [preset] });
     chooseAdvancedSetup(root, label);
+    expect(getByRole(root, 'heading', { name: `Set up ${label}` })).toBeVisible();
+    expect(getByLabelText(root, 'Label', { exact: true })).toHaveValue(label);
     if (label === 'Grok')
       expect(queryByRole(root, 'button', { name: 'Import account credentials' })).toBeNull();
     expect(queryByRole(root, 'button', { name: 'Connect new account' })).toBeNull();
@@ -446,14 +486,14 @@ it.each(['copilot', 'chatgpt'] as const)(
     const copilot: ProxyPreset = {
       ...presets[1],
       id: 'copilot',
-      label: 'Copilot plan',
+      label: 'GitHub Copilot',
       account_kind: 'copilot',
       upstream: 'https://api.githubcopilot.com',
     };
     const preset = kind === 'chatgpt' ? presets[1] : copilot;
     const { root, create } = setup({ presets: [preset], accounts: [] });
     if (kind === 'chatgpt') chooseAdvancedSetup(root, 'ChatGPT');
-    else choose(root, 'Copilot');
+    else choose(root, 'GitHub Copilot');
     fireEvent.input(getByLabelText(root, 'Provider name'), { target: { value: 'draft-name' } });
     const select = getByLabelText(root, 'Trusted account') as HTMLSelectElement;
     expect(select.options).toHaveLength(1);

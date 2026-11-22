@@ -247,7 +247,7 @@ The bound `agy-bin` provider also runs on macOS with `agy 1.5.13` or newer and
 `/usr/bin/sandbox-exec`. Use HTTPS for remote proxy URLs; plain HTTP is accepted
 only on loopback.
 
-1. Choose **Providers → Add provider → Antigravity personal subscription**, then
+1. Choose **Providers → Add provider → Antigravity**, then
    **Create shared route & sign in**. The route uses the fixed
    personal service `https://daily-cloudcode-pa.googleapis.com`.
 2. Choose the client to sign in from, or name a new one, as for Claude Code.
@@ -466,8 +466,8 @@ protocol roots fail closed rather than contacting a public vendor endpoint.
 
 ### Classification presets
 
-Under **Providers → Add provider → Classification**, select **TypeSafe (Jev)**,
-**OpenAI Decisions**, or **Cloudflare Workers AI Clef**. Store the vendor key on
+Under **Providers → Add provider → Classification**, select **TypeSafe** (Jev),
+**OpenAI Decisions**, or **Cloudflare Clef**. Store the vendor key on
 that provider and approve it for the clients that need it. OpenAI Decisions is
 approved independently of OpenAI chat and ChatGPT plans, even if you choose to
 reuse the OpenAI API key. If your OpenAI key requires organization or project
@@ -1068,6 +1068,16 @@ and term-llm clients together: discovery v1 has no compatibility alias.
   `KEENABLE_API_KEY` to those backends. They use the vendor's keyless limits.
   To keep direct, keyed access, add the provider to `proxy.direct`, for example
   `proxy.direct: [exa]`.
+
+### Shorter built-in provider labels (schema v11)
+
+On upgrade, the proxy shortens old built-in default labels in stored
+configuration (for example, **Grok plan** becomes **Grok**). A label changes
+only if it exactly matches the old default for a route profile the provider
+owns. Custom labels, provider IDs, URLs, grants, and credentials stay as they
+are. If you use operator YAML, you can update its `label` fields yourself;
+the proxy does not rewrite the file. Back up your state before upgrading:
+older binaries reject the newer schema marker.
 
 ### Debug payload capture
 

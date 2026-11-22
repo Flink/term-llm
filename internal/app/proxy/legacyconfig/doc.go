@@ -1,2 +1,2 @@
-// Package legacyconfig converts v8 credential-proxy configuration into stored providers.
+// Package legacyconfig migrates stored credential-proxy configuration between schema versions.
 package legacyconfig

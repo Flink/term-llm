@@ -33,7 +33,7 @@ CREATE INDEX requests_time ON requests(started,seq);
 CREATE INDEX requests_caller ON requests(caller,seq);
 CREATE INDEX requests_route ON requests(route,seq);
 ` + requestFilterIndexesV10 + accountSchema + moneySchema + adminKeySchemaV6 + claudeSharedSchema + `
-PRAGMA user_version=10;`
+PRAGMA user_version=11;`
 
 func openStore(dir string, fileConfig ...*Config) (*store, error) {
 	if err := fileprivacy.MkdirAll(dir); err != nil {

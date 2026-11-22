@@ -85,7 +85,7 @@ const openaiGroup: ProviderGroup = {
   status: 'green',
   reason: '',
   id: 'openai',
-  label: 'OpenAI API',
+  label: 'OpenAI',
   routes: [openaiRoute],
 };
 const chatgptGroup: ProviderGroup = {
@@ -93,7 +93,7 @@ const chatgptGroup: ProviderGroup = {
   status: 'green',
   reason: '',
   id: 'chatgpt',
-  label: 'ChatGPT plan',
+  label: 'ChatGPT',
   routes: [chatgptRoute, chatgptBackendRoute, chatgptMediaRoute],
 };
 const claudeGroup: ProviderGroup = {
@@ -213,7 +213,7 @@ it('lists approved clients once and removes the whole provider approval without 
   expect(root.querySelector('.route-access-client')).toHaveTextContent('Laptop');
 
   const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
-  const remove = getByRole(root, 'button', { name: /Remove Laptop’s access to OpenAI API/ });
+  const remove = getByRole(root, 'button', { name: /Remove Laptop’s access to OpenAI/ });
   fireEvent.click(remove);
   expect(updateProviderApprovals).not.toHaveBeenCalled();
   fireEvent.click(remove);
@@ -228,7 +228,7 @@ it('lists approved clients once and removes the whole provider approval without 
     expect.stringContaining('Access to other providers and its token stay unchanged.'),
   );
   await waitFor(() => expect(refresh).toHaveBeenCalledWith('route:openai'));
-  expect(announce).toHaveBeenLastCalledWith('Removed Laptop’s access to OpenAI API.');
+  expect(announce).toHaveBeenLastCalledWith('Removed Laptop’s access to OpenAI.');
   expect(updateCaller).not.toHaveBeenCalled();
   // The revoked client is neither counted nor offered another approval.
   expect(root).not.toHaveTextContent('Old laptop');
@@ -260,7 +260,7 @@ it('approves every route of a provider for an existing client in one explicit wr
   );
   expect(refresh).toHaveBeenCalledWith('route:chatgpt');
   expect(announce).toHaveBeenLastCalledWith(
-    'Approved Docs app for ChatGPT plan. Its token and other approvals are unchanged.',
+    'Approved Docs app for ChatGPT. Its token and other approvals are unchanged.',
   );
   // Approval covers the provider; it never reissues or rewrites the client.
   expect(createProviderCaller).not.toHaveBeenCalled();
@@ -283,7 +283,7 @@ it('approves several clients in one submit, re-reading the revision between writ
   ]);
   expect(refresh.mock.calls).toEqual([[undefined, true], ['route:openai']]);
   expect(announce).toHaveBeenLastCalledWith(
-    'Approved Phone, Docs app for OpenAI API. Their tokens and other approvals are unchanged.',
+    'Approved Phone, Docs app for OpenAI. Their tokens and other approvals are unchanged.',
   );
 });
 
@@ -323,7 +323,7 @@ it('shows legacy partial approval as needing approval and covers all routes only
   );
   expect(refresh).toHaveBeenCalledWith('route:chatgpt');
   expect(announce).toHaveBeenLastCalledWith(
-    'Approved Laptop for ChatGPT plan. Its token and other approvals are unchanged.',
+    'Approved Laptop for ChatGPT. Its token and other approvals are unchanged.',
   );
 });
 
@@ -355,7 +355,7 @@ it('creates a provider-scoped client, shows the token once, and guards dismissal
   expect(root).toHaveTextContent(`Base URL: ${location.origin}/openai/`);
   expect(root).toHaveTextContent('set TOKEN in your shell to this client token');
   expect(root).toHaveTextContent('Do not set a global HTTP_PROXY or HTTPS_PROXY');
-  expect(root).toHaveTextContent('Access is limited to the current routes for OpenAI API.');
+  expect(root).toHaveTextContent('Access is limited to the current routes for OpenAI.');
   expect(storageWrite).not.toHaveBeenCalled();
   expect(announce).toHaveBeenLastCalledWith(expect.stringContaining('Copy the token now'));
 
@@ -399,7 +399,7 @@ it('creates one provider-scoped client whose details cover every route in the gr
   expect(root).toHaveTextContent(`Base URL: ${location.origin}/chatgpt/`);
   expect(root).toHaveTextContent(`Base URL: ${location.origin}/chatgpt-backend/`);
   expect(root).toHaveTextContent(`Base URL: ${location.origin}/chatgpt-openai/`);
-  expect(root).toHaveTextContent('Access is limited to the current routes for ChatGPT plan.');
+  expect(root).toHaveTextContent('Access is limited to the current routes for ChatGPT.');
 });
 
 async function issueProviderToken(
@@ -426,7 +426,7 @@ async function issueProviderToken(
 }
 
 it.each([
-  [chatgptRoute, 'ChatGPT plan'],
+  [chatgptRoute, 'ChatGPT'],
   [route('venice', 'https://api.venice.ai/api/v1'), 'Venice'],
 ] as const)(
   'shows safe term-llm YAML alongside curl for canonical $name',
@@ -557,7 +557,7 @@ it('refuses creation, provider approval, and removal while another token is on s
   );
 
   vi.spyOn(window, 'confirm').mockReturnValue(true);
-  fireEvent.click(getByRole(root, 'button', { name: /Remove Laptop’s access to OpenAI API/ }));
+  fireEvent.click(getByRole(root, 'button', { name: /Remove Laptop’s access to OpenAI/ }));
   expect(updateProviderApprovals).not.toHaveBeenCalled();
   expect(announce).toHaveBeenLastCalledWith(
     'Save or dismiss the open one-time client token before removing access.',
@@ -572,7 +572,7 @@ it('writes provider approvals in passkey mode without a second passkey prompt', 
   });
   const begin = vi.spyOn(api, 'beginAssertion');
   vi.spyOn(window, 'confirm').mockReturnValue(true);
-  fireEvent.click(getByRole(root, 'button', { name: /Remove Laptop’s access to OpenAI API/ }));
+  fireEvent.click(getByRole(root, 'button', { name: /Remove Laptop’s access to OpenAI/ }));
   await waitFor(() =>
     expect(updateProviderApprovals).toHaveBeenCalledWith(
       'laptop',
@@ -592,7 +592,7 @@ it('refreshes provider state without replaying a stale approval write', async ()
     new ProxyAPIError(409, 'Provider configuration changed; refresh before changing access'),
   );
   vi.spyOn(window, 'confirm').mockReturnValue(true);
-  fireEvent.click(getByRole(root, 'button', { name: /Remove Laptop’s access to OpenAI API/ }));
+  fireEvent.click(getByRole(root, 'button', { name: /Remove Laptop’s access to OpenAI/ }));
   await waitFor(() => expect(refresh).toHaveBeenCalledWith('route:openai'));
   expect(updateProviderApprovals).toHaveBeenCalledOnce();
   expect(announce).toHaveBeenCalledWith(

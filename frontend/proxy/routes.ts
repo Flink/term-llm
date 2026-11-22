@@ -29,7 +29,7 @@ import { routeForm } from './route-form';
 import { missingCompanions } from './route-companions';
 import { providerForm } from './provider-form';
 import { clientDefaults } from './provider-defaults';
-import { matchRoutePreset, presetLabel, routePresetPicker } from './route-presets';
+import { matchRoutePreset, routePresetPicker } from './route-presets';
 import { routeSummary } from './route-summary';
 import { routeNeedsSecret, routeRules } from './route-rules';
 
@@ -159,13 +159,13 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
               const manualForm = () =>
                 preset
                   ? card(
-                      `Set up ${presetLabel(preset)}`,
+                      `Set up ${preset.label}`,
                       providerForm(preset, state, api, formContext, close),
                     )
                   : routeForm(state, api, formContext, close);
               const guided = preset && providerOnboarding(preset, state, api, formContext, close);
               const panel =
-                guided && preset ? card(`Set up ${presetLabel(preset)}`, guided) : manualForm();
+                guided && preset ? card(`Set up ${preset.label}`, guided) : manualForm();
               if (guided && nativeProvider(preset?.account_kind))
                 panel.append(actions(button('Cancel', close)));
               const kind = preset?.account_kind;
@@ -454,7 +454,7 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
       setRenaming(false);
       details.append(labelForm);
       const additions = missingCompanions(group, state).map((preset) => {
-        const addRoute = button(`Add ${presetLabel(preset)} route`, () => {
+        const addRoute = button(`Add ${preset.label} route`, () => {
           if (blocked()) return;
           closeEditor();
           const form = routeForm(

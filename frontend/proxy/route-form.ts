@@ -1,7 +1,7 @@
 import { nativeProvider } from './native';
 import { accountDialog, accountStateLabel } from './accounts';
 import { secretForm } from './security';
-import { presetLabel, presetUpstreamHint } from './route-presets';
+import { presetUpstreamHint } from './route-presets';
 import { companionRouteName } from './route-companions';
 import type { ProviderGroup } from './provider-groups';
 import { requireProviderName, slugPattern } from './provider-name';
@@ -86,7 +86,7 @@ export function routeForm(
   };
   const form = el('form');
   const formRoot = card(
-    route ? `Edit ${route.name}` : preset ? `Set up ${presetLabel(preset)}` : 'Custom endpoint',
+    route ? `Edit ${route.name}` : preset ? `Set up ${preset.label}` : 'Custom endpoint',
     form,
   );
   form.className = 'route-form';

@@ -42,31 +42,31 @@ type Profile struct {
 // including providers whose credentialless CLI transport still requires verification.
 func All() []Profile {
 	return []Profile{
-		{ID: "anthropic", Family: "inference", Label: "Anthropic API", Provider: providerspec.TypeAnthropic, Upstream: "https://api.anthropic.com", Header: "x-api-key", Billing: "pay_as_you_go"},
+		{ID: "anthropic", Family: "inference", Label: "Anthropic", Provider: providerspec.TypeAnthropic, Upstream: "https://api.anthropic.com", Header: "x-api-key", Billing: "pay_as_you_go"},
 		{
-			ID: "openai", Family: "inference", Label: "OpenAI API", Provider: providerspec.TypeOpenAI, Upstream: "https://api.openai.com/v1", Header: "Authorization", Prefix: "Bearer ", WebSocket: true, Billing: "pay_as_you_go",
+			ID: "openai", Family: "inference", Label: "OpenAI", Provider: providerspec.TypeOpenAI, Upstream: "https://api.openai.com/v1", Header: "Authorization", Prefix: "Bearer ", WebSocket: true, Billing: "pay_as_you_go",
 			Slots:    map[string]string{"image": "openai", "embed": "openai", "transcription": "openai"},
 			Bindings: []Binding{{"image.openai.base_url", "image.openai.api_key"}, {"embed.openai.base_url", "embed.openai.api_key"}, {"live.openai.base_url", "live.openai.api_key"}},
 		},
 		{
-			ID: "chatgpt", Family: "inference", Label: "ChatGPT plan", Provider: providerspec.TypeChatGPT, Upstream: "https://chatgpt.com/backend-api/codex", Header: "Authorization", Prefix: "Bearer ", Account: "chatgpt", WebSocket: true, Billing: "plan",
+			ID: "chatgpt", Family: "inference", Label: "ChatGPT", Provider: providerspec.TypeChatGPT, Upstream: "https://chatgpt.com/backend-api/codex", Header: "Authorization", Prefix: "Bearer ", Account: "chatgpt", WebSocket: true, Billing: "plan",
 			Slots:    map[string]string{"image": "chatgpt"},
 			Bindings: []Binding{{"image.chatgpt.base_url", ""}, {"live.chatgpt.call_base_url", ""}},
 		},
 		{
-			ID: "chatgpt-backend", Family: "inference", Parent: "chatgpt", Label: "ChatGPT plan usage and dictation", Upstream: "https://chatgpt.com/backend-api", Header: "Authorization", Prefix: "Bearer ", Account: "chatgpt", Billing: "plan",
+			ID: "chatgpt-backend", Family: "inference", Parent: "chatgpt", Label: "ChatGPT Usage & Dictation", Upstream: "https://chatgpt.com/backend-api", Header: "Authorization", Prefix: "Bearer ", Account: "chatgpt", Billing: "plan",
 			Slots:    map[string]string{"transcription": "chatgpt"},
 			Bindings: []Binding{{"transcription.chatgpt.base_url", ""}},
 		},
 		{
-			ID: "chatgpt-openai", Family: "inference", Parent: "chatgpt", Label: "ChatGPT OAuth embeddings and live (billing unspecified)", Upstream: "https://api.openai.com/v1", Header: "Authorization", Prefix: "Bearer ", Account: "chatgpt", Billing: "unspecified", WebSocket: true,
+			ID: "chatgpt-openai", Family: "inference", Parent: "chatgpt", Label: "ChatGPT Embeddings & Live", Upstream: "https://api.openai.com/v1", Header: "Authorization", Prefix: "Bearer ", Account: "chatgpt", Billing: "unspecified", WebSocket: true,
 			Slots:    map[string]string{"embed": "chatgpt"},
 			Bindings: []Binding{{"embed.chatgpt.base_url", ""}, {"live.chatgpt.sideband_base_url", ""}},
 		},
-		{ID: "grok", Family: "inference", Label: "Grok plan", Provider: providerspec.TypeGrok, Upstream: "https://cli-chat-proxy.grok.com/v1", Header: "Authorization", Prefix: "Bearer ", Account: "grok", Billing: "plan"},
-		{ID: "copilot", Family: "inference", Label: "GitHub Copilot plan", Provider: providerspec.TypeCopilot, Upstream: "https://api.githubcopilot.com", Header: "Authorization", Prefix: "Bearer ", Account: "copilot", Billing: "plan"},
+		{ID: "grok", Family: "inference", Label: "Grok", Provider: providerspec.TypeGrok, Upstream: "https://cli-chat-proxy.grok.com/v1", Header: "Authorization", Prefix: "Bearer ", Account: "grok", Billing: "plan"},
+		{ID: "copilot", Family: "inference", Label: "GitHub Copilot", Provider: providerspec.TypeCopilot, Upstream: "https://api.githubcopilot.com", Header: "Authorization", Prefix: "Bearer ", Account: "copilot", Billing: "plan"},
 		{
-			ID: "gemini", Family: "inference", Label: "Google Gemini", Provider: providerspec.TypeGemini, Upstream: "https://generativelanguage.googleapis.com/v1beta", Header: "x-goog-api-key", Billing: "pay_as_you_go",
+			ID: "gemini", Family: "inference", Label: "Gemini", Provider: providerspec.TypeGemini, Upstream: "https://generativelanguage.googleapis.com/v1beta", Header: "x-goog-api-key", Billing: "pay_as_you_go",
 			Slots:    map[string]string{"image": "gemini", "audio": "gemini", "embed": "gemini"},
 			Bindings: []Binding{{"image.gemini.base_url", "image.gemini.api_key"}, {"audio.gemini.base_url", "audio.gemini.api_key"}, {"embed.gemini.base_url", "embed.gemini.api_key"}},
 		},
@@ -77,7 +77,7 @@ func All() []Profile {
 			Bindings: []Binding{{"image.openrouter.base_url", "image.openrouter.api_key"}},
 		},
 		{
-			ID: "xai", Family: "inference", Label: "xAI API", Provider: providerspec.TypeXAI, Upstream: "https://api.x.ai/v1", Header: "Authorization", Prefix: "Bearer ", Billing: "pay_as_you_go",
+			ID: "xai", Family: "inference", Label: "xAI", Provider: providerspec.TypeXAI, Upstream: "https://api.x.ai/v1", Header: "Authorization", Prefix: "Bearer ", Billing: "pay_as_you_go",
 			Slots:    map[string]string{"image": "xai"},
 			Bindings: []Binding{{"image.xai.base_url", "image.xai.api_key"}},
 		},
@@ -90,30 +90,30 @@ func All() []Profile {
 		{ID: "sambanova", Family: "inference", Label: "SambaNova", Provider: providerspec.TypeSambaNova, Upstream: "https://api.sambanova.ai/v1", Header: "Authorization", Prefix: "Bearer ", Billing: "pay_as_you_go"},
 		{ID: "obscurify", Family: "inference", Label: "Obscurify", Provider: providerspec.TypeObscurify, Upstream: "https://obscurify.ai/v1", Header: "Authorization", Prefix: "Bearer ", Billing: "pay_as_you_go"},
 		{ID: "zen", Family: "inference", Label: "OpenCode Zen", Provider: providerspec.TypeZen, Upstream: "https://opencode.ai/zen/v1", Header: "Authorization", Prefix: "Bearer ", Billing: "pay_as_you_go"},
-		{ID: "opencode-go", Family: "inference", Label: "OpenCode Go plan", Provider: providerspec.TypeOpenCodeGo, Upstream: "https://opencode.ai/zen/go/v1", Header: "Authorization", Prefix: "Bearer ", Billing: "plan"},
-		{ID: "opencode-go-messages", Family: "inference", Label: "OpenCode Go plan · Messages", Upstream: "https://opencode.ai/zen/go", Header: "x-api-key", Billing: "plan"},
-		{ID: "opencode-go-gemini", Family: "inference", Label: "OpenCode Go plan · Gemini", Upstream: "https://opencode.ai/inference/go/v1", Header: "x-goog-api-key", Billing: "plan"},
-		{ID: "bedrock", Family: "inference", Label: "AWS Bedrock", Provider: providerspec.TypeBedrock, Header: "Authorization", Prefix: "Bearer ", Account: "aws-sigv4", Billing: "pay_as_you_go"},
+		{ID: "opencode-go", Family: "inference", Label: "OpenCode Go", Provider: providerspec.TypeOpenCodeGo, Upstream: "https://opencode.ai/zen/go/v1", Header: "Authorization", Prefix: "Bearer ", Billing: "plan"},
+		{ID: "opencode-go-messages", Family: "inference", Label: "OpenCode Go · Messages", Upstream: "https://opencode.ai/zen/go", Header: "x-api-key", Billing: "plan"},
+		{ID: "opencode-go-gemini", Family: "inference", Label: "OpenCode Go · Gemini", Upstream: "https://opencode.ai/inference/go/v1", Header: "x-goog-api-key", Billing: "plan"},
+		{ID: "bedrock", Family: "inference", Label: "Bedrock", Provider: providerspec.TypeBedrock, Header: "Authorization", Prefix: "Bearer ", Account: "aws-sigv4", Billing: "pay_as_you_go"},
 		{
 			ID: "ollama", Family: "inference", Label: "Ollama", Provider: providerspec.TypeOllama, Upstream: "http://127.0.0.1:11434", Header: "Authorization", Prefix: "Bearer ", Billing: "local",
 			Slots:    map[string]string{"embed": "ollama"},
 			Bindings: []Binding{{"embed.ollama.base_url", ""}},
 		},
 		{ID: "vllm", Family: "inference", Label: "vLLM", Provider: providerspec.TypeVLLM, Header: "Authorization", Prefix: "Bearer ", Billing: "unspecified"},
-		{ID: "openai-compatible", Family: "inference", Label: "OpenAI-compatible server", Provider: providerspec.TypeOpenAICompat, Header: "Authorization", Prefix: "Bearer ", Billing: "unspecified"},
-		{ID: "claude-bin", Family: "inference", Label: "Claude Code plan", Provider: providerspec.TypeClaudeBin, Upstream: "https://api.anthropic.com", Header: "Authorization", Prefix: "Bearer ", Account: "claude-bin", Billing: "plan", CLIRootEnv: "TERM_LLM_CLAUDE_PROXY_ROOT"},
+		{ID: "openai-compatible", Family: "inference", Label: "OpenAI-compatible", Provider: providerspec.TypeOpenAICompat, Header: "Authorization", Prefix: "Bearer ", Billing: "unspecified"},
+		{ID: "claude-bin", Family: "inference", Label: "Claude Code", Provider: providerspec.TypeClaudeBin, Upstream: "https://api.anthropic.com", Header: "Authorization", Prefix: "Bearer ", Account: "claude-bin", Billing: "plan", CLIRootEnv: "TERM_LLM_CLAUDE_PROXY_ROOT"},
 		// Cursor exchanges its API key for an access/refresh pair. The proxy must own
 		// that exchange and never pass the vendor token response through to workers.
-		{ID: "cursor-bin", Family: "inference", Label: "Cursor API key", Provider: providerspec.TypeCursorBin, Upstream: "https://api2.cursor.sh", Header: "Authorization", Prefix: "Bearer ", Account: "cursor", Billing: "unspecified", CLIRootEnv: "TERM_LLM_CURSOR_PROXY_ROOT", Gate: "the CLI exchanges its API key at /auth/exchange_user_api_key for vendor access and refresh tokens; shared access requires server-side token custody, verified agent routing, and isolated tool-bridge verification"},
-		{ID: "cursor-bin-agent", Family: "inference", Label: "Cursor API key · agent", Header: "Authorization", Prefix: "Bearer ", Account: "cursor", Billing: "unspecified", Gate: "Cursor agent origin is server-advertised and has not been established"},
-		{ID: "cursor-bin-repo", Family: "inference", Label: "Cursor API key · repository", Upstream: "https://repo42.cursor.sh", Header: "Authorization", Prefix: "Bearer ", Account: "cursor", Billing: "unspecified", Gate: "requires the verified Cursor backend and agent routes"},
+		{ID: "cursor-bin", Family: "inference", Label: "Cursor", Provider: providerspec.TypeCursorBin, Upstream: "https://api2.cursor.sh", Header: "Authorization", Prefix: "Bearer ", Account: "cursor", Billing: "unspecified", CLIRootEnv: "TERM_LLM_CURSOR_PROXY_ROOT", Gate: "the CLI exchanges its API key at /auth/exchange_user_api_key for vendor access and refresh tokens; shared access requires server-side token custody, verified agent routing, and isolated tool-bridge verification"},
+		{ID: "cursor-bin-agent", Family: "inference", Label: "Cursor Agent", Header: "Authorization", Prefix: "Bearer ", Account: "cursor", Billing: "unspecified", Gate: "Cursor agent origin is server-advertised and has not been established"},
+		{ID: "cursor-bin-repo", Family: "inference", Label: "Cursor Repository", Upstream: "https://repo42.cursor.sh", Header: "Authorization", Prefix: "Bearer ", Account: "cursor", Billing: "unspecified", Gate: "requires the verified Cursor backend and agent routes"},
 		// grok-bin is ungated on fixture evidence only: the real grok 1.0.77 executable completed model listing and an
 		// ACP turn with a local MCP tool round trip against a synthetic gateway with all external connections refused.
 		// Vendor acceptance of Grok plan credentials for this CLI's API-key wire shape has NOT been tested.
-		{ID: "grok-bin", Family: "inference", Parent: "grok", Label: "Grok CLI plan", Provider: providerspec.TypeGrokBin, Upstream: "https://cli-chat-proxy.grok.com/v1", Header: "Authorization", Prefix: "Bearer ", Account: "grok", Billing: "plan", CLIRootEnv: "TERM_LLM_GROK_CLI_PROXY_ROOT"},
+		{ID: "grok-bin", Family: "inference", Parent: "grok", Label: "Grok CLI", Provider: providerspec.TypeGrokBin, Upstream: "https://cli-chat-proxy.grok.com/v1", Header: "Authorization", Prefix: "Bearer ", Account: "grok", Billing: "plan", CLIRootEnv: "TERM_LLM_GROK_CLI_PROXY_ROOT"},
 		// The real Linux agy 1.5.12 executable completed isolated synthetic OAuth and an ACP turn.
 		// Live subscription acceptance and macOS credential isolation have not been verified.
-		{ID: "agy-bin", Family: "inference", Label: "Antigravity personal subscription", Provider: providerspec.TypeAgyBin, Upstream: "https://daily-cloudcode-pa.googleapis.com", Header: "Authorization", Prefix: "Bearer ", Account: "agy-bin", Billing: "plan", CLIRootEnv: "TERM_LLM_AGY_PROXY_ROOT"},
+		{ID: "agy-bin", Family: "inference", Label: "Antigravity", Provider: providerspec.TypeAgyBin, Upstream: "https://daily-cloudcode-pa.googleapis.com", Header: "Authorization", Prefix: "Bearer ", Account: "agy-bin", Billing: "plan", CLIRootEnv: "TERM_LLM_AGY_PROXY_ROOT"},
 		{ID: "vibe-bin", Family: "inference", Label: "Mistral Vibe", Provider: providerspec.TypeVibeBin, Upstream: "https://api.mistral.ai/v1", Header: "Authorization", Prefix: "Bearer ", Billing: "unspecified", CLIRootEnv: "TERM_LLM_VIBE_PROXY_ROOT", Gate: "the real vibe-acp 3.1.2 reached only the scoped generic API-key route in a synthetic run and refused a built-in tool call, but it advertises its built-in file and shell tools to the model whatever enabled_tools or disabled_tools say, and bridged MCP tools are reachable only through its built-in run_typescript, which the strict bridge-only policy denies; subscription custody is vendor-dependent"},
 		{
 			ID: "elevenlabs", Family: "media", Label: "ElevenLabs", Upstream: "https://api.elevenlabs.io", Header: "xi-api-key", Billing: "pay_as_you_go",
@@ -137,12 +137,12 @@ func All() []Profile {
 			Bindings: []Binding{{"search.jina.base_url", ""}},
 		},
 		{
-			ID: "voyage", Family: "embeddings", Label: "Voyage embeddings", Upstream: "https://api.voyageai.com/v1", Header: "Authorization", Prefix: "Bearer ", Billing: "pay_as_you_go",
+			ID: "voyage", Family: "embeddings", Label: "Voyage", Upstream: "https://api.voyageai.com/v1", Header: "Authorization", Prefix: "Bearer ", Billing: "pay_as_you_go",
 			Slots:    map[string]string{"embed": "voyage"},
 			Bindings: []Binding{{"embed.voyage.base_url", "embed.voyage.api_key"}},
 		},
 		{
-			ID: "typesafe", Family: "classification", Label: "TypeSafe (Jev)", ClassifyProvider: "typesafe",
+			ID: "typesafe", Family: "classification", Label: "TypeSafe", ClassifyProvider: "typesafe",
 			Slots:    map[string]string{"classify": "typesafe"},
 			Upstream: "https://api.typesafe.ai", Header: "Authorization", Prefix: "Bearer ", Billing: "unspecified",
 			Allow: []string{"POST =/v1/systemone", "GET =/v1/models"},
@@ -154,7 +154,7 @@ func All() []Profile {
 			Allow: []string{"POST =/decisions"},
 		},
 		{
-			ID: "cloudflare-clef", Family: "classification", Label: "Cloudflare Workers AI Clef", ClassifyProvider: "cloudflare",
+			ID: "cloudflare-clef", Family: "classification", Label: "Cloudflare Clef", ClassifyProvider: "cloudflare",
 			Slots:  map[string]string{"classify": "cloudflare"},
 			Header: "Authorization", Prefix: "Bearer ", Billing: "unspecified",
 			Allow: []string{"POST =/@cf/cloudflare/clef", "POST =/@cf/cloudflare/clef-flash"},
@@ -189,7 +189,7 @@ func All() []Profile {
 			Bindings: []Binding{{"search.tavily.base_url", "search.tavily.api_key"}},
 		},
 		{
-			ID: "perplexity", Family: "search", Label: "Perplexity Search", Upstream: "https://api.perplexity.ai",
+			ID: "perplexity", Family: "search", Label: "Perplexity", Upstream: "https://api.perplexity.ai",
 			Header: "Authorization", Prefix: "Bearer ", Billing: "pay_as_you_go",
 			Slots: map[string]string{"search": "perplexity"}, Allow: []string{"POST /search"},
 			Bindings: []Binding{{"search.perplexity.base_url", "search.perplexity.api_key"}},

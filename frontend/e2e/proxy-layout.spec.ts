@@ -234,18 +234,18 @@ test('Admin separates configuration download from replacement without nested dis
   await expect(page.getByRole('status')).toContainText('Route configuration replaced');
 });
 
-for (const [id, upstream, header, prefix] of [
-  ['openai', 'https://api.openai.com/v1', 'Authorization', 'Bearer '],
-  ['anthropic', 'https://api.anthropic.com', 'x-api-key', ''],
+for (const [id, label, upstream, header, prefix] of [
+  ['openai', 'OpenAI', 'https://api.openai.com/v1', 'Authorization', 'Bearer '],
+  ['anthropic', 'Anthropic', 'https://api.anthropic.com', 'x-api-key', ''],
 ]) {
-  test(`${id} preset creates an editable inference provider atomically`, async ({
+  test(`${label} preset creates an editable inference provider atomically`, async ({
     page,
   }, testInfo) => {
     await page.route('http://proxy.test/_proxy/api/state', (route) =>
       route.fulfill({
         json: {
           ...snapshot,
-          presets: [{ family: 'inference', id, label: id, upstream, auth: { header, prefix } }],
+          presets: [{ family: 'inference', id, label, upstream, auth: { header, prefix } }],
           secrets: [{ name: 'provider-key', routes: null, source: 'stored' }],
         },
       }),
@@ -254,12 +254,17 @@ for (const [id, upstream, header, prefix] of [
       route.fulfill({ json: { revision: 2 } }),
     );
     await page.goto('http://proxy.test/_proxy/?tab=routes');
-    await choosePreset(page, id);
+    await choosePreset(page, label);
+    await expect(page.getByRole('heading', { name: `Set up ${label}`, exact: true })).toBeVisible();
+    const labelField = page.getByLabel('Label', { exact: true });
+    await expect(labelField).toHaveValue(label);
     await expect(page.getByLabel('Provider name', { exact: true })).toHaveValue(id);
     await expect(page.getByLabel('Upstream base URL', { exact: true })).toHaveValue(upstream);
     await page.getByLabel('Credential source').selectOption('existing');
     await page.getByLabel('Secret name', { exact: true }).selectOption('provider-key');
     await page.getByLabel('Provider name', { exact: true }).fill(`${id}-mine`);
+    const customLabel = `Team ${label} API`;
+    await labelField.fill(customLabel);
     await page.screenshot({ path: testInfo.outputPath(`preset-${id}.png`), fullPage: true });
     const saved = page.waitForRequest('http://proxy.test/_proxy/api/providers');
     await page.getByRole('button', { name: 'Create provider', exact: true }).click();
@@ -267,7 +272,7 @@ for (const [id, upstream, header, prefix] of [
       revision: 1,
       name: `${id}-mine`,
       preset: id,
-      label: id,
+      label: customLabel,
       secret: 'provider-key',
     });
     await expect(page.getByRole('status')).toContainText('No upstream request was made');
@@ -1266,7 +1271,6 @@ for (const width of [1440, 390]) {
     const kind = agy ? 'agy-bin' : 'claude-bin';
     const provider = agy ? 'Antigravity' : 'Claude Code';
     const shortName = agy ? 'Antigravity' : 'Claude';
-    const presetChoice = agy ? 'Antigravity personal subscription' : provider;
     const upstream = agy
       ? 'https://daily-cloudcode-pa.googleapis.com'
       : 'https://api.anthropic.com';
@@ -1295,7 +1299,7 @@ for (const width of [1440, 390]) {
           {
             family: 'inference',
             id: kind,
-            label: presetChoice,
+            label: provider,
             upstream,
             auth: { header: 'Authorization', prefix: 'Bearer ' },
             account_kind: kind,
@@ -1303,7 +1307,7 @@ for (const width of [1440, 390]) {
           {
             family: 'inference',
             id: 'openai',
-            label: 'OpenAI API',
+            label: 'OpenAI',
             upstream: 'https://api.openai.com/v1',
             auth: { header: 'Authorization', prefix: 'Bearer ' },
           },
@@ -1396,8 +1400,8 @@ for (const width of [1440, 390]) {
         return request.fallback();
       });
       await page.goto('http://proxy.test/_proxy/?tab=routes');
-      await choosePreset(page, presetChoice);
-      const heading = page.getByRole('heading', { name: `Set up ${presetChoice}`, exact: true });
+      await choosePreset(page, provider);
+      const heading = page.getByRole('heading', { name: `Set up ${provider}`, exact: true });
       await expect(heading).toBeVisible();
       const setup = page.locator('section').filter({ has: heading });
       const setupActions = setup.getByRole('button').filter({ hasNotText: /^Cancel$/ });
@@ -1448,6 +1452,7 @@ for (const width of [1440, 390]) {
 
       const card = providerCard(page, kind);
       const line = routeLine(page, kind);
+      await expect(card).toHaveAccessibleName(provider);
       await expect(card.getByRole('heading', { name: kind, exact: true })).toBeVisible();
       await expect(line.locator('code')).toHaveText(prefix);
       await expect(card.getByRole('img', { name: 'Status: red, Sign-in needed' })).toBeVisible();
@@ -1712,7 +1717,7 @@ for (const width of [1440, 390]) {
         {
           family: 'inference',
           id: 'openai',
-          label: 'OpenAI API',
+          label: 'OpenAI',
           upstream: 'https://api.openai.com/v1',
           auth: { header: 'Authorization', prefix: 'Bearer ' },
           billing: 'pay_as_you_go',
@@ -1845,7 +1850,7 @@ for (const { id, label, issuer, verificationURL, upstream } of [
         {
           family: 'inference',
           id,
-          label: `${label} plan`,
+          label,
           upstream: providerRoute.upstream,
           auth: providerRoute.caller_auth,
           account_kind: id,
@@ -1908,6 +1913,7 @@ for (const { id, label, issuer, verificationURL, upstream } of [
     });
     await page.goto('http://proxy.test/_proxy/?tab=routes');
     await choosePreset(page, label);
+    await expect(page.getByRole('heading', { name: `Set up ${label}`, exact: true })).toBeVisible();
     for (const field of [
       'API key',
       'Credential source',
@@ -2047,7 +2053,7 @@ test('Provider approval creates one show-once client for every current route', a
   await expect(card.locator('.provider-approval-summary')).toHaveText('Approved: Worker');
 });
 
-test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API routes separate', async ({
+test('Providers group ChatGPT routes under one OAuth account and keep OpenAI routes separate', async ({
   page,
 }, testInfo) => {
   const routeDefaults = {
@@ -2124,7 +2130,7 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
         status: 'green',
         reason: '',
         id: 'openai',
-        label: 'OpenAI API',
+        label: 'OpenAI',
         routes: ['openai'],
       },
     ],
@@ -2153,7 +2159,7 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
       {
         family: 'inference',
         id: 'chatgpt',
-        label: 'ChatGPT plan',
+        label: 'ChatGPT',
         upstream: 'https://chatgpt.com/backend-api/codex',
         auth: { header: 'Authorization', prefix: 'Bearer ' },
         account_kind: 'chatgpt',
@@ -2163,7 +2169,7 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
       {
         family: 'inference',
         id: 'chatgpt-backend',
-        label: 'ChatGPT plan usage and dictation',
+        label: 'ChatGPT Usage & Dictation',
         upstream: 'https://chatgpt.com/backend-api',
         auth: { header: 'Authorization', prefix: 'Bearer ' },
         account_kind: 'chatgpt',
@@ -2172,7 +2178,7 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
       {
         family: 'inference',
         id: 'chatgpt-openai',
-        label: 'ChatGPT OAuth embeddings and live (billing unspecified)',
+        label: 'ChatGPT Embeddings & Live',
         upstream: 'https://api.openai.com/v1',
         auth: { header: 'Authorization', prefix: 'Bearer ' },
         account_kind: 'chatgpt',
@@ -2181,7 +2187,7 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
       {
         family: 'inference',
         id: 'openai',
-        label: 'OpenAI API',
+        label: 'OpenAI',
         upstream: 'https://api.openai.com/v1',
         auth: { header: 'Authorization', prefix: 'Bearer ' },
         billing: 'pay_as_you_go',
@@ -2230,6 +2236,12 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
   await expect(cards.nth(1).getByRole('heading', { name: 'openai', exact: true })).toBeVisible();
   const chatgpt = cards.nth(0);
   const openai = cards.nth(1);
+  await expect(chatgpt).toHaveAccessibleName('ChatGPT');
+  await expect(openai).toHaveAccessibleName('OpenAI');
+  await choosePreset(page, 'OpenAI');
+  await expect(page.getByRole('heading', { name: 'Set up OpenAI', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Label', { exact: true })).toHaveValue('OpenAI');
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   const lines = chatgpt.locator('.provider-route-line');
   await expect(lines).toHaveCount(3);
   await expect(lines.nth(0)).toHaveAttribute('data-focus', 'route:chatgpt');
@@ -2314,12 +2326,12 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
     },
   ]);
   await expect(chatgpt.locator('.provider-approval-summary')).toHaveText('Approved: jarvis');
-  // Approval covers every current ChatGPT route and never the OpenAI API provider.
+  // Approval covers every current ChatGPT route and never the OpenAI provider.
   for (const line of [lines.nth(0), lines.nth(1), lines.nth(2)]) {
     await expect(line).not.toContainText('jarvis');
   }
   await expect(openai.locator('.provider-approval-summary')).toHaveText('Approved: forge');
-  // The single OpenAI API route has no shared OAuth account controls.
+  // The single OpenAI route has no shared OAuth account controls.
   await openManage(page, 'openai');
   await expect(openaiManage.locator('details')).toHaveCount(0);
   await expect(openaiManage.locator('.account-controls')).toHaveCount(0);
@@ -2328,7 +2340,7 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI API
   ).toHaveCount(0);
   await expect(openaiManage.getByRole('button', { name: 'Configure API key' })).toHaveCount(1);
   await expect(
-    openaiManage.getByRole('button', { name: 'Delete provider OpenAI API', exact: true }),
+    openaiManage.getByRole('button', { name: 'Delete provider OpenAI', exact: true }),
   ).toBeVisible();
   await expect(chatgptManage).toHaveAttribute('open', '');
   await expect(chatgptManage.locator('.provider-route-management')).toHaveCount(3);

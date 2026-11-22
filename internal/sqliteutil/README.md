@@ -101,3 +101,9 @@ Unknown unversioned schemas fail closed with a structural description and recove
   substring filters, without changing stored rows. The v9 binary rejects the
   newer marker; stop older writers before upgrading and restore a protected v9
   backup to downgrade.
+
+- Proxy v11 shortens stored labels that match old built-in defaults. It does
+  not change schema objects, provider or route IDs, credentials, or grants.
+  Operator YAML is not rewritten. The v10 binary rejects the newer marker;
+  stop older writers before upgrading and restore a protected v10 backup to
+  downgrade.

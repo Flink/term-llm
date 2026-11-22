@@ -41,7 +41,7 @@ describe.each([
   const preset = {
     family: 'inference' as const,
     id: provider,
-    label: `${label} plan`,
+    label,
     upstream: route.upstream,
     auth: route.caller_auth,
   };

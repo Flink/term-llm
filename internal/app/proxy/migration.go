@@ -10,7 +10,7 @@ import (
 	"github.com/term-llm/term-llm/internal/sqliteutil"
 )
 
-const schemaVersion = 10
+const schemaVersion = 11
 
 // SQLite secondary indexes already carry the rowid (seq) as a tie-breaker.
 const requestFilterIndexesV10 = `
@@ -79,6 +79,7 @@ var migrations = []sqliteutil.Migration{{
 		_, err := tx.Exec(requestFilterIndexesV10)
 		return err
 	}},
+	{Version: 11, Description: "shorten built-in provider display labels", Up: migrateProviderLabelsV11},
 }
 
 func migrateAdminKeys(tx sqliteutil.Executor) error {
@@ -301,6 +302,21 @@ func renameLiveClaudeRoutes(tx sqliteutil.Executor) error {
 	}
 	if _, err := tx.Exec("UPDATE money_settings SET data=? WHERE id=1", string(data)); err != nil {
 		return fmt.Errorf("rename Claude money rates: %w", err)
+	}
+	return nil
+}
+
+func migrateProviderLabelsV11(tx sqliteutil.Executor) error {
+	var data string
+	if err := tx.QueryRow("SELECT data FROM configuration WHERE id=1").Scan(&data); err != nil {
+		return fmt.Errorf("read stored provider labels: %w", err)
+	}
+	patch, err := legacyconfig.ProviderLabelPatchV11([]byte(data))
+	if err != nil || patch == nil {
+		return err
+	}
+	if _, err := tx.Exec("UPDATE configuration SET data=json_patch(data, ?) WHERE id=1", string(patch)); err != nil {
+		return fmt.Errorf("write provider label updates: %w", err)
 	}
 	return nil
 }

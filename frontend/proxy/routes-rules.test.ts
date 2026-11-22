@@ -66,7 +66,7 @@ const preset: ProxyPreset = {
 const legacyPreset: ProxyPreset = {
   family: 'inference',
   id: 'openai',
-  label: 'OpenAI API',
+  label: 'OpenAI',
   upstream: 'https://api.openai.com/v1',
   auth: { header: 'Authorization', prefix: 'Bearer ' },
   billing: 'pay_as_you_go',

@@ -4,10 +4,6 @@ import { providerFamilies } from './provider-groups';
 
 const featured = ['claude-bin', 'chatgpt'];
 
-export function presetLabel(preset: ProxyPreset): string {
-  return preset.id === 'claude-bin' ? 'Claude Code' : preset.label;
-}
-
 /** A blank profile has no default endpoint, so the operator must supply the root. */
 export function presetUpstreamHint(preset: ProxyPreset): string {
   if (preset.family !== 'classification' || preset.upstream) return '';
@@ -16,11 +12,6 @@ export function presetUpstreamHint(preset: ProxyPreset): string {
 
 export function matchRoutePreset(route: ProxyRoute, state: ProxyState): ProxyPreset | undefined {
   return state.presets?.find((preset) => preset.id === route.profile);
-}
-
-// Group headings already say "plan" or "API", so the picker drops the suffix.
-export function pickerLabel(preset: ProxyPreset): string {
-  return presetLabel(preset).replace(/ (plan|API)$/, '');
 }
 
 function inferenceGroup(preset: ProxyPreset): string {
@@ -32,7 +23,7 @@ function inferenceGroup(preset: ProxyPreset): string {
 
 const hints: Record<string, string> = {
   'claude-bin': 'Sign in once, then add devices',
-  'agy-bin': 'Sign in once on Linux, then add devices',
+  'agy-bin': 'Personal subscriptions only · Sign in once on Linux',
   chatgpt: 'Includes dictation, embeddings and live',
   gemini: 'Includes Live',
   'opencode-go': 'Chat, Messages and Gemini',
@@ -91,7 +82,7 @@ export function routePresetPicker(
   const subgroups: HTMLElement[] = [];
   function choicesFor(candidates: ProxyPreset[], title?: string) {
     const choices = candidates.map((preset) => {
-      const label = pickerLabel(preset);
+      const { label } = preset;
       const mark = el('span', marks[preset.id] ?? initials(label));
       mark.className = 'route-preset-mark';
       mark.setAttribute('aria-hidden', 'true');
@@ -105,7 +96,7 @@ export function routePresetPicker(
       if (hint) control.append(el('small', hint));
       rows.push({
         node: control,
-        text: `${label} ${preset.label} ${preset.id} ${hint}`.toLowerCase(),
+        text: `${label} ${preset.id} ${hint}`.toLowerCase(),
       });
       return control;
     });

@@ -115,6 +115,9 @@ func TestProviderMigrationV9StoresIdentityAndPreservesClaudeGrant(t *testing.T) 
 	if s.snap.revision != 42 || len(s.snap.routes) != 2 {
 		t.Fatal("route count or revision changed during migration")
 	}
+	if label := s.snap.config.Providers["claude-bin"].Label; label != "Claude Code" {
+		t.Errorf("v8 default label after upgrading to v11 = %q", label)
+	}
 	r := s.snap.routes[1]
 	for _, candidate := range s.snap.routes {
 		if candidate.Name == "claude-code-2" {
@@ -232,6 +235,9 @@ secrets:
 	}
 	s = openMigratedProxy(t, opts)
 	assertMigratedClaudeGrant(t, s, authority)
+	if label := s.snap.config.Providers["claude-bin"].Label; label != "Claude Code plan" {
+		t.Errorf("upgrade changed operator YAML label to %q", label)
+	}
 	var raw string
 	if err := s.store.db.QueryRow("SELECT data FROM configuration WHERE id=1").Scan(&raw); err != nil || raw != emptyProviderConfig {
 		t.Fatal("file mode did not replace the stale database copy", err)

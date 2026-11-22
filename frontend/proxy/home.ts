@@ -57,26 +57,6 @@ export function apiEquivalentLabel(estimate?: ProxyAPIEquivalent): string {
   if (!estimate || !['estimated', 'estimated_floor'].includes(estimate.kind)) return notAvailable;
   return moneyLabel({ ...estimate, billing: 'pay_as_you_go' });
 }
-export function providerLabel(name: string, state?: ProxyState): string {
-  const route = state?.routes.find((route) => route.name === name);
-  const kind = route?.account && state?.accounts?.find((a) => a.name === route.account)?.kind;
-  const labels: Record<string, string> = {
-    chatgpt: 'ChatGPT',
-    'claude-code': 'Claude',
-    'claude-bin': 'Claude',
-    'agy-bin': 'Antigravity',
-    anthropic: 'Claude',
-    'grok-bin': 'Grok',
-    grok: 'Grok',
-    xai: 'Grok',
-    openai: 'OpenAI',
-    copilot: 'GitHub Copilot',
-    ollama: 'Ollama',
-    unknown: 'Not identified',
-  };
-  const preset = state?.presets?.find((preset) => preset.upstream === route?.upstream);
-  return (kind && labels[kind]) || labels[name] || (preset && labels[preset.id]) || name;
-}
 function planPeriod(label: string, period: MoneyPeriod): HTMLElement {
   const totals = period.api_equivalent_totals ?? [];
   const coverage = [

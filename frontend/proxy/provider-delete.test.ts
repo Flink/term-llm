@@ -146,7 +146,7 @@ const providers: ProxyProvider[] = [
     status: 'green',
     reason: '',
     id: 'claude-bin',
-    label: 'Claude Code plan',
+    label: 'Claude Code',
     routes: ['claude-bin'],
   },
   {
@@ -263,7 +263,7 @@ it('deletes every route of a multi-route provider in one revision-checked write'
 });
 
 it.each([
-  ['Claude Code plan', 'claude', 'Claude', claudeRoute, 'claude-bin'],
+  ['Claude Code', 'claude', 'Claude', claudeRoute, 'claude-bin'],
   ['Antigravity', 'agy', 'Antigravity', agyRoute, 'agy-bin'],
 ] as const)(
   'deletes native provider %s with the providers API after confirmation',
@@ -296,13 +296,13 @@ it.each([
 
 it('refuses provider deletion while a one-time launcher is displayed', async () => {
   const { root, clearNative, announce } = setup();
-  const manage = openProvider(root, 'Claude Code plan');
+  const manage = openProvider(root, 'Claude Code');
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
   fireEvent.click(getByRole(manage, 'button', { name: 'Add device' }));
   await waitFor(() => expect(getByLabelText(manage, 'Launcher command')).toBeVisible());
 
-  fireEvent.click(getByRole(manage, 'button', { name: 'Delete provider Claude Code plan' }));
+  fireEvent.click(getByRole(manage, 'button', { name: 'Delete provider Claude Code' }));
   expect(confirm).not.toHaveBeenCalled();
   expect(clearNative).not.toHaveBeenCalled();
   expect(announce).toHaveBeenLastCalledWith(
@@ -312,7 +312,7 @@ it('refuses provider deletion while a one-time launcher is displayed', async () 
 
 it('hides Delete provider in read-only file mode', () => {
   const { root } = setup({ mode: 'file' });
-  for (const label of ['Venice', 'Claude Code plan', 'ChatGPT']) {
+  for (const label of ['Venice', 'Claude Code', 'ChatGPT']) {
     const manage = openProvider(root, label);
     expect(queryByRole(manage, 'button', { name: `Delete provider ${label}` })).toBeNull();
   }
@@ -320,7 +320,7 @@ it('hides Delete provider in read-only file mode', () => {
 
 it('never renders nested disclosures inside Manage for any provider type', async () => {
   const { root } = setup();
-  for (const label of ['Venice', 'Claude Code plan', 'ChatGPT']) {
+  for (const label of ['Venice', 'Claude Code', 'ChatGPT']) {
     const manage = openProvider(root, label);
     expect(manage.querySelectorAll('details')).toHaveLength(0);
   }
@@ -332,7 +332,7 @@ it('never renders nested disclosures inside Manage for any provider type', async
   expect(getByRole(veniceManage, 'button', { name: 'Delete route venice' })).toBeVisible();
 
   // Issuing a worker launcher inside Manage introduces zero nested disclosures.
-  const claudeManage = openProvider(root, 'Claude Code plan');
+  const claudeManage = openProvider(root, 'Claude Code');
   fireEvent.click(getByRole(claudeManage, 'button', { name: 'Add device' }));
   await waitFor(() => expect(getByLabelText(claudeManage, 'Launcher command')).toBeVisible());
   expect(claudeManage.querySelectorAll('details')).toHaveLength(0);

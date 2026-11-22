@@ -112,7 +112,7 @@ func TestChatGPTSetupProvisionsRouteAndAccountOnly(t *testing.T) {
 	if got := restarted.snap.config.Routes; !reflect.DeepEqual(got, want) {
 		t.Fatalf("persisted route = %+v", got)
 	}
-	if p := restarted.snap.config.Providers["chatgpt"]; p.Label != "ChatGPT plan" {
+	if p := restarted.snap.config.Providers["chatgpt"]; p.Label != "ChatGPT" {
 		t.Fatalf("first ChatGPT setup did not persist the canonical provider: %+v", p)
 	}
 	if a, err := restarted.store.account("chatgpt"); err != nil || a.Kind != "chatgpt" || a.State != "ready" || a.Generation != 1 || a.credentials.AccessToken != "fixture-access-token" {

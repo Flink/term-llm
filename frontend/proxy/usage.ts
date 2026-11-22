@@ -25,7 +25,7 @@ const refreshCheckDelay = 1_000;
 const requestTimeout = 15_000;
 const usageProviderNames: Record<string, string> = {
   'agy-bin': 'Antigravity',
-  'claude-bin': 'Claude',
+  'claude-bin': 'Claude Code',
   chatgpt: 'ChatGPT',
   grok: 'Grok',
   'opencode-go': 'OpenCode Go',
@@ -298,6 +298,7 @@ export function usageView(state: ProxyState, api: ProxyClient, context: UIContex
   function providerLabel(id: string) {
     return (
       providerLabels.get(id) ||
+      state.presets?.find((preset) => preset.id === id)?.label ||
       (Object.hasOwn(usageProviderNames, id) ? usageProviderNames[id] : id)
     );
   }

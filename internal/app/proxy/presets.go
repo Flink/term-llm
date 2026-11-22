@@ -44,7 +44,7 @@ var routePresets = presetsFromProfiles(proxyprofile.All())
 
 // presetNotes holds operator guidance that the routing table does not carry.
 var presetNotes = map[string]string{
-	"typesafe":          "Use this route's local prefix as the classifier base URL, without adding /v1.",
+	"typesafe":          "Runs Jev classification. Use this route's local prefix as the classifier base URL, without adding /v1.",
 	"openai-decisions":  "This route serves Decisions only. If needed, set OpenAI organization and project headers on the route.",
 	"cloudflare-clef":   "Enter the full Workers AI run root (ending in /ai/run) or AI Gateway Workers AI root (ending in /workers-ai), with the account and gateway IDs filled in. Do not append the model path.",
 	"openai":            "Set your client's base URL to this route's local prefix, without adding /v1 again.",
@@ -85,7 +85,7 @@ func presetsFromProfiles(profiles []proxyprofile.Profile) []routePreset {
 		}
 		preset := routePreset{ID: p.ID, Label: p.Label, Upstream: p.Upstream, Auth: Auth{Header: p.Header, Prefix: p.Prefix}, Note: presetNotes[p.ID], Billing: p.Billing, WebSocket: p.WebSocket, AccountKind: p.Account, Family: p.Family, Allow: slices.Clone(p.Allow)}
 		if p.ID == "opencode-go" {
-			preset.Label, preset.Upstream, preset.Auth = "OpenCode Go", "", Auth{}
+			preset.Upstream, preset.Auth = "", Auth{}
 			preset.Rules = []routePresetRule{
 				{PathPrefix: "/", Upstream: "https://opencode.ai/zen/go/v1", Auth: Auth{Header: "Authorization", Prefix: "Bearer "}},
 				{PathPrefix: "/messages/", Upstream: "https://opencode.ai/zen/go", Auth: Auth{Header: "x-api-key"}},

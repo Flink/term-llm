@@ -381,14 +381,14 @@ const presets: NonNullable<ProxyState['presets']> = [
   {
     family: 'inference',
     id: 'openai',
-    label: 'OpenAI API',
+    label: 'OpenAI',
     upstream: 'https://api.openai.com/v1',
     auth: { header: 'Authorization', prefix: 'Bearer ' },
   },
   {
     family: 'inference',
     id: 'anthropic',
-    label: 'Anthropic API',
+    label: 'Anthropic',
     upstream: 'https://api.anthropic.com',
     auth: { header: 'x-api-key', prefix: '' },
   },
