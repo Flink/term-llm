@@ -32,7 +32,8 @@ func DecodeClaude(body []byte) (Report, error) {
 		report.Groups = append(report.Groups, Group{Name: group, Windows: []Window{w}})
 	}
 	for _, k := range slices.Sorted(maps.Keys(fields)) {
-		if k == "extra_usage" || k == "model_scoped" {
+		// The breakdown describes the weekly limit; it is not another window.
+		if k == "seven_day_breakdown" || k == "extra_usage" || k == "model_scoped" {
 			continue
 		}
 		var bucket *claudeWindow

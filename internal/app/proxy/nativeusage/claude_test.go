@@ -31,6 +31,18 @@ func TestClaudeQuotaWindows(t *testing.T) {
 	}
 }
 
+func TestClaudeSkipsBreakdownWithoutWindowData(t *testing.T) {
+	report, err := DecodeClaude([]byte(`{
+		"seven_day": {"utilization": 24},
+		"seven_day_breakdown": {"some_model": {"utilization": 8}},
+		"seven_day_opus": {"utilization": 0},
+		"seven_day_sonnet": {"resets_at": "2030-01-01T02:00:00Z"}
+	}`))
+	if err != nil || len(report.Groups) != 3 || report.Groups[0].Name != "All models" || report.Groups[1].Name != "Opus" || report.Groups[2].Name != "Sonnet" {
+		t.Fatalf("expected only the measured or reset-bearing windows, got %+v: %v", report, err)
+	}
+}
+
 func TestClaudeInvalidSnapshot(t *testing.T) {
 	for _, raw := range []string{`{}`, `{"five_hour":{"resets_at":"not a date"}}`, `{"seven_day":42}`, `{"model_scoped":{}}`, `{"extra_usage":{"is_enabled":false}}`} {
 		if _, err := DecodeClaude([]byte(raw)); err == nil {
