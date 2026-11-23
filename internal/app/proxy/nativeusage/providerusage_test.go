@@ -1,6 +1,32 @@
 package nativeusage
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
+
+func TestChatGPTCreditBalanceDisplay(t *testing.T) {
+	for _, tt := range []struct {
+		balance string
+		want    string
+	}{
+		{"62003.2882720000", "62003.28"},
+		{"12.50", "12.50"},
+		{"5", "5"},
+		{"unknown", "unknown"},
+	} {
+		t.Run(tt.balance, func(t *testing.T) {
+			body := fmt.Sprintf(`{"rate_limit":{"primary_window":{"used_percent":0}},"credits":{"has_credits":true,"balance":%q}}`, tt.balance)
+			report, err := DecodeChatGPT([]byte(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := tt.want + " credits remaining"; report.Detail != want {
+				t.Errorf("detail = %q, want %q", report.Detail, want)
+			}
+		})
+	}
+}
 
 func TestChatGPTGroupStatusAndSparseWindows(t *testing.T) {
 	report, err := DecodeChatGPT([]byte(`{"rate_limit":{"limit_reached":true,"primary_window":{"limit_window_seconds":18000},"secondary_window":{"used_percent":0}},"additional_rate_limits":[{"limit_name":"Denied","rate_limit":{"allowed":false}},{"limit_name":"Empty","rate_limit":{}}],"rate_limit_reached_type":{"type":"weekly_limit"},"credits":{"has_credits":false,"balance":"0.00"}}`))

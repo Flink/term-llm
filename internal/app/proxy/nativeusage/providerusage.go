@@ -3,10 +3,14 @@ package nativeusage
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/llm/providerusage"
 )
+
+// Truncate decimal balances for display without rounding the available credits up.
+var preciseCreditBalance = regexp.MustCompile(`^([+-]?[0-9]+\.[0-9]{2})[0-9]+$`)
 
 // DecodeChatGPT preserves the Codex quota and all additional metered features.
 func DecodeChatGPT(body []byte) (Report, error) {
@@ -30,12 +34,14 @@ func decodeProviderUsage(body []byte, decode func([]byte) (*providerusage.Report
 	}
 	out := Report{Plan: raw.Plan, Detail: strings.Join(strings.Fields(strings.NewReplacer("_", " ", "-", " ").Replace(raw.LimitState)), " ")}
 	if credits := raw.Credits; credits != nil {
+		balance := strings.TrimSpace(credits.Balance)
 		var detail string
 		switch {
 		case credits.Unlimited:
 			detail = "Unlimited credits"
-		case credits.HasCredits && strings.TrimSpace(credits.Balance) != "":
-			detail = strings.TrimSpace(credits.Balance+" "+credits.Currency) + " credits remaining"
+		case credits.HasCredits && balance != "":
+			balance = preciseCreditBalance.ReplaceAllString(balance, "$1")
+			detail = strings.TrimSpace(balance+" "+credits.Currency) + " credits remaining"
 		}
 		if detail != "" {
 			if out.Detail != "" {
