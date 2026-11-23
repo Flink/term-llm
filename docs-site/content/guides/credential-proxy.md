@@ -545,14 +545,16 @@ existing embedding grants do not cover Reader.
 | `parallel` | `parallel` | `https://api.parallel.ai/v1` | `x-api-key` | search: `parallel` | `POST /search` |
 | `youcom` | `youcom` | `https://ydc-index.io/v1` | `X-API-Key` | search: `youcom` | `POST /search` |
 | `keenable` | `keenable` | `https://api.keenable.ai/v1` | `X-API-Key` | search: `keenable` | `POST /search` |
+| `sofya` | `sofya` | `https://sofya.co/v1` | `Authorization: Bearer` | search: `sofya` | `POST =/search` |
 | `jina` | `jina` | `https://api.jina.ai/v1` | `Authorization: Bearer` | embed: `jina` | Unrestricted by `allow` |
 | `jina` | `jina-reader` | `https://r.jina.ai` | `Authorization: Bearer` | fetch: `jina` | `GET /*` |
 
 For manual clients, use the scoped proxy token in the listed credential header;
 the proxy substitutes the vendor key. Term-llm fills in these settings from
 discovery, including the `/mcp` suffix on the Exa MCP endpoint. An Exa MCP grant
-covers the endpoint, not individual MCP tools. DuckDuckGo and Google Custom
-Search do not have proxy presets.
+covers the endpoint, not individual MCP tools. DuckDuckGo is keyless and has no
+proxy preset. Legacy Google Custom Search remains direct even in proxy-all mode:
+its API key is sent in the request URL rather than an authentication header.
 
 ## Trusted accounts
 

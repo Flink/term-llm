@@ -15,7 +15,7 @@ import (
 	"github.com/term-llm/term-llm/internal/providerhttp"
 )
 
-const sofyaFixture = `{"query":"hello","answer":null,"results":[{"title":"Result 1","url":"https://example.com/1","content":"Page text 1","description":"Snippet 1","fetched":false},{"title":"No URL","url":"","description":"dropped"},{"title":"Result 2","url":"https://example.com/2","content":"Content fallback","description":""}],"search_depth":"snippets","credits_used":1}`
+const sofyaFixture = `{"query":"hello","answer":null,"results":[{"title":"Result 1","url":"https://example.com/1","content":"Page text 1","description":"Snippet 1","fetched":false},{"title":"No URL","url":"","description":"dropped"},{"title":"Result 2","url":"https://example.com/2","content":"Content fallback","description":null}],"search_depth":"snippets","credits_used":1}`
 
 func newSofyaTestServer(t *testing.T, check func(r *http.Request, body sofyaRequest)) *httptest.Server {
 	t.Helper()

@@ -5,13 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/term-llm/term-llm/internal/providerhttp"
-	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 // ParallelSearcher implements Searcher using the Parallel Search API.
@@ -91,13 +89,13 @@ func (p *ParallelSearcher) Search(ctx context.Context, query string, maxResults 
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("x-api-key", p.apiKey)
 
-	resp, err := proxyclient.Do(p.client, req)
+	resp, err := doSearchRequest(p.client, req, p.apiKey != "")
 	if err != nil {
 		return nil, fmt.Errorf("execute request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readSearchResponse(resp)
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}

@@ -129,9 +129,9 @@ func (e *ExaMCPClient) callTool(ctx context.Context, tool string, args json.RawM
 	apiKey := e.apiKey
 	if binding, bound := proxyclient.Lookup(e.url); bound {
 		apiKey = binding.Token
-		httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	}
 	if apiKey != "" {
+		httpClient.CheckRedirect = stopSearchRedirect
 		httpClient.Transport = &exaMCPHeaderTransport{
 			base:    http.DefaultTransport,
 			headers: map[string]string{"x-api-key": apiKey},

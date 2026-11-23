@@ -13,9 +13,10 @@ import (
 
 func TestDelegatedSearchDoesNotFollowRedirects(t *testing.T) {
 	const token = "test-search-scoped-token"
-	for _, tc := range []struct{ provider, path, auth string }{
-		{"brave", "/search/web/search", "X-Subscription-Token"},
-		{"exa_mcp", "/search/mcp", "X-API-Key"},
+	for _, tc := range []struct{ provider, path, auth, prefix string }{
+		{"brave", "/search/web/search", "X-Subscription-Token", ""},
+		{"exa_mcp", "/search/mcp", "X-API-Key", ""},
+		{"sofya", "/search/search", "Authorization", "Bearer "},
 	} {
 		t.Run(tc.provider, func(t *testing.T) {
 			var first atomic.Int32
@@ -26,7 +27,7 @@ func TestDelegatedSearchDoesNotFollowRedirects(t *testing.T) {
 					return
 				}
 				first.Add(1)
-				if r.Header.Get(tc.auth) != token || r.Header.Get("Authorization") != "" {
+				if r.Header.Get(tc.auth) != tc.prefix+token || tc.auth != "Authorization" && r.Header.Get("Authorization") != "" {
 					t.Error("search did not send exactly its expected caller auth header")
 				}
 				w.Header().Set("Location", "/would-be-public")
@@ -40,6 +41,7 @@ func TestDelegatedSearchDoesNotFollowRedirects(t *testing.T) {
 				Provider: tc.provider,
 				Brave:    config.SearchBraveConfig{APIKey: token, BaseURL: server.URL + "/search"},
 				ExaMCP:   config.SearchExaMCPConfig{URL: server.URL + "/search/mcp", APIKey: token},
+				Sofya:    config.SearchSofyaConfig{APIKey: token, BaseURL: server.URL + "/search"},
 			}}
 			backend, err := NewSearcher(cfg)
 			if err != nil {

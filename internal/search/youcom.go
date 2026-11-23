@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/term-llm/term-llm/internal/providerhttp"
-	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 const (
@@ -81,13 +79,13 @@ func (y *YouComSearcher) Search(ctx context.Context, query string, maxResults in
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	resp, err := proxyclient.Do(y.client, req)
+	resp, err := doSearchRequest(y.client, req, y.apiKey != "")
 	if err != nil {
 		return nil, fmt.Errorf("execute request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readSearchResponse(resp)
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}

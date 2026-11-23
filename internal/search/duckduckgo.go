@@ -3,7 +3,6 @@ package search
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -60,14 +59,12 @@ func (d *DuckDuckGoLite) Search(ctx context.Context, query string, maxResults in
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, providerhttp.NewStatusErrorMessagef(resp, body, "duckduckgo http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
-	body, err := io.ReadAll(resp.Body)
+	body, err := readSearchResponse(resp)
 	if err != nil {
 		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, providerhttp.NewStatusErrorMessagef(resp, body, "duckduckgo http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	return ParseDuckDuckGoLiteHTML(string(body), maxResults)

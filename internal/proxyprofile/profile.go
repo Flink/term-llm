@@ -212,6 +212,12 @@ func All() []Profile {
 			Slots: map[string]string{"search": "keenable"}, Allow: []string{"POST /search"},
 			Bindings: []Binding{{"search.keenable.base_url", "search.keenable.api_key"}},
 		},
+		{
+			ID: "sofya", Family: "search", Label: "Sofya", Upstream: "https://sofya.co/v1",
+			Header: "Authorization", Prefix: "Bearer ", Billing: "pay_as_you_go",
+			Slots: map[string]string{"search": "sofya"}, Allow: []string{"POST =/search"},
+			Bindings: []Binding{{"search.sofya.base_url", "search.sofya.api_key"}},
+		},
 	}
 }
 

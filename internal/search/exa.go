@@ -5,13 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/term-llm/term-llm/internal/providerhttp"
-	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 // ExaSearcher implements Searcher using the Exa API.
@@ -78,13 +76,13 @@ func (e *ExaSearcher) Search(ctx context.Context, query string, maxResults int) 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", e.apiKey)
 
-	resp, err := proxyclient.Do(e.client, req)
+	resp, err := doSearchRequest(e.client, req, e.apiKey != "")
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readSearchResponse(resp)
 	if err != nil {
 		return nil, err
 	}

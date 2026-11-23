@@ -133,6 +133,42 @@ func TestProxyAllKeylessFallbackSuppressesLocalCredentials(t *testing.T) {
 	}
 }
 
+func TestProxySofyaUsesScopedRouteOrStaysUnavailable(t *testing.T) {
+	t.Setenv("SOFYA_API_KEY", "local-env-key")
+	const local = "search:\n  provider: sofya\n  sofya:\n    base_url: https://local.example.test/v1\n"
+	const configuredKey = "    api_key: local-config-key\n"
+	granted := proxyDiscoveryPayload{Providers: []proxyDiscoveredProvider{
+		familyProvider("sofya", "search", familyRoute("sofya-route", "sofya", "/sofya-granted/")),
+	}}
+	for _, tc := range []struct {
+		name, selection, extra, path, key string
+		payload                           proxyDiscoveryPayload
+	}{
+		{name: "proxy-all missing route with env key", path: "/_proxy/client/unavailable/sofya", key: familyProxyToken},
+		{name: "proxy-all missing route with configured key", extra: configuredKey, path: "/_proxy/client/unavailable/sofya", key: familyProxyToken},
+		{name: "allowlist missing route", selection: "  providers: [sofya]\n", path: "/_proxy/client/unavailable/sofya", key: familyProxyToken},
+		{name: "granted route", extra: configuredKey, path: "/sofya-granted", key: familyProxyToken, payload: granted},
+		{name: "direct opt-out", selection: "  direct: [sofya]\n", key: "local-env-key", payload: granted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, root := loadFamilyProxy(t, tc.payload, tc.selection, local+tc.extra)
+			wantRoot := "https://local.example.test/v1"
+			if tc.path != "" {
+				wantRoot = root + tc.path
+			}
+			if cfg.Search.Provider != "sofya" || cfg.Search.Sofya.BaseURL != wantRoot {
+				t.Fatalf("wrong Sofya selector or root: %q, %q", cfg.Search.Provider, cfg.Search.Sofya.BaseURL)
+			}
+			if key, err := cfg.Search.SofyaKey().Resolve(); err != nil || key != tc.key {
+				t.Fatalf("wrong Sofya credential (err=%v)", err)
+			}
+			if binding, ok := proxyclient.Lookup(wantRoot + "/search"); ok != (tc.path != "") || ok && (binding.Root != wantRoot || binding.Token != familyProxyToken) {
+				t.Fatal("wrong Sofya transport binding")
+			}
+		})
+	}
+}
+
 func TestProxyGrokCompanionBindsUnderOwnBuiltin(t *testing.T) {
 	payload := proxyDiscoveryPayload{Providers: []proxyDiscoveredProvider{familyProvider("grok", "inference",
 		familyRoute("grok", "grok", "/groky/"), familyRoute("grok-bin", "grok-bin", "/grokcli/"))}}

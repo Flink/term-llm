@@ -5,13 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/term-llm/term-llm/internal/providerhttp"
-	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 // sofyaBaseURL is the Sofya API root; the search operation appends /search.
@@ -77,13 +75,13 @@ func (s *SofyaSearcher) Search(ctx context.Context, query string, maxResults int
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
 
-	resp, err := proxyclient.Do(s.client, req)
+	resp, err := doSearchRequest(s.client, req, s.apiKey != "")
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readSearchResponse(resp)
 	if err != nil {
 		return nil, err
 	}

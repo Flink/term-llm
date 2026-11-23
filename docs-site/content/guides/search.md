@@ -119,10 +119,10 @@ Available external providers:
 | Parallel | `PARALLEL_API_KEY` | ranked search with multi-paragraph source excerpts (`provider: parallel`) |
 | Tavily | `TAVILY_API_KEY` | agent-oriented search |
 | Brave | `BRAVE_API_KEY` | independent index |
-| Google | `GOOGLE_SEARCH_API_KEY` + `GOOGLE_SEARCH_CX` | Custom Search |
+| Google | `GOOGLE_SEARCH_API_KEY` + `GOOGLE_SEARCH_CX` | [Custom Search JSON API](https://developers.google.com/custom-search/v1/overview), existing customers only; scheduled to shut down January 1, 2027 |
 | You.com | optional `YDC_API_KEY` | works with no key on the free keyless tier (about 100 searches a day); a [key](https://you.com/platform?utm_source=samsaffron-term-llm&utm_medium=oss_integration&utm_campaign=2026-11-oss-integrations&utm_content=docs) switches to the Web Search API for higher limits (`provider: youcom`) |
 | Keenable | optional `KEENABLE_API_KEY` | works with no key (1,000 requests per hour per IP, see [rate limits](https://docs.keenable.ai/rate-limits)); a key removes the hourly cap (`provider: keenable`) |
-| Sofya | `SOFYA_API_KEY` | search API for AI agents, pay as you go; get a key at [sofya.co](https://sofya.co/dashboard) (`provider: sofya`) |
+| Sofya | `SOFYA_API_KEY` | sends queries to Sofya; each successful snippet search costs one credit. Get a key at [sofya.co](https://sofya.co/dashboard) (`provider: sofya`). |
 
 To use Keenable without an API key, set `search.provider: keenable`.
 

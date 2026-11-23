@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -73,31 +72,35 @@ func (g *GoogleSearcher) Search(ctx context.Context, query string, maxResults in
 		return nil, err
 	}
 
-	resp, err := g.client.Do(req)
+	resp, err := searchClientWithoutRedirects(g.client).Do(req)
 	if err != nil {
-		return nil, err
+		// net/http includes the request URL (and therefore the key) in its error.
+		if urlErr, ok := err.(*url.Error); ok {
+			err = urlErr.Err
+		}
+		return nil, fmt.Errorf("execute google search: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readSearchResponse(resp)
 	if err != nil {
 		return nil, err
 	}
 
 	var googleResp googleResponse
-	if err := json.Unmarshal(body, &googleResp); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
-
-	if googleResp.Error != nil {
-		if googleResp.Error.Code == 429 {
-			return nil, fmt.Errorf("google search rate limited")
-		}
-		return nil, fmt.Errorf("google search error %d: %s", googleResp.Error.Code, googleResp.Error.Message)
-	}
-
+	parseErr := json.Unmarshal(body, &googleResp)
 	if resp.StatusCode != http.StatusOK {
-		return nil, providerhttp.NewStatusErrorMessagef(resp, body, "google http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		message := strings.TrimSpace(string(body))
+		if parseErr == nil && googleResp.Error != nil && googleResp.Error.Message != "" {
+			message = googleResp.Error.Message
+		}
+		return nil, providerhttp.NewStatusErrorMessagef(resp, body, "google http %d: %s", resp.StatusCode, message)
+	}
+	if parseErr != nil {
+		return nil, fmt.Errorf("parse response: %w", parseErr)
+	}
+	if googleResp.Error != nil {
+		return nil, fmt.Errorf("google search error %d: %s", googleResp.Error.Code, googleResp.Error.Message)
 	}
 
 	results := make([]Result, 0, len(googleResp.Items))

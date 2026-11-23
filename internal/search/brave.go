@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"github.com/term-llm/term-llm/internal/providerhttp"
-	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 // BraveSearcher implements Searcher using the Brave Search API.
@@ -70,13 +68,13 @@ func (b *BraveSearcher) Search(ctx context.Context, query string, maxResults int
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Subscription-Token", b.apiKey)
 
-	resp, err := proxyclient.Do(b.client, req)
+	resp, err := doSearchRequest(b.client, req, b.apiKey != "")
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readSearchResponse(resp)
 	if err != nil {
 		return nil, err
 	}

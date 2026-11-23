@@ -238,6 +238,7 @@ func TestSearchPresetsForwardOnlyVendorCredentials(t *testing.T) {
 		{"exa-mcp", "exa", "POST", "/mcp", "x-api-key", "", "/unrelated"},
 		{"brave", "brave", "GET", "/web/searchfoo", "X-Subscription-Token", "", "/images/search"},
 		{"keenable", "keenable", "POST", "/search/public", "X-API-Key", "", "/account"},
+		{"sofya", "sofya", "POST", "/search", "Authorization", "Bearer ", "/search/other"},
 		{"jina-reader", "jina", "GET", "/https://example.com/a%2Fb?x=1", "Authorization", "Bearer ", ""},
 	} {
 		t.Run(tt.profile, func(t *testing.T) {
