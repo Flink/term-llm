@@ -30,6 +30,7 @@ function setup(auth: 'token' | 'passkey' = 'passkey', entry: ProxyAccount = acco
         return false;
       }
     },
+    toast: vi.fn(),
     announce,
     refresh: vi.fn(),
     protectToken: vi.fn(),

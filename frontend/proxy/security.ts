@@ -12,6 +12,7 @@ import {
   type ProviderApprovalState,
 } from './client-list';
 import type { ProxyCaller, ProxyClient, ProxyRoute, ProxyState } from '../src/api/proxy-client';
+import { selectCopyField } from './clipboard';
 import { providerApproval, providerGroups } from './provider-groups';
 import { slugPattern } from './provider-name';
 import { authLabel, joinLocalPrefix, routeRules } from './route-rules';
@@ -267,10 +268,7 @@ export function callersView(state: ProxyState, api: ProxyClient, context: UICont
         const configSnippet = termLLMConfigSection(location.origin, approvedGroups, context, {
           heading: 'h3',
           getToken: () => token.value,
-          onTokenFallback: () => {
-            token.focus();
-            token.select();
-          },
+          onTokenFallback: () => selectCopyField(token),
         });
         if (configSnippet) panel.append(configSnippet);
         const routeNote = el(

@@ -7,6 +7,7 @@ import {
   type RequestPage,
 } from '../src/api/proxy-client';
 import { byteValue } from './bytes';
+import { clipboardButton } from './clipboard';
 import { requestCapture } from './debug-preview';
 import { apiEquivalentLabel, apiEquivalentNote, moneyLabel } from './home';
 import {
@@ -75,7 +76,11 @@ function tokenCount(value = -1, partial = false): string {
     ? `${partial ? '≥' : ''}${value.toLocaleString()}${partial ? ' · partial' : ''}`
     : 'Not reported';
 }
-export function requestDetail(request: ProxyRequest, capture?: HTMLElement): HTMLElement {
+export function requestDetail(
+  request: ProxyRequest,
+  context: Pick<UIContext, 'toast'>,
+  capture?: HTMLElement,
+): HTMLElement {
   function group(title: string, values: [string, unknown][], extra?: HTMLElement) {
     const list = el('dl');
     for (const [label, value] of values)
@@ -113,19 +118,10 @@ export function requestDetail(request: ProxyRequest, capture?: HTMLElement): HTM
       : ['responses', 'chat_completions', 'gemini'].includes(protocol || '')
         ? 'Cache reads included in input (not additive).'
         : 'Cache overlap unknown; do not sum.';
-  const copy = button('Copy request ID', () => {
-    if (!navigator.clipboard) {
-      copy.textContent = 'Copy unavailable — select the request ID';
-      return;
-    }
-    void navigator.clipboard.writeText(request.id).then(
-      () => {
-        copy.textContent = 'Request ID copied';
-      },
-      () => {
-        copy.textContent = 'Copy unavailable — select the request ID';
-      },
-    );
+  const copy = clipboardButton('Copy request ID', context, {
+    read: () => request.id,
+    copied: 'Request ID copied.',
+    unavailable: 'Select and copy the request ID manually.',
   });
   const partial = isPartial(request);
   const tokenValues = [
@@ -459,7 +455,9 @@ export function requestsView(state: ProxyState, api: ProxyClient, context: UICon
           return;
         }
         const captureId = request.websocket_connection_id || request.id;
-        details.replaceChildren(requestDetail(request, requestCapture(api, context, captureId)));
+        details.replaceChildren(
+          requestDetail(request, context, requestCapture(api, context, captureId)),
+        );
         row.classList.add('selected');
         open.setAttribute('aria-expanded', 'true');
         selected = { row, button: open, details };
@@ -699,7 +697,7 @@ export function requestsView(state: ProxyState, api: ProxyClient, context: UICon
       if (applied.id)
         throw new Error('Clear the applied Request ID to export a filtered request list.');
       download('proxy-requests.json', await api.requestExport(applied), 'application/json');
-      context.announce('Matching request metadata exported (up to 1,000 rows).');
+      context.toast('Matching request metadata exported (up to 1,000 rows).', 'success');
     }, exportButton);
   });
   filters.append(actions(apply, clear, exportButton));

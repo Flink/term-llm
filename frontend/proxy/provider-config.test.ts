@@ -59,6 +59,7 @@ function uiContext(): {
       return true;
     },
     refresh,
+    toast: vi.fn(),
     announce,
     navigate: vi.fn(),
     protectToken: vi.fn(),

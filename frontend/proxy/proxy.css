@@ -2,6 +2,7 @@
 @import './timeline.css';
 @import './timeline-tokens.css';
 @import './usage.css';
+@import '../src/styles/features/toast.css';
 
 :root {
   --workspace: 1120px;
@@ -2279,4 +2280,39 @@ header .actions button {
 
 .provider-dot-red {
   background: #d95050;
+}
+
+/* Map the shared web UI toast styles onto the standalone proxy palette. */
+.toast-region {
+  --z-toast: 900;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --surface-strong: var(--surface);
+  --shadow-soft: var(--shadow-card);
+  --accent-green: var(--ok);
+  --danger: var(--down);
+  --text-muted: var(--muted);
+  --bg-accent: var(--surface-3);
+}
+
+.toast-region .toast-close {
+  min-height: 0;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+@media (pointer: coarse), (width <= 40rem) {
+  .toast-region .toast-close {
+    position: relative;
+  }
+
+  /* Expand the tap target without changing the compact toast layout. */
+  .toast-region .toast-close::after {
+    position: absolute;
+    inset: 50% auto auto 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+    content: '';
+  }
 }

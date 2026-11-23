@@ -26,18 +26,19 @@ function group(id: string, overrides: Partial<ProviderGroup> = {}): ProviderGrou
 }
 
 function uiContext() {
-  const announce = vi.fn();
+  const toast = vi.fn();
   const context: UIContext = {
     run: async (action) => {
       await action();
       return true;
     },
     refresh: vi.fn(async () => undefined),
-    announce,
+    announce: vi.fn(),
+    toast,
     navigate: vi.fn(),
     protectToken: vi.fn(),
   };
-  return { context, announce };
+  return { context, toast };
 }
 
 describe('termLLMProxyYAML', () => {
@@ -81,7 +82,7 @@ describe('termLLMConfigSection', () => {
   it('keeps the token out of DOM text, copies on demand, and refuses once cleared', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-    const { context, announce } = uiContext();
+    const { context, toast } = uiContext();
     let liveToken = 'sk-tlp-live-secret';
     const fallback = vi.fn();
     const section = termLLMConfigSection('https://proxy.example.test', [group('exa')], context, {
@@ -113,7 +114,7 @@ describe('termLLMConfigSection', () => {
     writeText.mockClear();
     fireEvent.click(getByRole(section, 'button', { name: 'Copy with token' }));
     await waitFor(() =>
-      expect(announce).toHaveBeenLastCalledWith('Client token is no longer available.'),
+      expect(toast).toHaveBeenLastCalledWith('Client token is no longer available.', 'error'),
     );
     expect(writeText).not.toHaveBeenCalled();
   });
@@ -138,9 +139,13 @@ describe('termLLMConfigSection', () => {
     expect(mixed).toHaveTextContent('keep it and add openai, typesafe.');
   });
 
-  it('falls back cleanly when clipboard access is unavailable', async () => {
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
-    const { context, announce } = uiContext();
+  it.each(['unavailable', 'rejected'] as const)('falls back when clipboard is %s', async (mode) => {
+    const clipboard =
+      mode === 'unavailable'
+        ? undefined
+        : { writeText: vi.fn().mockRejectedValue(new Error('Permission denied')) };
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: clipboard });
+    const { context, toast } = uiContext();
     const fallback = vi.fn();
     const section = termLLMConfigSection('https://proxy.example.test', [group('exa')], context, {
       getToken: () => 'sk-tlp-secret',
@@ -150,16 +155,18 @@ describe('termLLMConfigSection', () => {
 
     fireEvent.click(getByRole(section, 'button', { name: 'Copy YAML' }));
     await waitFor(() =>
-      expect(announce).toHaveBeenLastCalledWith(
+      expect(toast).toHaveBeenLastCalledWith(
         'Clipboard unavailable. Copy the selected YAML manually.',
+        'error',
       ),
     );
     expect(window.getSelection()?.toString()).toBe(section.querySelector('pre code')?.textContent);
 
     fireEvent.click(getByRole(section, 'button', { name: 'Copy with token' }));
     await waitFor(() =>
-      expect(announce).toHaveBeenLastCalledWith(
+      expect(toast).toHaveBeenLastCalledWith(
         'Clipboard unavailable. Copy the YAML and client token manually.',
+        'error',
       ),
     );
     expect(fallback).toHaveBeenCalledOnce();

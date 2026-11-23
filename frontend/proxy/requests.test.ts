@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, getByLabelText, getByRole, waitFor } from '@testing-library/preact';
 import { ProxyClient, type ProxyRequest, type ProxyState } from '../src/api/proxy-client';
 import { mountProxy } from './app';
-import { requestDetail, requestPageNumbers } from './requests';
+import { requestDetail as renderRequestDetail, requestPageNumbers } from './requests';
 
 const snapshot: ProxyState = {
   defaults: null,
@@ -16,6 +16,8 @@ const snapshot: ProxyState = {
   secrets: [],
   csrf: 'test',
 };
+const requestDetail = (request: ProxyRequest) => renderRequestDetail(request, { toast: vi.fn() });
+
 function record(seq: number): ProxyRequest {
   return {
     id: `request-${seq}`,
@@ -283,7 +285,11 @@ describe('numbered request pagination', () => {
     expect(root.querySelector('.request-row')).toBe(visibleRow);
     expect(requests).toHaveBeenCalledTimes(3);
     fireEvent.click(getByRole(root, 'button', { name: /^Export JSON/ }));
-    await waitFor(() => expect(root).toHaveTextContent('Matching request metadata exported'));
+    await waitFor(() =>
+      expect(root.querySelector('.toast-region')).toHaveTextContent(
+        'Matching request metadata exported',
+      ),
+    );
     expect(requestExport).toHaveBeenCalledExactlyOnceWith({ method: 'GET' });
 
     filters.open = false;
@@ -639,7 +645,9 @@ describe('concise request details', () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal('navigator', { clipboard: { writeText } });
     try {
-      const detail = requestDetail(record(1));
+      const toast = vi.fn();
+      const detail = renderRequestDetail(record(1), { toast });
+      document.body.append(detail);
       const technical = detail.querySelector('details')!;
       expect(technical.open).toBe(false);
       technical.open = true;
@@ -647,7 +655,8 @@ describe('concise request details', () => {
       expect(identifiers).toHaveTextContent('request-1');
       fireEvent.click(getByRole(identifiers, 'button', { name: 'Copy request ID' }));
       await waitFor(() => expect(writeText).toHaveBeenCalledWith('request-1'));
-      expect(getByRole(technical, 'button', { name: 'Request ID copied' })).toBeTruthy();
+      expect(toast).toHaveBeenCalledWith('Request ID copied.', 'success');
+      expect(getByRole(technical, 'button', { name: 'Copy request ID' })).toBeVisible();
     } finally {
       vi.unstubAllGlobals();
     }

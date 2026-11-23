@@ -25,6 +25,7 @@ import { homeView } from './home';
 import { timelineQueryKeys } from './timeline-prefs';
 import { debugView } from './debug';
 import { usageView } from './usage';
+import { toastRegion } from './toast';
 
 type Tab =
   'Home' | 'Routes' | 'Secrets' | 'Clients' | 'Requests' | 'Usage' | 'Debug' | 'Passkeys' | 'Admin';
@@ -93,6 +94,7 @@ export function mountProxy(
   status.tabIndex = -1;
   status.setAttribute('aria-live', 'polite');
   function showStatus(message = '', tone: '' | 'quiet' | 'error' = '') {
+    if (message) notifications.clear();
     status.dataset.tone = tone;
     status.textContent = message;
   }
@@ -103,7 +105,8 @@ export function mountProxy(
   const brand = el('div', el('h1', 'term-llm ', brandName));
   brand.className = 'proxy-brand';
   const header = el('header', brand, tools);
-  root.replaceChildren(header, status, content);
+  const notifications = toastRegion();
+  root.replaceChildren(header, status, content, notifications.element);
   function confirmLeave(): boolean {
     if (tokenPending) {
       showStatus('Creating a credential. Wait for its one-time token before leaving.');
@@ -150,6 +153,9 @@ export function mountProxy(
   window.addEventListener('popstate', popstate);
   const pending = new WeakSet<HTMLElement>();
   const context: UIContext = {
+    toast(message, kind) {
+      if (!disposed) notifications.toast(message, kind);
+    },
     announce(message) {
       showStatus(message, message === 'Signed in.' ? 'quiet' : '');
     },
@@ -262,6 +268,7 @@ export function mountProxy(
   }
   function login() {
     if (disposed) return;
+    notifications.clear();
     closeView();
     tools.replaceChildren();
     if (authStatus?.auth === 'passkey') {
@@ -322,6 +329,7 @@ export function mountProxy(
   }
   function render() {
     if (!state || disposed) return;
+    notifications.clear();
     closeView();
     const snapshot = state;
     const nav = el('nav');
@@ -422,6 +430,7 @@ export function mountProxy(
   void context.run(start);
   return () => {
     disposed = true;
+    notifications.clear();
     closeView();
     ++epoch;
     state = undefined;

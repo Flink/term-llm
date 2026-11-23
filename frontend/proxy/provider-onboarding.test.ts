@@ -65,6 +65,7 @@ describe.each([
     const api = new ProxyClient(vi.fn());
     const errors: unknown[] = [];
     const context: UIContext = {
+      toast: vi.fn(),
       announce: vi.fn(),
       refresh: vi.fn().mockResolvedValue(state),
       navigate: vi.fn(),
@@ -118,6 +119,22 @@ describe.each([
     expect(context.refresh).toHaveBeenCalledExactlyOnceWith(`route:${route.name}`);
     expect(context.announce).toHaveBeenCalledWith(expect.stringContaining('Approve clients'));
     expect(createCaller).not.toHaveBeenCalled();
+  });
+
+  it('copies the code with a toast without changing the prompt', async () => {
+    const { view, context } = fixture();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    vi.useFakeTimers();
+    fireEvent.click(getByRole(view, 'button', { name: `Sign in to ${label}` }));
+    await vi.advanceTimersByTimeAsync(0);
+    const copy = getByRole(view, 'button', { name: 'Copy code' });
+    fireEvent.click(copy);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(writeText).toHaveBeenCalledExactlyOnceWith('ABCD-1234');
+    expect(context.toast).toHaveBeenCalledWith(`${label} sign-in code copied.`, 'success');
+    expect(copy).toHaveTextContent('Copy code');
+    expect(getByLabelText(view, 'One-time sign-in code')).toHaveValue('ABCD-1234');
   });
 
   it('reconnects the existing account and preserves route access', async () => {

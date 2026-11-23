@@ -19,7 +19,7 @@ export function adminView(state: ProxyState, api: ProxyClient, context: UIContex
   const exportButton = button('Download routes.yaml', () => {
     void context.run(async () => {
       download('routes.yaml', await api.exportYAML(), 'text/yaml');
-      context.announce('Route configuration downloaded. Secret values are not included.');
+      context.toast('Route configuration downloaded. Secret values are not included.', 'success');
     }, exportButton);
   });
   section.append(

@@ -112,6 +112,7 @@ function fixture(state = snapshot()) {
       return true;
     },
     refresh: vi.fn().mockResolvedValue(undefined),
+    toast: vi.fn(),
     announce: vi.fn(),
     navigate: vi.fn(),
     protectToken: vi.fn(),
@@ -156,6 +157,7 @@ it('keeps provider renaming closed until requested and does not repeat an unchan
       return true;
     },
     refresh: vi.fn().mockResolvedValue(undefined),
+    toast: vi.fn(),
     announce: vi.fn(),
     navigate: vi.fn(),
     protectToken: vi.fn(),

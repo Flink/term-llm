@@ -5,7 +5,8 @@ import {
   type ProxyRoute,
   type ProxyState,
 } from '../src/api/proxy-client';
-import { button, el, field, shellQuote, type UIContext } from './dom';
+import { clipboardButton, selectCopyField } from './clipboard';
+import { el, field, shellQuote, type UIContext } from './dom';
 
 export interface NativeProvider {
   kind: 'claude-bin' | 'agy-bin';
@@ -133,18 +134,11 @@ export function nativeConnectionDetails(
     text.readOnly = true;
     text.spellcheck = false;
     text.rows = rows;
-    const copy = button(copyLabel, () => {
-      void context.run(async () => {
-        try {
-          if (!navigator.clipboard) throw new Error('Clipboard unavailable');
-          await navigator.clipboard.writeText(text.value);
-          context.announce(`${label} copied. Keep the proxy token private.`);
-        } catch {
-          text.focus();
-          text.select();
-          context.announce('Clipboard unavailable. Copy the selected text manually.');
-        }
-      }, copy);
+    const copy = clipboardButton(copyLabel, context, {
+      read: () => text.value,
+      copied: `${label} copied. Keep the proxy token private.`,
+      fallback: () => selectCopyField(text),
+      unavailable: 'Copy the selected text manually.',
     });
     if (rows === 3) copy.className = 'primary';
     return el('div', field(label, text), copy);

@@ -23,6 +23,7 @@ function setup() {
         return false;
       }
     },
+    toast: vi.fn(),
     announce: vi.fn(),
     navigate: vi.fn(),
     refresh: vi.fn(),

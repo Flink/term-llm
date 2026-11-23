@@ -98,6 +98,7 @@ function setup(state = snapshot()) {
   const createCaller = vi.spyOn(api, 'createCaller');
   const updateCaller = vi.spyOn(api, 'updateCaller');
   const announce = vi.fn();
+  const toast = vi.fn();
   const protectToken = vi.fn();
   const refresh = vi.fn(async () => state);
   const context: UIContext = {
@@ -106,6 +107,7 @@ function setup(state = snapshot()) {
       return true;
     },
     refresh,
+    toast,
     announce,
     navigate: vi.fn(),
     protectToken,
@@ -120,6 +122,7 @@ function setup(state = snapshot()) {
     createCaller,
     updateCaller,
     announce,
+    toast,
     protectToken,
     refresh,
   };
@@ -172,7 +175,7 @@ describe('provider-wide client approval', () => {
   it('shows a copyable multi-provider term-llm config.yaml snippet after creating a client', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-    const { root, createProviderCaller, announce } = setup();
+    const { root, createProviderCaller, toast } = setup();
     createProviderCaller.mockResolvedValue({
       token: 'sk-tlp-multi-secret',
       caller: caller({
@@ -201,9 +204,10 @@ describe('provider-wide client approval', () => {
         `proxy:\n  url: ${location.origin}\n  token: file:///run/secrets/proxy-client-token`,
       ),
     );
-    expect(copyYAML.textContent).toBe('Copied ✓');
-    expect(announce).toHaveBeenLastCalledWith(
-      'term-llm config.yaml snippet copied. Point token at the saved client token.',
+    expect(copyYAML.textContent).toBe('Copy YAML');
+    expect(toast).toHaveBeenLastCalledWith(
+      'YAML copied. Point token at the saved client token.',
+      'success',
     );
 
     const copyWithToken = getByRole(root, 'button', { name: 'Copy with token' });
@@ -213,9 +217,10 @@ describe('provider-wide client approval', () => {
         `proxy:\n  url: ${location.origin}\n  token: 'sk-tlp-multi-secret'`,
       ),
     );
-    expect(copyWithToken.textContent).toBe('Copied ✓');
-    expect(announce).toHaveBeenLastCalledWith(
-      'term-llm config.yaml snippet with client token copied. Keep config.yaml private.',
+    expect(copyWithToken.textContent).toBe('Copy with token');
+    expect(toast).toHaveBeenLastCalledWith(
+      'YAML with token copied. Keep config.yaml private.',
+      'success',
     );
   });
 

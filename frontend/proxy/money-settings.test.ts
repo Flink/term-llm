@@ -35,6 +35,7 @@ function setup(mode: 'ui' | 'file' = 'ui', settings: ProxyMoneySettings = { time
         return false;
       }
     },
+    toast: vi.fn(),
     announce,
     refresh,
     navigate: vi.fn(),

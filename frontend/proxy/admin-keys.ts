@@ -1,4 +1,5 @@
 import { ProxyAPIError, type ProxyClient, type ProxyState } from '../src/api/proxy-client';
+import { clipboardButton, selectCopyField } from './clipboard';
 import {
   actions,
   button,
@@ -110,18 +111,11 @@ export function adminKeysView(
     token.readOnly = true;
     token.spellcheck = false;
     token.className = 'caller-token';
-    const copy = button('Copy token', () => {
-      void context.run(async () => {
-        try {
-          if (!navigator.clipboard) throw new Error('Clipboard unavailable');
-          await navigator.clipboard.writeText(token.value);
-          context.announce('API key copied. Store it securely before dismissing.');
-        } catch {
-          token.focus();
-          token.select();
-          context.announce('Clipboard unavailable. Copy the selected token manually.');
-        }
-      }, copy);
+    const copy = clipboardButton('Copy token', context, {
+      read: () => token.value,
+      copied: 'API key copied. Store it securely before dismissing.',
+      fallback: () => selectCopyField(token),
+      unavailable: 'Copy the selected token manually.',
     });
     const dismiss = button('I saved it — dismiss', () => {
       void context.run(async () => {

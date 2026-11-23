@@ -5,6 +5,7 @@ import {
   type ProxyRoute,
   type ProxyState,
 } from '../src/api/proxy-client';
+import { selectCopyField } from './clipboard';
 import { routeAllowsClientApproval, routeNativeProvider, routeSharedNativeAccount } from './native';
 import { actions, button, check, dateTime, el, field, input, submit, type UIContext } from './dom';
 import { clientLabel, duplicateSuffixes, sortCallers } from './client-list';
@@ -281,10 +282,7 @@ export function providerAccess(
     const configSnippet = termLLMConfigSection(location.origin, [group], context, {
       heading: 'h4',
       getToken: () => token.value,
-      onTokenFallback: () => {
-        token.focus();
-        token.select();
-      },
+      onTokenFallback: () => selectCopyField(token),
     });
     const footer = actions(dismiss);
     footer.classList.add('client-token-footer');

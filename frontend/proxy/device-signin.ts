@@ -1,4 +1,5 @@
 import { ProxyAPIError } from '../src/api/proxy-client';
+import { clipboardButton, selectCopyField } from './clipboard';
 import type {
   ProxyDeviceSignIn,
   ProxyDeviceProvider,
@@ -91,17 +92,11 @@ export function deviceSignIn(
   function renderPrompt(signIn: ProxyDeviceSignIn, destination: string) {
     const code = input(signIn.user_code);
     code.readOnly = true;
-    const copy = button('Copy code', () => {
-      void context.run(async () => {
-        try {
-          await navigator.clipboard.writeText(code.value);
-          context.announce(`${label} sign-in code copied.`);
-        } catch {
-          code.focus();
-          code.select();
-          context.announce('Copy the selected code manually.');
-        }
-      }, copy);
+    const copy = clipboardButton('Copy code', context, {
+      read: () => code.value,
+      copied: `${label} sign-in code copied.`,
+      fallback: () => selectCopyField(code),
+      unavailable: 'Copy the selected code manually.',
     });
     const link = el('a', `Continue to ${issuer}`);
     link.href = destination;

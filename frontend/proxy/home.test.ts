@@ -59,6 +59,7 @@ function context(): UIContext {
     },
     refresh: vi.fn(),
     announce: vi.fn(),
+    toast: vi.fn(),
     navigate: vi.fn(),
     protectToken: vi.fn(),
   };

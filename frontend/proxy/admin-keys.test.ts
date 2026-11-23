@@ -131,8 +131,12 @@ it('issues without a second passkey prompt, protects the pending and shown token
   click('Providers');
   expect(confirm).toHaveBeenCalledOnce();
   expect(shown).toBeVisible();
+  const banner = root.querySelector(':scope > [role=status]');
+  const previousStatus = banner?.textContent;
   click('Copy token');
   await waitFor(() => expect(writeText).toHaveBeenCalledWith(token));
+  expect(root.querySelector('.toast-region [role=status]')).toHaveTextContent('API key copied.');
+  expect(banner?.textContent).toBe(previousStatus);
   click('I saved it — dismiss');
   expect(shown).toHaveValue('');
   await waitFor(() =>

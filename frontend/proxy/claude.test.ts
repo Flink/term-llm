@@ -192,6 +192,7 @@ function providerFixture(state = snapshot(), refresh = vi.fn().mockResolvedValue
   let protectedToken = false;
   const context: UIContext = {
     refresh,
+    toast: vi.fn(),
     announce: vi.fn(),
     navigate: vi.fn(),
     protectToken: (value) => {

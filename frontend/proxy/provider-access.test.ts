@@ -171,6 +171,7 @@ function fixture(
       }
     },
     refresh,
+    toast: vi.fn(),
     announce,
     navigate: vi.fn(),
     protectToken,

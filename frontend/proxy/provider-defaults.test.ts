@@ -51,6 +51,7 @@ const context: UIContext = {
     return true;
   },
   refresh: vi.fn(),
+  toast: vi.fn(),
   announce: vi.fn(),
   navigate: vi.fn(),
   protectToken: vi.fn(),

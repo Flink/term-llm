@@ -64,6 +64,7 @@ function setup(callers: ProxyCaller[], adminKeys: ProxyAdminKey[] = []) {
       return true;
     },
     refresh: vi.fn(async () => state),
+    toast: vi.fn(),
     announce: vi.fn(),
     navigate: vi.fn(),
     protectToken: vi.fn(),

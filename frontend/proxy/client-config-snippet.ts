@@ -1,5 +1,6 @@
+import { clipboardButton, selectCopyField } from './clipboard';
 import type { ProviderGroup } from './provider-groups';
-import { actions, button, el, field, type UIContext } from './dom';
+import { actions, el, field, type UIContext } from './dom';
 
 const DEFAULT_TOKEN_REF = 'file:///run/secrets/proxy-client-token';
 const SAFE_YAML_SCALAR = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -29,63 +30,15 @@ export function termLLMProxyYAML(
   return lines.join('\n');
 }
 
-function copyButton(
-  label: string,
-  context: UIContext,
-  options: {
-    getText: () => string | undefined;
-    copiedAnnouncement: string;
-    emptyAnnouncement?: string;
-    onFallback: () => void;
-    unavailableAnnouncement: string;
-    failedAnnouncement: string;
-    primary?: boolean;
-  },
-): HTMLButtonElement {
-  const node = button(label, () => {
-    void context.run(async () => {
-      const value = options.getText();
-      if (!value) {
-        if (options.emptyAnnouncement) context.announce(options.emptyAnnouncement);
-        return;
-      }
-      if (!navigator.clipboard) {
-        options.onFallback();
-        context.announce(options.unavailableAnnouncement);
-        return;
-      }
-      try {
-        await navigator.clipboard.writeText(value);
-        node.textContent = 'Copied ✓';
-        setTimeout(() => {
-          if (node.isConnected) node.textContent = label;
-        }, 2000);
-        context.announce(options.copiedAnnouncement);
-      } catch {
-        options.onFallback();
-        context.announce(options.failedAnnouncement);
-      }
-    }, node);
-  });
-  node.setAttribute('aria-label', label);
-  if (options.primary) node.className = 'primary';
-  return node;
-}
-
 /** Pairs the one-time Client token input with an aligned Copy token button. */
 export function tokenCopyRow(token: HTMLInputElement, context: UIContext): HTMLElement {
-  const selectToken = () => {
-    token.focus();
-    token.select();
-  };
-  const copy = copyButton('Copy token', context, {
-    getText: () => token.value,
-    copiedAnnouncement: 'Client token copied. Store it safely before dismissing.',
-    onFallback: selectToken,
-    unavailableAnnouncement: 'Clipboard unavailable. Copy the selected token manually.',
-    failedAnnouncement: 'Copy unavailable. Copy the selected token manually.',
-    primary: true,
+  const copy = clipboardButton('Copy token', context, {
+    read: () => token.value,
+    copied: 'Client token copied. Store it safely before dismissing.',
+    fallback: () => selectCopyField(token),
+    unavailable: 'Copy the selected token manually.',
   });
+  copy.className = 'primary';
   const row = el('div', field('Client token', token), copy);
   row.className = 'token-copy-row';
   return row;
@@ -126,30 +79,26 @@ export function termLLMConfigSection(
     selection.addRange(range);
   };
 
-  const copySafe = copyButton('Copy YAML', context, {
-    getText: () => safeYAML,
-    copiedAnnouncement:
-      'term-llm config.yaml snippet copied. Point token at the saved client token.',
-    onFallback: selectCode,
-    unavailableAnnouncement: 'Clipboard unavailable. Copy the selected YAML manually.',
-    failedAnnouncement: 'Copy unavailable. Copy the selected YAML manually.',
+  const copySafe = clipboardButton('Copy YAML', context, {
+    read: () => safeYAML,
+    copied: 'YAML copied. Point token at the saved client token.',
+    fallback: selectCode,
+    unavailable: 'Copy the selected YAML manually.',
   });
 
   const headerActions = actions(copySafe);
 
   if (options.getToken) {
     const readToken = options.getToken;
-    const copyReady = copyButton('Copy with token', context, {
-      getText: () => {
+    const copyReady = clipboardButton('Copy with token', context, {
+      read: () => {
         const value = readToken();
         return value ? termLLMProxyYAML(origin, listed, value) : undefined;
       },
-      copiedAnnouncement:
-        'term-llm config.yaml snippet with client token copied. Keep config.yaml private.',
-      emptyAnnouncement: 'Client token is no longer available.',
-      onFallback: () => options.onTokenFallback?.(),
-      unavailableAnnouncement: 'Clipboard unavailable. Copy the YAML and client token manually.',
-      failedAnnouncement: 'Copy unavailable. Copy the YAML and client token manually.',
+      copied: 'YAML with token copied. Keep config.yaml private.',
+      empty: 'Client token is no longer available.',
+      fallback: () => options.onTokenFallback?.(),
+      unavailable: 'Copy the YAML and client token manually.',
     });
     headerActions.append(copyReady);
   }

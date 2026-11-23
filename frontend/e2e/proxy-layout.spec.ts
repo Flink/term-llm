@@ -214,6 +214,9 @@ test('Admin separates configuration download from replacement without nested dis
   const download = await downloaded;
   expect(download.suggestedFilename()).toBe('routes.yaml');
   expect(readFileSync((await download.path())!, 'utf8')).toBe(yaml);
+  await expect(page.locator('.toast-region').getByRole('status')).toContainText(
+    'Route configuration downloaded',
+  );
   await page.getByLabel('Import source', { exact: true }).selectOption('paste');
   await expect(page.getByLabel('Route configuration YAML')).toBeVisible();
   await expect(page.getByLabel('YAML file', { exact: true })).not.toBeVisible();
@@ -231,7 +234,9 @@ test('Admin separates configuration download from replacement without nested dis
   const replacement = page.waitForRequest('http://proxy.test/_proxy/api/import');
   await page.getByRole('button', { name: 'Replace routes from YAML' }).click();
   expect((await replacement).postDataJSON()).toEqual({ revision: 1, yaml });
-  await expect(page.getByRole('status')).toContainText('Route configuration replaced');
+  await expect(page.locator('#proxy-app > [role="status"]')).toContainText(
+    'Route configuration replaced',
+  );
 });
 
 for (const [id, label, upstream, header, prefix] of [
@@ -427,9 +432,22 @@ test('Clients labels keep legacy bookmarks and API state compatible', async ({ p
   await expect(page.getByRole('button', { name: 'Callers', exact: true })).toHaveCount(0);
 });
 
-test('Clients creates one client for approved providers without per-route controls', async ({
+test('Clients issues tokens for approved providers and shows copy toasts without shifting layout', async ({
   page,
+  hasTouch,
 }) => {
+  await page.addInitScript(() => {
+    const copies: string[] = [];
+    Object.defineProperty(window, 'proxyCopies', { value: copies });
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: async (text: string) => {
+          copies.push(text);
+        },
+      },
+    });
+  });
+  const token = 'provider-client-token';
   const routeDefaults = {
     enabled: true,
     allow_insecure_http: false,
@@ -517,7 +535,7 @@ test('Clients creates one client for approved providers without per-route contro
       state.revision++;
       return request.fulfill({
         status: 201,
-        json: { token: 'provider-client-token', caller },
+        json: { token, caller },
       });
     }
     return request.fallback();
@@ -560,22 +578,102 @@ test('Clients creates one client for approved providers without per-route contro
   await page.getByLabel('Client name', { exact: true }).fill('Browser worker');
   await page.locator('[data-provider="alpha"]').check();
   await page.getByRole('button', { name: 'Create client', exact: true }).click();
-  await expect(page.getByLabel('Client token', { exact: true })).toHaveValue(
-    'provider-client-token',
-  );
+  await expect(page.getByLabel('Client token', { exact: true })).toHaveValue(token);
   await expect(
     page.getByRole('heading', { name: 'term-llm client configuration', exact: true }),
   ).toBeVisible();
-  await expect(page.locator('.config-snippet pre code')).toHaveText(
-    'proxy:\n  url: http://proxy.test\n  token: file:///run/secrets/proxy-client-token',
+  const yamlPrefix = 'proxy:\n  url: http://proxy.test\n  token: ';
+  const safeYAML = `${yamlPrefix}file:///run/secrets/proxy-client-token`;
+  await expect(page.locator('.config-snippet pre code')).toHaveText(safeYAML);
+
+  // Compare document coordinates so Playwright scrolling a copy button into view
+  // does not look like a layout shift.
+  const copyLayout = () =>
+    page.evaluate(() =>
+      Array.from(
+        document.querySelectorAll(
+          '.page-intro, .client-token-panel, .token-copy-row input, .token-copy-row button, .config-snippet-head button, .config-snippet pre, .client-token-footer',
+        ),
+        (node) => {
+          const { x, y, width, height } = node.getBoundingClientRect();
+          return { x: x + window.scrollX, y: y + window.scrollY, width, height };
+        },
+      ),
+    );
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const touchTarget = await page.evaluate(
+    () => matchMedia('(pointer: coarse), (width <= 40rem)').matches,
   );
-  await expect(page.getByRole('button', { name: 'Copy YAML', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Copy with token', exact: true })).toBeVisible();
-  expect(await page.locator('#proxy-app').textContent()).not.toContain('provider-client-token');
+  const region = page.locator('.toast-region');
+  const notice = region.getByRole('status');
+  const copyCases = [
+    { label: 'Copy token', message: /^Client token copied\b/, payload: token },
+    { label: 'Copy YAML', message: /^YAML copied\b/, payload: safeYAML },
+    {
+      label: 'Copy with token',
+      message: /^YAML with token copied\b/,
+      payload: `${yamlPrefix}'${token}'`,
+    },
+  ];
+  const expectedCopies: string[] = [];
+  for (const { label, message, payload } of copyCases) {
+    const copy = page.getByRole('button', { name: label, exact: true });
+    await expect(copy).toHaveText(label);
+    const before = await copyLayout();
+    await copy.click();
+    await expect(notice).toBeVisible();
+    // Match the start of the message without assuming where the icon or close button sits.
+    await expect(notice.getByText(message)).toBeVisible();
+    expectedCopies.push(payload);
+    expect(
+      await page.evaluate(() => (window as unknown as { proxyCopies: string[] }).proxyCopies),
+    ).toEqual(expectedCopies);
+    // Check visible text too: an unchanged aria-label can hide a text swap.
+    expect(await copy.innerText()).toBe(label);
+    expect(await copyLayout()).toEqual(before);
+
+    await expect(region).toHaveCSS('position', 'fixed');
+    const { top, rightGap } = await region.evaluate((node) => {
+      const { top, right } = node.getBoundingClientRect();
+      return { top, rightGap: document.documentElement.clientWidth - right };
+    });
+    expect(top).toBeGreaterThanOrEqual(0);
+    expect(top).toBeLessThan(48);
+    expect(rightGap).toBeGreaterThanOrEqual(0);
+    expect(rightGap).toBeLessThan(48);
+
+    const dismiss = notice.getByRole('button', { name: 'Dismiss notification', exact: true });
+    if (touchTarget && label === 'Copy token') {
+      // Hit-test just inside all four corners of a 44px square, then dismiss off-center.
+      const { x, y, cornersHit } = await dismiss.evaluate((button) => {
+        const rect = button.getBoundingClientRect();
+        const centerX = rect.x + rect.width / 2;
+        const centerY = rect.y + rect.height / 2;
+        return {
+          x: centerX + 21,
+          y: centerY + 21,
+          cornersHit: [-21, 21].every((dx) =>
+            [-21, 21].every(
+              (dy) => document.elementFromPoint(centerX + dx, centerY + dy) === button,
+            ),
+          ),
+        };
+      });
+      expect(cornersHit).toBe(true);
+      if (hasTouch) await page.touchscreen.tap(x, y);
+      else await page.mouse.click(x, y);
+    } else {
+      await dismiss.click();
+    }
+    await expect(notice).toBeHidden();
+    expect(await copyLayout()).toEqual(before);
+  }
+
+  expect(await page.locator('#proxy-app').textContent()).not.toContain(token);
   expect(creations).toEqual([{ name: 'Browser worker', providers: ['alpha'], revision: 3 }]);
   expect(
     await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage })),
-  ).not.toContain('provider-client-token');
+  ).not.toContain(token);
 });
 
 test('Clients fits the longest alphabetic provider summary as the row resizes', async ({
@@ -1439,7 +1537,8 @@ for (const width of [1440, 390]) {
       const copyOperator = page.getByRole('button', { name: 'Copy sign-in command' });
       await expect(copyOperator).toHaveClass('primary');
       await copyOperator.click();
-      await expect(page.getByRole('status')).toContainText('Operator sign-in command copied');
+      const nativeToast = page.locator('.toast-region').getByRole('status');
+      await expect(nativeToast).toContainText('Operator sign-in command copied');
       expect(
         await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage })),
       ).not.toContain('scoped-browser-canary');
@@ -1480,7 +1579,7 @@ for (const width of [1440, 390]) {
       await expect(operatorCommand).toHaveCount(0);
       await expect(manage).toContainText('does not open a browser');
       await page.getByRole('button', { name: 'Copy launcher command', exact: true }).click();
-      await expect(page.getByRole('status')).toContainText('Launcher command copied');
+      await expect(nativeToast).toContainText('Launcher command copied');
       await expect(manage.locator('.native-integration').getByLabel('Provider YAML')).toBeVisible();
       await expect(manage.locator('details')).toHaveCount(0);
       await page.getByRole('button', { name: 'Copy provider YAML' }).click();

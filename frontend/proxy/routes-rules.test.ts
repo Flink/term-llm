@@ -120,6 +120,7 @@ function setup(overrides: Partial<ProxyState> = {}) {
         return false;
       }
     },
+    toast: vi.fn(),
     announce,
     refresh: vi.fn(async () => refreshed),
     protectToken: vi.fn(),

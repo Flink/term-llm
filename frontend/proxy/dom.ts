@@ -147,6 +147,7 @@ export interface UIContext {
   run: (action: () => Promise<unknown>, source?: HTMLElement) => Promise<boolean>;
   refresh: (focusKey?: string, preserveView?: boolean) => Promise<ProxyState | undefined>;
   announce: (message: string) => void;
+  toast: (message: string, kind: 'success' | 'error') => void;
   navigate: (
     tab:
       | 'Home'

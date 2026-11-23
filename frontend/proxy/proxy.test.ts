@@ -1025,7 +1025,10 @@ describe('acceptance refinements', () => {
       expect(root.textContent).toContain('$TOKEN');
       await click(root, 'Copy token');
       await waitFor(() => expect(copy).toHaveBeenCalledWith('private-once'));
-      expect(getByRole(root, 'button', { name: 'Copy token' }).textContent).toBe('Copied ✓');
+      expect(getByRole(root, 'button', { name: 'Copy token' })).toHaveTextContent('Copy token');
+      expect(root.querySelector('.toast-region [role=status]')).toHaveTextContent(
+        'Client token copied.',
+      );
       expect((getByLabelText(root, 'Client token') as HTMLInputElement).type).toBe('text');
       for (const action of ['Providers', 'Refresh state', 'Sign out']) await click(root, action);
       expect(confirm).toHaveBeenCalledTimes(3);
