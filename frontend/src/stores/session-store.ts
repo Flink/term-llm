@@ -11,6 +11,7 @@ import type { Modal, HubAgent } from './store-types';
 import type { AppStoreServices } from './app-store-services';
 import { SavedOrder, type OrderEntry, type OrderRanks } from './saved-order';
 import { mergeSeenState } from '../domain/attention-seen';
+import { hubAgentCacheVersion, readHubAgents, writeHubAgents } from '../platform/hub-agent-cache';
 import {
   array,
   compareProjects,
@@ -175,7 +176,8 @@ export class SessionStore {
   readonly searchLoading = signal(false);
   readonly searchError = signal('');
   readonly showArchived: Signal<boolean>;
-  readonly hubAgents = signal<HubAgent[]>([]);
+  /** Seeded from this tab's last Hub list so a node switch paints it at once. */
+  readonly hubAgents: Signal<HubAgent[]>;
   /** The catalog on screen is the persisted last-known snapshot, not yet verified. */
   readonly catalogCached = signal(false);
   readonly renameTarget = signal<Session | null>(null);
@@ -224,6 +226,9 @@ export class SessionStore {
     private readonly host: SessionStoreHost,
   ) {
     this.activity = new SessionActivityStore(services);
+    this.hubAgents = signal(
+      readHubAgents(services.config.hub?.url || '', services.config.hub?.nodeId),
+    );
     this.authors = new AuthorStore(services, async () => {
       this.resetLoadedTails();
       resetAuthorPages(this);
@@ -1166,7 +1171,12 @@ export class SessionStore {
     const shown = this.hubAgents.peek();
     const rank = (agent: HubAgent) => ranks.get(agent.id) ?? Number.MAX_SAFE_INTEGER;
     const next = [...shown].sort((left, right) => rank(left) - rank(right));
-    if (next.some((agent, index) => agent !== shown[index])) this.hubAgents.value = next;
+    if (next.some((agent, index) => agent !== shown[index])) this.setHubAgents(next);
+  }
+
+  private setHubAgents(agents: HubAgent[]): void {
+    this.hubAgents.value = agents;
+    writeHubAgents(this.services.config.hub?.url || '', agents);
   }
 
   /** A stale read cannot replace an optimistic order; new agents go at the end. */
@@ -1177,7 +1187,7 @@ export class SessionStore {
       const place = (agent: HubAgent) => shown.get(agent.id) ?? shown.size;
       listed = [...agents].sort((left, right) => place(left) - place(right));
     }
-    this.hubAgents.value = listed;
+    this.setHubAgents(listed);
   }
 
   /** A navigation out of this node waits for every sent and queued Hub move. */
@@ -1242,7 +1252,7 @@ export class SessionStore {
   }
 
   async refreshHubAgents(force = false): Promise<void> {
-    if (this.disposed) return;
+    if (this.disposed || this.services.authRequired.peek()) return;
     if (this.hubAgentFetch) return this.hubAgentFetch;
     if (document.visibilityState === 'hidden') {
       window.clearTimeout(this.hubAgentRefreshTimer);
@@ -1252,7 +1262,7 @@ export class SessionStore {
     }
     const url = this.hubAgentURL('/api/nodes?view=sidebar');
     if (!url) {
-      this.hubAgents.value = [];
+      this.setHubAgents([]);
       return;
     }
     const age = Date.now() - this.hubAgentLastFetch;
@@ -1264,6 +1274,7 @@ export class SessionStore {
     this.hubAgentRefreshTimer = 0;
     this.hubAgentLastFetch = Date.now();
     const orderVersion = this.hubAgentOrderVersion;
+    const cacheVersion = hubAgentCacheVersion();
     const controller = new AbortController();
     this.hubAgentAbort = controller;
     let refreshDelay = 10_000;
@@ -1271,7 +1282,14 @@ export class SessionStore {
     const request = (async () => {
       try {
         const data = await this.services.endpoints.hubNodes(url, controller.signal);
-        if (this.disposed) return;
+        if (
+          this.disposed ||
+          this.services.authRequired.peek() ||
+          hubAgentCacheVersion() !== cacheVersion
+        ) {
+          refreshAgain = false;
+          return;
+        }
         // While the Hub's background health cache warms, retry quickly without
         // showing unknown nodes or waiting behind slow offline probes.
         if (array(data.nodes).some((node) => recordValue(node.status)?.state === 'unknown'))
@@ -1322,13 +1340,19 @@ export class SessionStore {
           orderVersion === this.hubAgentOrderVersion &&
           this.hubAgentOrderSaves === 0
         )
-          this.hubAgents.value = [];
+          this.setHubAgents([]);
       }
     })();
     this.hubAgentFetch = request.finally(() => {
       this.hubAgentFetch = null;
       this.hubAgentAbort = null;
-      if (!this.disposed && refreshAgain && document.visibilityState !== 'hidden')
+      if (
+        !this.disposed &&
+        !this.services.authRequired.peek() &&
+        hubAgentCacheVersion() === cacheVersion &&
+        refreshAgain &&
+        document.visibilityState !== 'hidden'
+      )
         this.scheduleHubAgentRefresh(refreshDelay);
     });
     return this.hubAgentFetch;
