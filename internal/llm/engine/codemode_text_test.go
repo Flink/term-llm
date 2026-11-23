@@ -65,13 +65,13 @@ func TestCodeModeTextSeparatorBudgetSplits(t *testing.T) {
 			}
 			var got strings.Builder
 			for len(cell.parts) > 0 {
-				parts, _ := cell.drainPartsLocked(budget)
+				parts, _, _ := cell.drainPartsLocked(budget)
 				chunk := partsText(core.CodeModeCallResult{Parts: parts})
 				if len(chunk) > budget || !utf8.ValidString(chunk) {
 					t.Fatalf("invalid budget chunk: %q", chunk)
 				}
 				if chunk == "" { // One byte cannot hold the next UTF-8 rune.
-					parts, _ = cell.drainPartsLocked(2)
+					parts, _, _ = cell.drainPartsLocked(2)
 					chunk = partsText(core.CodeModeCallResult{Parts: parts})
 					if chunk == "" {
 						t.Fatal("output did not drain with a UTF-8-sized budget")
@@ -86,7 +86,7 @@ func TestCodeModeTextSeparatorBudgetSplits(t *testing.T) {
 				t.Fatalf("split emissions = %q, want %q", got.String(), want)
 			}
 			emitCodeModeText(t, cell, "next")
-			parts, _ := cell.drainPartsLocked(100)
+			parts, _, _ := cell.drainPartsLocked(100)
 			if got := partsText(core.CodeModeCallResult{Parts: parts}); got != "\nnext" {
 				t.Fatalf("lost emission boundary after draining: %q", got)
 			}
@@ -116,7 +116,7 @@ func TestCodeModeTextTailRetention(t *testing.T) {
 			}
 			var got strings.Builder
 			for len(cell.parts) > 0 {
-				parts, _ := cell.drainPartsLocked(7)
+				parts, _, _ := cell.drainPartsLocked(7)
 				chunk := partsText(core.CodeModeCallResult{Parts: parts})
 				if !utf8.ValidString(chunk) || chunk == "" {
 					t.Fatal("invalid pagination")
@@ -133,22 +133,22 @@ func TestCodeModeTextTailRetention(t *testing.T) {
 func TestCodeModeTailPreservesMediaAndObservedOutput(t *testing.T) {
 	cell := newCodeModeAsyncCell(nil, "test", "session", nil)
 	emitCodeModeText(t, cell, "observed")
-	parts, _ := cell.drainPartsLocked(100)
+	parts, _, _ := cell.drainPartsLocked(100)
 	if partsText(core.CodeModeCallResult{Parts: parts}) != "observed" {
 		t.Fatal(parts)
 	}
 	emitCodeModeText(t, cell, strings.Repeat("x", codemode.SessionLimits.RetainBytes))
-	cell.parts = append(cell.parts, core.ToolContentPart{Type: core.ToolContentPartImageData, ImageData: &core.ToolImageData{Base64: "aW1n"}})
+	cell.parts = append(cell.parts, codeModeRetainedPart{ToolContentPart: core.ToolContentPart{Type: core.ToolContentPartImageData, ImageData: &core.ToolImageData{Base64: "aW1n"}}})
 	emitCodeModeText(t, cell, "final summary")
 	if cell.parts[len(cell.parts)-2].Type != core.ToolContentPartImageData || cell.parts[len(cell.parts)-1].Text != "\nfinal summary" {
 		t.Fatal("text moved ahead of image")
 	}
 	before := cell.pendingBytes
-	parts, limited := cell.drainPartsLocked(4)
+	parts, _, limited := cell.drainPartsLocked(4)
 	if !limited || len(parts) != 1 || len(parts[0].Text) != 4 || cell.pendingBytes != before-4 {
 		t.Fatal("pagination reordered image")
 	}
-	parts, _ = cell.drainPartsLocked(codemode.SessionLimits.RetainBytes)
+	parts, _, _ = cell.drainPartsLocked(codemode.SessionLimits.RetainBytes)
 	if parts[len(parts)-2].Type != core.ToolContentPartImageData || parts[len(parts)-1].Text != "\nfinal summary" {
 		t.Fatal("media order lost")
 	}

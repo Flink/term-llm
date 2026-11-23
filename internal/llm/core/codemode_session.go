@@ -25,6 +25,7 @@ type CodeModeCallResult struct {
 	StateCommitted       bool
 	StateBytes           int
 	Parts                []ToolContentPart
+	Media                []MediaArtifact `json:"-"` // Local attachments for complete URLs in Parts, never receipt content.
 	MaxOutputTokens      int
 	OutputTruncated      bool
 	OutputLimited        bool

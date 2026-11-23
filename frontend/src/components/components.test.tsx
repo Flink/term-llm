@@ -12232,3 +12232,47 @@ it.each(['spawn_script', 'wait_script', 'cancel_script'])(
     store.dispose();
   },
 );
+
+it('resolves a final assistant Markdown image from a persisted spawn_script result', () => {
+  const store = createStore();
+  const reference = '0123456789abcdef0123456789abcdef';
+  const url = '/ui/media/fedcba9876543210fedcba9876543210.png';
+  store.sessions.value[0].messages = convertServerMessages([
+    {
+      id: 1,
+      response_id: 'r1',
+      role: 'assistant',
+      parts: [{ type: 'tool_call', tool_call_id: 'script', tool_name: 'spawn_script' }],
+    },
+    {
+      id: 2,
+      response_id: 'r1',
+      role: 'tool',
+      parts: [
+        {
+          type: 'tool_result',
+          tool_call_id: 'script',
+          tool_name: 'spawn_script',
+          media: [{ reference, url, type: 'image/png' }],
+        },
+      ],
+    },
+    {
+      id: 3,
+      response_id: 'r1',
+      role: 'assistant',
+      parts: [{ type: 'text', text: `![Captured chart](term-llm-media://${reference})` }],
+    },
+  ]);
+
+  render(
+    <StoreContext.Provider value={store}>
+      <Transcript />
+    </StoreContext.Provider>,
+  );
+
+  const image = screen.getByRole('img', { name: 'Captured chart' });
+  expect(image).toHaveAttribute('src', url);
+  expect(image.closest('.message.assistant .markdown-body')).toBeInTheDocument();
+  store.dispose();
+});

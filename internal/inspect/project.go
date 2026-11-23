@@ -266,14 +266,11 @@ func fileMetadata(part core.Part) string {
 }
 
 func toolResultText(result *core.ToolResult) string {
-	text := result.Content
+	text := core.ToolResultTextContent(result)
 	n := len(result.Images) + len(result.Media)
 	for _, part := range result.ContentParts {
 		if part.ImageData != nil {
 			n++
-		}
-		if result.Content == "" && part.Type == core.ToolContentPartText {
-			text += part.Text
 		}
 	}
 	if n > 0 {

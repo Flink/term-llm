@@ -19,6 +19,9 @@ func inspectMessage(id int64, role core.Role, parts ...core.Part) session.Messag
 }
 
 func TestInspectProjectionKinds(t *testing.T) {
+	const receipt = `{"cell_id":"example","status":"completed"}`
+	const firstEmission = "![Café](term-llm-media://0123456789abcdef0123456789abcdef)\n"
+	const secondEmission = "![Chart](term-llm-media://fedcba9876543210fedcba9876543210)"
 	tests := []struct {
 		name                      string
 		role                      core.Role
@@ -39,7 +42,27 @@ func TestInspectProjectionKinds(t *testing.T) {
 		{"tool args", core.RoleAssistant, []core.Part{{Type: core.PartToolCall, ToolCall: &core.ToolCall{ID: "call1", Name: "shell", Arguments: json.RawMessage(`{"z":2,"a":"ok"}`)}}}, "tool_call", "{\n  \"a\": \"ok\",\n  \"z\": 2\n}", "shell", "json"},
 		{"tool result", core.RoleTool, []core.Part{{Type: core.PartToolResult, ToolResult: &core.ToolResult{ID: "call1", Name: "shell", Content: strings.Repeat("line\n", 100), IsError: true}}}, "tool_result", strings.Repeat("line\n", 100), "shell", "text"},
 		{"structured result", core.RoleTool, []core.Part{{Type: core.PartToolResult, ToolResult: &core.ToolResult{Name: "shell", ContentParts: []core.ToolContentPart{{Type: core.ToolContentPartText, Text: "first"}, {Type: core.ToolContentPartImageData, ImageData: &core.ToolImageData{Base64: "PRIVATE"}}, {Type: core.ToolContentPartText, Text: " second"}}}}}, "tool_result", "first second\n[1 image(s) attached]", "shell", "text"},
-		{"attachments", core.RoleTool, []core.Part{{Type: core.PartToolResult, ToolResult: &core.ToolResult{Name: "show_media", Content: "done", Images: []string{"secret-path"}, Media: []core.MediaArtifact{{}}, ContentParts: []core.ToolContentPart{{ImageData: &core.ToolImageData{Base64: "PRIVATE"}}}}}}, "tool_result", "done\n[3 image(s) attached]", "show_media", "text"},
+		{
+			name: "script emissions with trailing receipt",
+			role: core.RoleTool,
+			parts: []core.Part{{Type: core.PartToolResult, ToolResult: &core.ToolResult{
+				Name:    "spawn_script",
+				Content: receipt,
+				ContentParts: []core.ToolContentPart{
+					{Type: core.ToolContentPartText, Text: firstEmission},
+					{Type: core.ToolContentPartImageData, ImageData: &core.ToolImageData{MediaType: "image/png", Base64: "cHJpdmF0ZQ=="}},
+					{Type: core.ToolContentPartText, Text: secondEmission},
+					{Type: core.ToolContentPartText, Text: "\n" + receipt},
+				},
+				Media: []core.MediaArtifact{{SourcePath: "private/source.png", StoredPath: "private/stored.png"}},
+			}}},
+			kind:   "tool_result",
+			text:   firstEmission + secondEmission + "\n" + receipt + "\n[2 image(s) attached]",
+			title:  "spawn_script",
+			format: "text",
+		},
+		{"attachments with scalar fallback", core.RoleTool, []core.Part{{Type: core.PartToolResult, ToolResult: &core.ToolResult{Name: "show_media", Content: "done", Images: []string{"secret-path"}, Media: []core.MediaArtifact{{}}, ContentParts: []core.ToolContentPart{{Type: core.ToolContentPartText}, {Type: core.ToolContentPartImageData, ImageData: &core.ToolImageData{Base64: "PRIVATE"}}}}}}, "tool_result", "done\n[3 image(s) attached]", "show_media", "text"},
+		{"attachments without text", core.RoleTool, []core.Part{{Type: core.PartToolResult, ToolResult: &core.ToolResult{Name: "show_media", Images: []string{"secret-path"}}}}, "tool_result", "[1 image(s) attached]", "show_media", "text"},
 		{"skill", core.RoleDeveloper, []core.Part{{Type: core.PartSkillActivation, SkillActivation: &core.SkillActivationProvenance{Name: "testing", Source: "local", AllowedToolsPresent: true}}}, "skill_activation", "Skill activation: testing\nSource: local\nAllowed tools: (none)", "testing", "text"},
 	}
 	for _, tt := range tests {
@@ -57,7 +80,7 @@ func TestInspectProjectionKinds(t *testing.T) {
 				t.Fatalf("identity = %+v", block)
 			}
 			got := d.ResolveBodies([]string{block.ID})
-			if len(got.Bodies) != 1 || got.Bodies[0].Text != tt.text || got.Bodies[0].Format != tt.format {
+			if len(got.Bodies) != 1 || got.Bodies[0].Text != tt.text || got.Bodies[0].Format != tt.format || got.Bodies[0].TotalBytes != len(tt.text) {
 				t.Fatalf("body = %+v", got)
 			}
 			if block.TotalBytes != len(tt.text) || block.TotalLines != strings.Count(tt.text, "\n")+1 || !block.HasBody {

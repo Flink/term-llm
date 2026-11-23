@@ -52,3 +52,42 @@ func TestLegacyTextEmissionsSeparated(t *testing.T) {
 		})
 	}
 }
+
+type legacyMediaCell struct {
+	legacyTextCell
+	url      string
+	artifact core.MediaArtifact
+}
+
+func (legacyMediaCell) Names() []string { return []string{"show_media"} }
+func (c legacyMediaCell) Call(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	return json.Marshal(map[string]string{"text": c.url})
+}
+func (c legacyMediaCell) EmittedMedia(parts []core.ToolContentPart) []core.MediaArtifact {
+	for _, part := range parts {
+		if part.Type == core.ToolContentPartText && part.Text == c.url {
+			return []core.MediaArtifact{c.artifact}
+		}
+	}
+	return nil
+}
+
+func TestLegacyMediaOnlyFromExplicitOutput(t *testing.T) {
+	artifact := core.MediaArtifact{Reference: strings.Repeat("a", 32), StoredPath: "/private/media.png", MediaType: "image/png"}
+	cell := legacyMediaCell{url: core.CodeModeMediaURLPrefix + artifact.Reference, artifact: artifact}
+	for _, code := range []string{`return r.text`, `throw Error(r.text)`} {
+		ctx := core.ContextWithCodeModeCell(context.Background(), cell)
+		args, _ := json.Marshal(map[string]string{"code": `const r = await tools.show_media({}); ` + code})
+		output, err := New().Execute(ctx, args)
+		if err != nil || !strings.Contains(output.Content, cell.url) || strings.Contains(output.Content, artifact.Path()) {
+			t.Fatalf("unexpected result for %q: %+v, %v", code, output, err)
+		}
+		if strings.HasPrefix(code, "return") {
+			if len(output.Media) != 1 || output.Media[0] != artifact {
+				t.Fatalf("missing legacy attachment: %+v", output)
+			}
+		} else if len(output.Media) != 0 {
+			t.Fatalf("error receipt granted media: %+v", output)
+		}
+	}
+}

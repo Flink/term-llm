@@ -85,3 +85,37 @@ func TestControlProjectionKeepsImagesIdentityAndCancelSuccess(t *testing.T) {
 		t.Fatalf("image was lost or text budget exceeded: %+v", got)
 	}
 }
+
+func TestCodeModeProjectionFiltersMediaOutsideRetainedEmissions(t *testing.T) {
+	kept := MediaArtifact{Reference: strings.Repeat("a", 32), StoredPath: "/private/kept.png"}
+	clipped := MediaArtifact{Reference: strings.Repeat("b", 32), StoredPath: "/private/clipped.png"}
+	keptURL := CodeModeMediaURLPrefix + kept.Reference
+	clippedURL := CodeModeMediaURLPrefix + clipped.Reference
+	for _, legacy := range []bool{false, true} {
+		// The clipped URL also occurs in the receipt; that copy must not grant it.
+		raw := `{"status":"completed","error":"` + clippedURL + `"}`
+		if legacy {
+			raw = `{"status":"completed","error":"` + clippedURL + `","output":[{"kind":"text","value":"` + keptURL + `"}]}`
+		}
+		output := ToolOutput{Content: raw, PreserveJSON: true, Media: []MediaArtifact{kept, clipped}, ContentParts: []ToolContentPart{
+			{Type: ToolContentPartText, Text: keptURL + "\n" + clippedURL + strings.Repeat(" padded", 50)},
+			{Type: ToolContentPartText, Text: "\n" + raw},
+		}}
+		projected := ProjectCodeModeOutput(output, len(raw)+len(keptURL)+65)
+		if legacy {
+			if len(projected.Media) > 0 || !strings.Contains(projected.Content, "omitted_output") {
+				t.Fatalf("legacy receipt granted omitted output: %+v", projected)
+			}
+		} else {
+			if len(projected.Media) != 1 || projected.Media[0] != kept || !strings.Contains(projected.Content, clippedURL) {
+				t.Fatalf("want only the URL retained in explicit output, not the receipt: %+v", projected)
+			}
+			if got := projected.ContentParts[0].Text; got != keptURL+"\n" {
+				t.Fatalf("projection left a partial URL: %q", got)
+			}
+		}
+		if got := ProjectCodeModeOutput(output, 1); len(got.Media) != 0 || !got.IsError {
+			t.Fatalf("projection failure retained a media grant: %+v", got)
+		}
+	}
+}

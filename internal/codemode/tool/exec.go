@@ -95,7 +95,8 @@ func (t *WaitTool) Spec() core.ToolSpec {
 		Name: WaitName,
 		Description: `Wait for a code cell created by spawn_script and return output not yet observed by a previous spawn_script/wait_script/cancel_script response.
 A wait_script timeout (max_wait in seconds, default 60, maximum 600; 0 polls without waiting) is not cancellation: status "yielded" means the cell is still running and may be waited on again. Use cancel_script to stop it.
-max_output_tokens caps only this observation's visible text (default 10000); withheld text stays queued for another wait_script. cell_id is the ID from the spawn_script receipt. Up to eight recent terminal receipts/session retain their status/output; older handles expire; an unknown or expired cell_id returns status "unknown".`,
+max_output_tokens caps only this observation's visible text (default 10000); withheld text stays queued for another wait_script. Opaque media URLs are not split across results. If output_limited and has_more_output are true but no text fits, retry with a larger max_output_tokens.
+cell_id is the ID from the spawn_script receipt. Up to eight recent terminal receipts/session retain their status/output; older handles expire; an unknown or expired cell_id returns status "unknown".`,
 		Schema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -234,6 +235,7 @@ func renderControl(ctx context.Context, result core.CodeModeCallResult) core.Too
 	return core.ToolOutput{
 		Content:      string(raw),
 		ContentParts: parts,
+		Media:        result.Media,
 		ChildCalls:   result.Calls,
 		PreserveJSON: true,
 		IsError:      result.IsError,

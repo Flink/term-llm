@@ -172,7 +172,7 @@ func (a *codeModeAsyncCell) dropRetained() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, p := range a.parts {
-		a.releaseImages(p)
+		a.releaseImages(p.ToolContentPart)
 	}
 	a.parts = nil
 	a.pendingBytes = 0

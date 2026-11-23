@@ -103,8 +103,14 @@ func (t *Tool) Execute(ctx context.Context, args json.RawMessage) (core.ToolOutp
 	if err != nil {
 		return core.ToolOutput{}, fmt.Errorf("code_mode result: %w", err)
 	}
+	var media []core.MediaArtifact
+	if host, ok := cell.(interface {
+		EmittedMedia([]core.ToolContentPart) []core.MediaArtifact
+	}); ok {
+		media = host.EmittedMedia(parts)
+	}
 	parts = append(parts, core.ToolContentPart{Type: core.ToolContentPartText, Text: "\n" + string(raw)})
-	return core.ToolOutput{Content: string(raw), ContentParts: parts, ChildCalls: audit, PreserveJSON: true, IsError: result.Status != "completed"}, nil
+	return core.ToolOutput{Content: string(raw), ContentParts: parts, Media: media, ChildCalls: audit, PreserveJSON: true, IsError: result.Status != "completed"}, nil
 }
 
 // appendLegacyText separates emissions, not arbitrary tool/MCP content parts.

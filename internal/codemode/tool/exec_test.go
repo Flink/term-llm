@@ -81,11 +81,14 @@ func TestControlToolSchemasUseExactNames(t *testing.T) {
 }
 
 func TestExecRendersOrderedPartsAndMetadataEnvelope(t *testing.T) {
+	artifact := core.MediaArtifact{Reference: strings.Repeat("a", 32), StoredPath: "/private/media.png", MediaType: "image/png"}
+	url := core.CodeModeMediaURLPrefix + artifact.Reference
 	fake := &controlFake{execResult: core.CodeModeCallResult{
 		CellID: "cm_1", Status: "running", Yield: 1 * time.Second, Elapsed: 5 * time.Millisecond,
 		MaxOutputTokens: 7, StateCommitted: false, HasMoreOutput: true, OutputLimited: true,
+		Media: []core.MediaArtifact{artifact},
 		Parts: []core.ToolContentPart{
-			{Type: core.ToolContentPartText, Text: "hello"},
+			{Type: core.ToolContentPartText, Text: url},
 			{Type: core.ToolContentPartImageData, ImageData: &core.ToolImageData{MediaType: "image/png", Base64: "abc"}},
 		},
 	}}
@@ -99,8 +102,8 @@ func TestExecRendersOrderedPartsAndMetadataEnvelope(t *testing.T) {
 	if len(output.ContentParts) != 3 {
 		t.Fatalf("ordered parts: %+v", output.ContentParts)
 	}
-	if output.ContentParts[0].Text != "hello" {
-		t.Fatalf("first part: %+v", output.ContentParts[0])
+	if output.ContentParts[0].Text != url || len(output.Media) != 1 || output.Media[0] != artifact {
+		t.Fatalf("URL or outer attachment lost: %+v", output)
 	}
 	if output.ContentParts[1].Type != core.ToolContentPartImageData {
 		t.Fatalf("image part: %+v", output.ContentParts[1])
@@ -108,8 +111,8 @@ func TestExecRendersOrderedPartsAndMetadataEnvelope(t *testing.T) {
 	if !strings.HasPrefix(output.ContentParts[2].Text, "\n") {
 		t.Fatalf("trailing envelope: %q", output.ContentParts[2].Text)
 	}
-	if strings.Contains(output.Content, "abc") {
-		t.Fatal("media bytes leaked into envelope")
+	if strings.Contains(output.Content, "abc") || strings.Contains(output.Content, url) || strings.Contains(output.Content, artifact.StoredPath) {
+		t.Fatal("media leaked into the status envelope")
 	}
 	if output.PreserveJSON != true || output.IsError {
 		t.Fatalf("output flags: %+v", output)

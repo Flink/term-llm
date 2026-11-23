@@ -11,6 +11,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"strings"
 
 	"github.com/term-llm/term-llm/internal/codemode"
 	"github.com/term-llm/term-llm/internal/llm/core"
@@ -165,4 +166,89 @@ func materializeCellImages(output core.ToolOutput) core.ToolOutput {
 		}
 	}
 	return output
+}
+
+// rememberMedia retains only host metadata from successful native text
+// results, never from raw programmatic data, arguments or image emissions.
+func (c *nestedCell) rememberMedia(output core.ToolOutput) {
+	if len(output.Media) == 0 || output.IsError || output.TimedOut || len(output.Programmatic) != 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || len(c.media) >= codemode.Limits.Calls {
+		return
+	}
+	for _, url := range core.CodeModeMediaURLs(output.Content) {
+		for _, artifact := range output.Media {
+			if artifact.Reference != strings.TrimPrefix(url, core.CodeModeMediaURLPrefix) || artifact.Path() == "" {
+				continue
+			}
+			if c.media == nil {
+				c.media = make(map[string]*core.MediaArtifact)
+			}
+			if _, exists := c.media[url]; !exists {
+				c.media[strings.Clone(url)] = &artifact
+			}
+			break
+		}
+		if len(c.media) >= codemode.Limits.Calls {
+			return
+		}
+	}
+}
+
+// EmittedMedia is used by the legacy tool before adding its status receipt.
+func (c *nestedCell) EmittedMedia(parts []core.ToolContentPart) []core.MediaArtifact {
+	var media codeModeObservedMedia
+	for _, part := range parts {
+		if part.Type == core.ToolContentPartText {
+			media.add(c.mediaSpans(part.Text))
+		}
+	}
+	return media.artifacts
+}
+
+// Match before retention or pagination, while the original URL boundaries
+// and the grants at the time of emission are still available. Queued spans
+// outlive capability closure; unreferenced artifacts do not.
+func (c *nestedCell) mediaSpans(text string) []codeModeMediaSpan {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.media) == 0 {
+		return nil
+	}
+	var spans []codeModeMediaSpan
+	for start, url := range core.CodeModeMediaURLs(text) {
+		if artifact := c.media[url]; artifact != nil {
+			spans = append(spans, codeModeMediaSpan{start: start, end: start + len(url), artifact: artifact})
+		}
+	}
+	return spans
+}
+
+type codeModeMediaSpan struct {
+	start, end int
+	artifact   *core.MediaArtifact
+}
+
+type codeModeObservedMedia struct {
+	seen      map[string]bool
+	artifacts []core.MediaArtifact
+}
+
+func (m *codeModeObservedMedia) add(spans []codeModeMediaSpan) {
+	for _, span := range spans {
+		ref := span.artifact.Reference
+		if !m.seen[ref] {
+			if m.seen == nil {
+				m.seen = make(map[string]bool)
+			}
+			m.seen[ref] = true
+			m.artifacts = append(m.artifacts, *span.artifact)
+		}
+	}
 }

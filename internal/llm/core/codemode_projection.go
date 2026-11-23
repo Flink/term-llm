@@ -38,10 +38,12 @@ func ProjectCodeModeOutput(output ToolOutput, maxChars int) ToolOutput {
 	}
 	output.Content = string(raw)
 	output.ContentParts = []ToolContentPart{{Type: ToolContentPartText, Text: output.Content}}
+	output.Media = nil // The legacy projection discarded all explicit output.
 	return output
 }
 
 func cellProjectionFailure(output ToolOutput) ToolOutput {
+	output.Media = nil
 	output.Content = `{"status":"failed","error":"model_output_limit","state_committed":false,"omitted_output":true}`
 	output.ContentParts = []ToolContentPart{{Type: ToolContentPartText, Text: output.Content}}
 	output.IsError = true

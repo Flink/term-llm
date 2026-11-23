@@ -36,13 +36,22 @@ func projectControlOutput(output ToolOutput, envelope map[string]json.RawMessage
 			return cellProjectionFailure(output)
 		}
 	}
-	remaining := max(0, maxChars-len(raw)-1)
+	parts, media := projectControlParts(output, max(0, maxChars-len(raw)-1))
+	output.Media = media
+	output.Content = string(raw)
+	output.ContentParts = append(parts, ToolContentPart{Type: ToolContentPartText, Text: "\n" + output.Content})
+	return output
+}
+
+func projectControlParts(output ToolOutput, remaining int) ([]ToolContentPart, []MediaArtifact) {
 	parts := make([]ToolContentPart, 0, len(output.ContentParts)+1)
+	media := newCodeModeProjectedMedia(output.Media)
 	for i, part := range output.ContentParts {
 		if i == len(output.ContentParts)-1 && part.Type == ToolContentPartText && strings.TrimSpace(part.Text) == output.Content {
 			continue // only the trailing status envelope, not deliberately emitted JSON
 		}
 		if part.Type == ToolContentPartText {
+			remaining = media.keepText(part.Text, remaining)
 			if len(part.Text) > remaining {
 				part.Text = part.Text[:remaining]
 				for !utf8.ValidString(part.Text) {
@@ -56,7 +65,49 @@ func projectControlOutput(output ToolOutput, envelope map[string]json.RawMessage
 		}
 		parts = append(parts, part)
 	}
-	output.Content = string(raw)
-	output.ContentParts = append(parts, ToolContentPart{Type: ToolContentPartText, Text: "\n" + output.Content})
-	return output
+	return parts, media.filter(output.Media)
+}
+
+// Track only URLs that were complete before projection, so cutting a longer
+// URL cannot turn it into a matching reference. Never scan the receipt.
+type codeModeProjectedMedia map[string]bool
+
+func newCodeModeProjectedMedia(media []MediaArtifact) codeModeProjectedMedia {
+	if len(media) == 0 {
+		return nil
+	}
+	retained := make(codeModeProjectedMedia, len(media))
+	for _, artifact := range media {
+		retained[artifact.Reference] = false
+	}
+	return retained
+}
+
+func (m codeModeProjectedMedia) keepText(text string, limit int) int {
+	if m != nil {
+		for start, url := range CodeModeMediaURLs(text) {
+			if start >= limit {
+				break
+			}
+			ref := strings.TrimPrefix(url, CodeModeMediaURLPrefix)
+			if _, known := m[ref]; !known {
+				continue
+			}
+			if start+len(url) > limit {
+				return start
+			}
+			m[ref] = true
+		}
+	}
+	return limit
+}
+
+func (m codeModeProjectedMedia) filter(media []MediaArtifact) []MediaArtifact {
+	var retained []MediaArtifact
+	for _, artifact := range media {
+		if m[artifact.Reference] {
+			retained = append(retained, artifact)
+		}
+	}
+	return retained
 }

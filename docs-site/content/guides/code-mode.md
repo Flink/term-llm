@@ -224,6 +224,13 @@ bodies and the stored state are not automatically printed. Nested calls remain
 auditable effects, not extra model-authored calls. Outstanding unawaited host
 calls still cause failure.
 
+In a script, `text((await tools.show_media({path: 'figure.png'})).text)` emits the
+URL the assistant can embed in its reply. The file mapping is saved with the
+observation that delivers the URL, so the web transcript can render it after
+reload. Calling `show_media` without emitting its URL leaves the file out of
+the reply. If an observation’s budget is too small for a complete media URL,
+use a larger `max_output_tokens` on `wait_script`.
+
 ### State is session-managed, not durable
 
 ```javascript

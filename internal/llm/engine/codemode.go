@@ -63,6 +63,7 @@ type nestedCell struct {
 	awaiting       int
 	outcomes       []core.CodeModeCallOutcome
 	images         map[string]core.ToolImageData
+	media          map[string]*core.MediaArtifact // Successful native results, protected by mu.
 	imageBytes     int
 	doneOnce       sync.Once
 	done           chan struct{}
@@ -317,8 +318,9 @@ func (c *nestedCell) Call(ctx context.Context, name string, args json.RawMessage
 			toolCtx = context.WithValue(toolCtx, nestedToolOverrideKey{}, tool)
 		}
 	}
-	if tool, ok := c.clients.tool(name); ok {
-		toolCtx = context.WithValue(toolCtx, nestedToolOverrideKey{}, tool)
+	clientTool, client := c.clients.tool(name)
+	if client {
+		toolCtx = context.WithValue(toolCtx, nestedToolOverrideKey{}, clientTool)
 	}
 	startEvent := core.Event{Type: core.EventToolExecStart, ParentToolCallID: c.parent, ToolCallID: call.ID, ToolName: name, ToolArgs: call.Arguments}
 	if c.background {
@@ -349,6 +351,9 @@ func (c *nestedCell) Call(ctx context.Context, name string, args json.RawMessage
 	raw, err := c.project(outcome.output)
 	if err != nil {
 		return nil, c.failure(call, "result_limit", "completed", err.Error())
+	}
+	if !client {
+		c.rememberMedia(outcome.output)
 	}
 	c.record(core.CodeModeCallOutcome{ID: call.ID, Name: name, Status: "completed", Outcome: "completed", IsError: outcome.output.IsError})
 	return raw, nil
@@ -504,6 +509,7 @@ func (c *nestedCell) Close() {
 	defer c.mu.Unlock()
 	c.closed = true
 	c.images = nil
+	c.media = nil
 	c.finishLocked()
 }
 

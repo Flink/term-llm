@@ -50,7 +50,7 @@ type codeModeAsyncCell struct {
 
 	mu              sync.Mutex
 	changed         chan struct{}
-	parts           []core.ToolContentPart
+	parts           []codeModeRetainedPart
 	textSeparator   bool // Last retained text lacks a newline, even if already observed.
 	pendingBytes    int
 	images          int
@@ -150,7 +150,7 @@ func (a *codeModeAsyncCell) emit(kind string, value json.RawMessage) error {
 		}
 		a.images++
 		a.imageBytes += bytes
-		a.parts = append(a.parts, part)
+		a.parts = append(a.parts, codeModeRetainedPart{ToolContentPart: part})
 		a.notifyLocked()
 		return nil
 	default:
@@ -418,10 +418,11 @@ func terminalStatus(a *codeModeAsyncCell) string {
 
 // drainPartsLocked applies the per-observation text budget while keeping the
 // remainder queued for a later wait. Images have separate count/byte budgets.
-func (a *codeModeAsyncCell) drainPartsLocked(maxBytes int) ([]core.ToolContentPart, bool) {
+func (a *codeModeAsyncCell) drainPartsLocked(maxBytes int) ([]core.ToolContentPart, []core.MediaArtifact, bool) {
 	remaining := maxBytes
 	var parts []core.ToolContentPart
-	keep := make([]core.ToolContentPart, 0, len(a.parts))
+	var media codeModeObservedMedia
+	keep := make([]codeModeRetainedPart, 0, len(a.parts))
 	limited := false
 	deferred := false
 	for _, part := range a.parts {
@@ -431,8 +432,8 @@ func (a *codeModeAsyncCell) drainPartsLocked(maxBytes int) ([]core.ToolContentPa
 			continue
 		}
 		if part.Type == core.ToolContentPartImageData {
-			a.releaseImages(part)
-			parts = append(parts, part)
+			a.releaseImages(part.ToolContentPart)
+			parts = append(parts, part.ToolContentPart)
 			continue
 		}
 		if remaining <= 0 {
@@ -442,25 +443,25 @@ func (a *codeModeAsyncCell) drainPartsLocked(maxBytes int) ([]core.ToolContentPa
 			continue
 		}
 		if len(part.Text) <= remaining {
-			parts = append(parts, part)
+			parts = append(parts, part.ToolContentPart)
+			media.add(part.media)
 			a.pendingBytes -= len(part.Text)
 			remaining -= len(part.Text)
 			continue
 		}
-		head := truncateUTF8(part.Text, remaining)
+		head := truncateUTF8(part.Text, part.textLimit(remaining))
 		if head != "" {
 			parts = append(parts, core.ToolContentPart{Type: core.ToolContentPartText, Text: head})
 			a.pendingBytes -= len(head)
+			media.add(part.cutText(len(head)))
 		}
-		if tail := part.Text[len(head):]; tail != "" {
-			keep = append(keep, core.ToolContentPart{Type: core.ToolContentPartText, Text: tail})
-		}
+		keep = append(keep, part)
 		limited = true
 		deferred = true
 		remaining = 0
 	}
 	a.parts = keep
-	return parts, limited
+	return parts, media.artifacts, limited
 }
 
 func (a *codeModeAsyncCell) observationLocked(drain bool, yield time.Duration, status string, budget codeModeOutputBudget) core.CodeModeCallResult {
@@ -490,7 +491,7 @@ func (a *codeModeAsyncCell) observationLocked(drain bool, yield time.Duration, s
 		Elapsed:        time.Since(a.started),
 	}
 	if drain && len(a.parts) > 0 {
-		result.Parts, result.OutputLimited = a.drainPartsLocked(budget.textBytes(result))
+		result.Parts, result.Media, result.OutputLimited = a.drainPartsLocked(budget.textBytes(result))
 	}
 	result.HasMoreOutput = len(a.parts) > 0
 	result.IsError = result.Status == "failed" || result.Status == "cancelled" || result.Status == "unknown" || result.Status == "busy"
