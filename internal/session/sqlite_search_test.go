@@ -92,3 +92,109 @@ func TestSearchSortBeforeLimit(t *testing.T) {
 		t.Fatalf("legacy search = %#v, %v", results, err)
 	}
 }
+
+func TestSearchRanksVisibleConversationAndTitles(t *testing.T) {
+	store, err := NewSQLiteStore(Config{Enabled: true, Path: filepath.Join(t.TempDir(), "sessions.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	add := func(id, name, longTitle string, texts ...core.Message) *Session {
+		t.Helper()
+		s := &Session{ID: id, Name: name, GeneratedLongTitle: longTitle, Provider: "test", Model: "test"}
+		if err := store.Create(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+		for i, text := range texts {
+			if err := store.AddMessage(ctx, id, NewMessage(id, text, i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return s
+	}
+	add("hidden", "Audiobook picks", "", core.Message{Role: core.RoleSystem, Parts: core.UserText("performance discourse specs github").Parts},
+		core.Message{Role: core.RoleDeveloper, Parts: core.UserText("performance discourse specs github").Parts},
+		core.Message{Role: core.RoleTool, Parts: core.UserText("performance discourse specs github").Parts},
+		core.UserText("\n\t[Context Compaction]\nperformance discourse specs github"))
+	add("weak", "", "", core.UserText("discourse discourse github github"))
+	add("partial", "", "", core.UserText("discourse specs performance"))
+	add("all-in-body", "", "", core.UserText("discourse github"), core.AssistantText("specs and performance"))
+	add("title-and-body", "", "Discourse GitHub Actions CI Speed", core.UserText("specs"), core.AssistantText("performance"))
+	custom := add("title-only", "Performance Discourse Specs GitHub", "Retired Title")
+
+	for _, query := range []string{"performance discourse specs github", "performance discourse specs githu", "PERFORMANCE discourse specs github discourse github"} {
+		results, err := store.Search(ctx, SearchOptions{Query: query, Limit: 10, Prefix: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, result := range results {
+			ids = append(ids, result.SessionID)
+		}
+		want := []string{"title-only", "title-and-body", "all-in-body", "partial"}
+		if !reflect.DeepEqual(ids, want) {
+			t.Fatalf("search %q = %v, want %v", query, ids, want)
+		}
+		if r := results[0]; r.MessageID != 0 || !r.CreatedAt.IsZero() || r.Snippet != custom.Name {
+			t.Fatalf("unexpected title-only match: %#v", r)
+		}
+		if r := results[1]; r.MessageID == 0 || (r.Snippet != "**specs**" && r.Snippet != "**performance**") {
+			t.Fatalf("expected highlighted visible excerpt: %#v", r)
+		}
+	}
+	for _, q := range []string{"retired title", "!!!", "performance missingword", "githu "} {
+		results, err := store.Search(ctx, SearchOptions{Query: q})
+		if err != nil || len(results) != 0 {
+			t.Fatalf("search %q = %#v, %v; want no matches", q, results, err)
+		}
+	}
+	custom.Name = "Renamed conversation"
+	if err := store.Update(ctx, custom); err != nil {
+		t.Fatal(err)
+	}
+	results, err := store.Search(ctx, SearchOptions{Query: "renamed conv", Limit: 1, Prefix: true})
+	if err != nil || len(results) != 1 || results[0].SessionID != custom.ID {
+		t.Fatalf("renamed prefix search = %#v, %v", results, err)
+	}
+	results, err = store.Search(ctx, SearchOptions{Query: "renamed conv\t", Prefix: true})
+	if err != nil || len(results) != 0 {
+		t.Fatalf("completed query unexpectedly expanded a prefix: %#v, %v", results, err)
+	}
+}
+
+func TestSearchTitleUsesDisplayedFallback(t *testing.T) {
+	store, err := NewSQLiteStore(Config{Enabled: true, Path: filepath.Join(t.TempDir(), "sessions.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	s := &Session{ID: "title", Name: "\t\u00a0", GeneratedShortTitle: "Alpine", Provider: "test", Model: "test"}
+	if err := store.Create(t.Context(), s); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Search(t.Context(), SearchOptions{Query: "alpine"})
+	if err != nil || len(got) != 1 || got[0].Snippet != s.PreferredShortTitle() {
+		t.Fatalf("search = %#v, %v, want displayed title %q", got, err, s.PreferredShortTitle())
+	}
+}
+
+func TestSearchRareTermScopeAllowsTitleAndSplitEvidence(t *testing.T) {
+	store, err := NewSQLiteStore(Config{Enabled: true, Path: filepath.Join(t.TempDir(), "sessions.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	_, err = store.db.Exec(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<90)
+		INSERT INTO sessions(id,name,provider,model) SELECT printf('s%d',i), 'Work log','test','test' FROM n;
+		UPDATE sessions SET name='needle' WHERE id='s1';
+		INSERT INTO messages(session_id,role,parts,sequence,text_content) SELECT id,'user','[]',0,'common' FROM sessions;
+		INSERT INTO messages(session_id,role,parts,sequence,text_content) VALUES ('s2','assistant','[]',1,'needle'),('s3','system','[]',1,'needle');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := store.Search(t.Context(), SearchOptions{Query: "common needle"})
+	if err != nil || len(r) != 2 || r[0].SessionID != "s1" || r[1].SessionID != "s2" {
+		t.Fatalf("scoped search = %#v, %v", r, err)
+	}
+}

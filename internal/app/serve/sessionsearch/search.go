@@ -49,11 +49,11 @@ func SearchHandler[T any](w http.ResponseWriter, r *http.Request, store session.
 	}
 	includeArchived := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_archived")), "1") ||
 		strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_archived")), "true")
-	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	if query == "" {
-		query = strings.TrimSpace(r.URL.Query().Get("query"))
+	query := r.URL.Query().Get("q")
+	if strings.TrimSpace(query) == "" {
+		query = r.URL.Query().Get("query")
 	}
-	if query == "" {
+	if strings.TrimSpace(query) == "" {
 		write(w, r, http.StatusOK, map[string]any{"sessions": []any{}})
 		return
 	}
@@ -71,6 +71,8 @@ func SearchHandler[T any](w http.ResponseWriter, r *http.Request, store session.
 		Categories:       categories,
 		Limit:            limit,
 		Archived:         includeArchived,
+		OmitSnippet:      r.URL.Query().Get("include_snippet") == "0",
+		Prefix:           r.URL.Query().Get("prefix") == "1",
 		ProjectID:        strings.TrimSpace(r.URL.Query().Get("project_id")),
 		ExcludeSubagents: true,
 	})

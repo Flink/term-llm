@@ -239,6 +239,8 @@ type SearchOptions struct {
 	Archived         bool       // Include archived sessions
 	ProjectID        string     // Restrict to one stable project ID
 	ExcludeSubagents bool       // Hide machine-generated child-agent sessions
+	Prefix           bool       // Allow a sufficiently long final word to prefix-match
+	OmitSnippet      bool       // Skip excerpts for clients that do not display them
 }
 
 // SearchResult represents a search match.
@@ -246,7 +248,7 @@ type SearchResult struct {
 	CreatedBy           string             `json:"created_by_id,omitempty"`
 	SessionID           string             `json:"session_id"`
 	SessionNumber       int64              `json:"session_number"` // Sequential session number
-	MessageID           int64              `json:"message_id"`
+	MessageID           int64              `json:"message_id"`     // Zero for a title-only match
 	SessionName         string             `json:"session_name"`
 	Summary             string             `json:"summary"`
 	GeneratedShortTitle string             `json:"generated_short_title,omitempty"`
