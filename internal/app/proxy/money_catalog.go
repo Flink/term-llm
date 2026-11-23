@@ -4,7 +4,9 @@ import (
 	"math"
 	"net/url"
 	"strings"
+	"time"
 
+	"github.com/term-llm/term-llm/internal/app/proxy/pricing"
 	"github.com/term-llm/term-llm/internal/app/proxy/usagetap"
 	"github.com/term-llm/term-llm/internal/modelsdev"
 	"github.com/term-llm/term-llm/internal/proxyprofile"
@@ -24,76 +26,38 @@ func (s *Service) catalogMoney(route Route) catalogMoney {
 		if provider == "" || in.Model == "" {
 			return Money{}, false
 		}
-		model, fetched, found := s.pricing.Lookup(provider, in.Model)
+		model, fetched, found, comparison := lookupCatalogModel(s.pricing, route, provider, in.Model)
 		if !found {
 			return Money{}, false
 		}
-		unavailable := func(reason string) (Money, bool) {
-			return Money{Billing: in.Billing, Kind: "unpriced", Reason: reason}, true
+		if !catalogUsageMatches(in, observed) || (comparison != "" && !isSingleGrokBuildResponse(observed)) {
+			return Money{Billing: in.Billing, Kind: "unpriced", Reason: "Usage cannot be matched to catalog token rates."}, true
 		}
-		if model.Cost == nil || fetched.IsZero() {
-			return unavailable("models.dev has no price for this model.")
+		// xAI documents the public 4.7 long-context tier as starting at 200K,
+		// inclusive. Keep this exception scoped to the 4.7 Build comparison.
+		inclusiveThreshold := 0
+		if comparison != "" && in.Model == "grok-4.7-build" {
+			inclusiveThreshold = 200_000
 		}
-		if !catalogUsageMatches(in, observed) {
-			return unavailable("Usage cannot be matched to catalog token rates.")
-		}
-		if in.Tier != "" && in.Tier != "default" && in.Tier != "standard" {
-			return unavailable("models.dev does not price this service tier.")
-		}
-		cost := *model.Cost
-		total, ok := offlineTotalInput(in)
-		if !ok {
-			return unavailable("Input usage is incomplete.")
-		}
-		selectedThreshold := 0
-		for _, tier := range cost.Tiers {
-			if tier.Tier.Type != "context" {
-				continue
-			}
-			if tier.Tier.Size <= 0 {
-				return unavailable("Invalid catalog context tier.")
-			}
-			if observed.Usage.Turns != 1 {
-				return unavailable("Context-tier pricing needs single-response usage.")
-			}
-			if total > int64(tier.Tier.Size) && tier.Tier.Size > selectedThreshold {
-				selectedThreshold = tier.Tier.Size
-				cost.Input, cost.Output = tier.Input, tier.Output
-				cost.CacheRead, cost.CacheWrite = tier.CacheRead, tier.CacheWrite
-			}
-		}
-		card := MoneyRate{Provider: in.Provider, Model: in.Model, Tier: in.Tier, Currency: "USD", Source: "models.dev/" + provider, AsOf: fetched.UTC().Format("2006-01-02")}
-		rates := []*float64{cost.Input, cost.Output, cost.CacheRead, cost.CacheWrite}
-		destinations := []**int64{&card.Input, &card.Output, &card.CacheRead, &card.CacheWrite}
-		for i, rate := range rates {
-			converted, valid := catalogMicros(rate)
-			if !valid {
-				return unavailable("Catalog price is out of range.")
-			}
-			*destinations[i] = converted
-		}
-		if card.Input == nil || card.Output == nil {
-			return unavailable("models.dev has incomplete input/output rates.")
-		}
-		money := CalculateMoney(in, []MoneyRate{card})
-		if money.Amount != nil && in.CacheWriteTokens > 0 {
-			money.Reason = "Cache writes use the catalog default rate; TTL-specific rates may differ."
+		money := pricing.CatalogMoney(in, provider, model, fetched, observed.Usage.Turns, inclusiveThreshold)
+		if money.Amount != nil && comparison != "" {
+			money.Reason = comparison
 		}
 		return money, true
 	}
 }
 
-func catalogMicros(rate *float64) (*int64, bool) {
-	if rate == nil {
-		return nil, true
+// Prefer the exact catalog entry, even if it has incomplete prices. On the
+// native Grok plan only, standard Build IDs can use their matching public model.
+func lookupCatalogModel(catalog *modelsdev.Client, route Route, provider, id string) (modelsdev.Model, time.Time, bool, string) {
+	model, fetched, found := catalog.Lookup(provider, id)
+	if !found && provider == "xai" {
+		if base := grokBuildAPIModel(id); base != "" && isGrokBuildPlan(route) {
+			model, fetched, found = catalog.Lookup(provider, base)
+			return model, fetched, found, "Compared with public " + base + " API token rates."
+		}
 	}
-	scaled := *rate * 1_000_000
-	rounded := math.Round(scaled)
-	if math.IsNaN(scaled) || math.IsInf(scaled, 0) || scaled < 0 || rounded > float64(maxMoneyMicros) || math.Abs(scaled-rounded) > 0.000001 {
-		return nil, false
-	}
-	value := int64(rounded)
-	return &value, true
+	return model, fetched, found, ""
 }
 
 func catalogUsageMatches(in MoneyInput, observed *ObservedUsage) bool {

@@ -8,6 +8,7 @@ import (
 )
 
 func finishPlanAPIEquivalent(in MoneyInput, route Route, observed *ObservedUsage, rates []MoneyRate, catalog catalogMoney) *APIEquivalent {
+	catalog = withGrokBuildFallback(route, in.Model, catalog)
 	if equivalent := pricing.PlanAPIEquivalent(in, rates); equivalent.Kind != "unpriced" || in.Model == "" || (in.Tier == "" && catalog == nil) {
 		return equivalent
 	}

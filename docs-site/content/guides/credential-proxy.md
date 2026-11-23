@@ -777,6 +777,12 @@ prices. `TERM_LLM_OFFLINE` disables background refresh. Price details show the
 source and retrieval date. Missing rates/counts stay unknown; no fuzzy matching,
 automatic FX or invented invoice charges.
 
+For account-backed Grok plans, a standard versioned Build response such as
+`grok-4.7-build` can use the matching public API model (`xai/grok-4.7`) for its
+API-equivalent estimate. Fast variants require their own published rates; they
+never inherit standard pricing. The estimate preserves the reported model and
+does not change plan billing or reprice historical requests.
+
 For Venice chat completions, the proxy reads top-level `cost` or `usage.cost`
 from the response, including the final usage chunk of a stream. It adds `usd`
 and `diem` at **1 DIEM = US$1**, ignores `diam`, and rounds the sum once to the

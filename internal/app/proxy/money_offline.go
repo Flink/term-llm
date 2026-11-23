@@ -3,6 +3,7 @@ package proxy
 import (
 	"net/url"
 
+	"github.com/term-llm/term-llm/internal/app/proxy/pricing"
 	"github.com/term-llm/term-llm/internal/app/proxy/usagetap"
 	"github.com/term-llm/term-llm/internal/usage"
 )
@@ -59,7 +60,7 @@ func finishTokenMoney(in MoneyInput, observed *ObservedUsage, rates []MoneyRate,
 	}
 	selected := price.Base
 	if price.LongContext != nil {
-		total, ok := offlineTotalInput(in)
+		total, ok := pricing.TotalInput(in)
 		if !ok {
 			return money
 		}
@@ -119,14 +120,4 @@ func offlineUsageMatches(provider string, in MoneyInput, observed ObservedUsage)
 	default:
 		return false
 	}
-}
-func offlineTotalInput(in MoneyInput) (int64, bool) {
-	total := int64(0)
-	for _, count := range []int64{in.InputTokens, in.CacheReadTokens, in.CacheWriteTokens} {
-		if count < 0 || count > 9223372036854775807-total {
-			return 0, false
-		}
-		total += count
-	}
-	return total, true
 }
