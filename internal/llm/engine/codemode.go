@@ -304,7 +304,7 @@ func (c *nestedCell) Call(ctx context.Context, name string, args json.RawMessage
 	if _, err = c.identity(ctx, name); err != nil {
 		return nil, c.failure(call, errorCode(err), "not_dispatched", err.Error())
 	}
-	toolCtx := context.WithValue(ctx, nestedContextKey{}, lease)
+	toolCtx := core.ContextWithNestedCodeModeCall(context.WithValue(ctx, nestedContextKey{}, lease))
 	if c.background {
 		toolCtx = core.ContextWithCodeModeToolPause(toolCtx, lease.pause)
 	}

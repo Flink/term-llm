@@ -252,19 +252,21 @@ func writeExportTool(b *strings.Builder, tool *htmlExportTool) {
 		if tool.IsError {
 			heading = "Error"
 		}
-		b.WriteString(`<div class="tool-section"><h4>` + heading + `</h4><pre>` + htmlesc.Text(tool.Result) + `</pre></div>`)
-		for _, text := range tool.ExtraTexts {
-			b.WriteString(`<pre>` + htmlesc.Text(text) + `</pre>`)
+		b.WriteString(`<div class="tool-section"><h4>` + heading + `</h4>`)
+		for _, part := range tool.Output {
+			if part.Image != nil {
+				writeExportImage(b, part.Image)
+			} else {
+				b.WriteString(`<pre>` + htmlesc.Text(part.Text) + `</pre>`)
+			}
 		}
+		b.WriteString(`</div>`)
 		for _, diff := range tool.Diffs {
 			b.WriteString(`<div class="diff"><strong>` + htmlesc.Text(diff.File))
 			if diff.Line != 0 {
 				b.WriteString(`:` + strconv.Itoa(diff.Line))
 			}
 			b.WriteString(`</strong><div class="diff-grid"><div><span class="label">Before</span><pre>` + htmlesc.Text(diff.Old) + `</pre></div><div><span class="label">After</span><pre>` + htmlesc.Text(diff.New) + `</pre></div></div></div>`)
-		}
-		for i := range tool.Images {
-			writeExportImage(b, &tool.Images[i])
 		}
 	}
 	b.WriteString(`</div></details>`)

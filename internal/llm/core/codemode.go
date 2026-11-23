@@ -37,6 +37,18 @@ type CodeModeCell interface {
 }
 
 type codeModeCellKey struct{}
+type nestedCodeModeCallKey struct{}
+
+// ContextWithNestedCodeModeCall identifies a host call dispatched by a script.
+func ContextWithNestedCodeModeCall(ctx context.Context) context.Context {
+	return context.WithValue(ctx, nestedCodeModeCallKey{}, true)
+}
+
+// IsNestedCodeModeCall reports whether a tool's result goes to a script first.
+func IsNestedCodeModeCall(ctx context.Context) bool {
+	nested, _ := ctx.Value(nestedCodeModeCallKey{}).(bool)
+	return nested
+}
 
 func ContextWithCodeModeCell(ctx context.Context, cell CodeModeCell) context.Context {
 	return context.WithValue(ctx, codeModeCellKey{}, cell)

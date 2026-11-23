@@ -27,7 +27,7 @@ import (
 
 const nestedMediaCallID = "script-call"
 
-var nestedMediaURL = regexp.MustCompile(`term-llm-media://([0-9a-f]{32})`)
+var nestedMediaURL = regexp.MustCompile(`term-llm-media://([0-9a-fA-F]{32})`)
 
 func nestedMediaToolText(items []responses.ResponsesInputItem) string {
 	for _, item := range items {
@@ -82,7 +82,10 @@ func TestNestedShowMediaLiveAndReload(t *testing.T) {
 	mgr.Registry.SetMediaPublisher(srv.mediaPublisher)
 
 	const script = `const results = await Promise.all(Array.from({length: 9}, (_, i) => tools.show_media({path: i + '.png'})));
-for (const r of results) text(r.text.match(/term-llm-media:\/\/[a-f0-9]{32}/)[0]);`
+for (const [i, r] of results.entries()) {
+  const url = r.text.match(/term-llm-media:\/\/[a-f0-9]{32}/)[0];
+  text(i === 0 ? url.replace(/[a-f0-9]{32}$/, ref => ref.toUpperCase()) : url);
+}`
 	provider := nestedMediaReplyProvider{mockprovider.NewMockProvider("mock").AddToolCall(nestedMediaCallID, "spawn_script", map[string]any{
 		"code": script, "max_wait": 30, "max_output_tokens": 1000,
 	})}
@@ -128,7 +131,7 @@ for (const r of results) text(r.text.match(/term-llm-media:\/\/[a-f0-9]{32}/)[0]
 		if !strings.Contains(reply, "![Figure]("+ref[0]+")") {
 			t.Fatalf("final assistant Markdown lost %s on reload", ref[0])
 		}
-		i := slices.IndexFunc(reloaded, func(m webMediaEntry) bool { return m.Reference == ref[1] })
+		i := slices.IndexFunc(reloaded, func(m webMediaEntry) bool { return strings.EqualFold(m.Reference, ref[1]) })
 		if i < 0 {
 			t.Fatalf("no published file for %s", ref[0])
 		}

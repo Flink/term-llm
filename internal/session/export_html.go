@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -74,16 +75,19 @@ type htmlExportBlock struct {
 }
 
 type htmlExportTool struct {
-	Name       string
-	ID         string
-	Arguments  string
-	HasCall    bool
-	HasResult  bool
-	Result     string
-	IsError    bool
-	Diffs      []htmlExportDiff
-	Images     []htmlExportImage
-	ExtraTexts []string
+	Name      string
+	ID        string
+	Arguments string
+	HasCall   bool
+	HasResult bool
+	IsError   bool
+	Diffs     []htmlExportDiff
+	Output    []htmlExportToolOutput
+}
+
+type htmlExportToolOutput struct {
+	Text  string
+	Image *htmlExportImage
 }
 
 type htmlExportDiff struct {
@@ -337,7 +341,7 @@ func buildHTMLExportMessages(messages []Message, opts ExportOptions, images *exp
 				detailCount++
 				// Clients show these images outside the collapsed tool card, so
 				// keep them visible in the transcript as well.
-				for _, source := range toolResultDisplayedImages(part.ToolResult) {
+				for _, source := range toolResultDisplayedImages(part.ToolResult, true) {
 					image := buildHTMLImage(images, source)
 					view.Blocks = append(view.Blocks, htmlExportBlock{Kind: "image", Image: &image})
 				}
@@ -461,7 +465,6 @@ func buildHTMLTool(call *core.ToolCall, result *core.ToolResult, images *exportI
 	if result != nil {
 		tool.HasResult = true
 		tool.IsError = result.IsError
-		tool.Result = result.Content
 		if tool.Name == "" {
 			tool.Name = result.Name
 		}
@@ -471,18 +474,15 @@ func buildHTMLTool(call *core.ToolCall, result *core.ToolResult, images *exportI
 		for _, diff := range result.Diffs {
 			tool.Diffs = append(tool.Diffs, htmlExportDiff{File: diff.File, Old: diff.Old, New: diff.New, Line: diff.Line})
 		}
-		for _, part := range result.ContentParts {
+		for _, part := range exportToolResultParts(result) {
 			switch part.Type {
 			case core.ToolContentPartText:
-				if part.Text != "" && part.Text != result.Content {
-					tool.ExtraTexts = append(tool.ExtraTexts, part.Text)
+				if part.Text != "" {
+					tool.Output = append(tool.Output, htmlExportToolOutput{Text: part.Text})
 				}
 			case core.ToolContentPartImageData:
-				if part.ImageData != nil {
-					tool.Images = append(tool.Images, buildHTMLImage(images, exportImageSource{Base64: part.ImageData.Base64, MediaType: part.ImageData.MediaType, Alt: "Tool image"}))
-				} else {
-					tool.Images = append(tool.Images, buildHTMLImage(images, exportImageSource{Alt: "Tool image"}))
-				}
+				image := buildHTMLImage(images, toolContentImageSource(part))
+				tool.Output = append(tool.Output, htmlExportToolOutput{Image: &image})
 			}
 		}
 	}
@@ -509,16 +509,8 @@ func prettyJSON(raw json.RawMessage) string {
 
 func buildHTMLImage(images *exportImages, source exportImageSource) htmlExportImage {
 	resolved := images.resolve(source)
-	image := htmlExportImage{MediaType: resolved.MediaType, Alt: source.Alt, Reason: resolved.Reason, Omitted: resolved.Omitted}
-	if image.Alt == "" {
-		image.Alt = "Image"
-	}
-	if !resolved.Omitted {
-		// resolve only yields data:image/(png|jpeg|gif) URIs of re-encoded
-		// bytes or relative assets/<hash>.<ext> names.
-		image.URL = resolved.URL // constructed above from validated, re-encoded image data.
-	}
-	return image
+	// resolve only supplies URLs for validated, re-encoded images.
+	return htmlExportImage{URL: resolved.URL, MediaType: resolved.MediaType, Alt: cmp.Or(source.Alt, "Image"), Reason: resolved.Reason, Omitted: resolved.Omitted}
 }
 
 func buildHTMLFile(part core.Part) *htmlExportFile {

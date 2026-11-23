@@ -109,7 +109,7 @@ func SelectShare(messages []Message, anchorMessageID int64, scope ShareScope) (S
 						continue
 					}
 					media = append(media, part.ToolResult.Media...)
-					for _, source := range toolResultDisplayedImages(part.ToolResult) {
+					for _, source := range toolResultDisplayedImages(part.ToolResult, false) {
 						images = append(images, core.Part{Type: core.PartImage, ImagePath: source.Path})
 					}
 				}
@@ -200,7 +200,7 @@ func StripToolActivity(messages []Message) ([]Message, []core.MediaArtifact) {
 					continue
 				}
 				media = append(media, part.ToolResult.Media...)
-				for _, source := range toolResultDisplayedImages(part.ToolResult) {
+				for _, source := range toolResultDisplayedImages(part.ToolResult, false) {
 					images = append(images, core.Part{Type: core.PartImage, ImagePath: source.Path})
 				}
 			}

@@ -65,6 +65,7 @@ func TestCodeModeMediaEmissionsAndPrivacy(t *testing.T) {
 		want       bool
 	}{
 		{"text", `text(r.text); text(r.text)`, true},
+		{"uppercase reference", `text(r.text.replace(/[a-f0-9]{32}/, ref => ref.toUpperCase()))`, true},
 		{"return object", `return r`, true},
 		{"not emitted", `return 'done'`, false},
 		{"state only", `store('private', r); return 'done'`, false},
@@ -92,7 +93,7 @@ func TestCodeModeMediaEmissionsAndPrivacy(t *testing.T) {
 				t.Fatalf("expected a terminal result: %+v, %v", result, err)
 			}
 			if tc.want {
-				if !slices.Equal(result.Media, []core.MediaArtifact{artifact}) || !strings.Contains(partsText(result), url) {
+				if !slices.Equal(result.Media, []core.MediaArtifact{artifact}) || !strings.Contains(strings.ToLower(partsText(result)), url) {
 					t.Fatalf("missing attachment for emitted URL: %+v", result)
 				}
 			} else if len(result.Media) > 0 {

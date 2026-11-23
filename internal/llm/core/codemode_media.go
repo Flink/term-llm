@@ -9,7 +9,8 @@ import (
 const CodeModeMediaURLPrefix = "term-llm-media://"
 
 // CodeModeMediaURLs locates complete opaque media URLs in emitted text. The
-// offsets are byte offsets. A URL match is not itself a media grant.
+// offsets are byte offsets. URLs are returned with normalized hex references;
+// a match is not itself a media grant.
 func CodeModeMediaURLs(text string) iter.Seq2[int, string] {
 	return func(yield func(int, string) bool) {
 		for scan := 0; scan < len(text); {
@@ -24,7 +25,7 @@ func CodeModeMediaURLs(text string) iter.Seq2[int, string] {
 				continue
 			}
 			ref := text[scan:end]
-			if strings.IndexFunc(ref, func(r rune) bool { return !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') }) == -1 && !yield(start, text[start:end]) {
+			if strings.IndexFunc(ref, func(r rune) bool { return !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') }) == -1 && !yield(start, strings.ToLower(text[start:end])) {
 				return
 			}
 		}

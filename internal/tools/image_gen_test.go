@@ -202,6 +202,12 @@ func TestImageGenerateTool_ServeModeReturnsArtifactInstructions(t *testing.T) {
 	if !strings.Contains(out.Content, "Do not embed or repeat") {
 		t.Errorf("expected no-reembed instruction, got:\n%s", out.Content)
 	}
+
+	nested, err := tool.Execute(core.ContextWithNestedCodeModeCall(context.Background()), args)
+	if err != nil || nested.IsError || len(nested.Images) != 0 || strings.Contains(nested.Content, "already been displayed") ||
+		!strings.Contains(nested.Content, "Generated image saved to: "+tmpDir) || !strings.Contains(nested.Content, "pass this path to show_media and emit") {
+		t.Fatalf("nested generation must describe the saved, unpublished image: %+v, %v", nested, err)
+	}
 }
 
 func TestImageGenerateTool_ServeModeIgnoresShowImageFalse(t *testing.T) {
@@ -405,6 +411,22 @@ func TestImageGenerateTool_ServeModeStripsTerminalParams(t *testing.T) {
 	}
 	if _, ok := props["input_image"]; !ok {
 		t.Error("input_image should still be present in serve mode")
+	}
+}
+
+func TestNestedShowImagePointsToShowMedia(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "input.png")
+	if err := os.WriteFile(path, []byte("image data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args, err := json.Marshal(ShowImageArgs{FilePath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := core.ContextWithNestedCodeModeCall(context.Background())
+	out, err := NewShowImageTool(nil).Execute(ctx, args)
+	if err != nil || out.IsError || len(out.Images) != 0 || !strings.Contains(out.Content, "not displayed. Call show_media") {
+		t.Fatalf("nested legacy display must point to explicit publication: %+v, %v", out, err)
 	}
 }
 

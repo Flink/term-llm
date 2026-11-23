@@ -3,8 +3,9 @@ package engine
 import (
 	"context"
 	"fmt"
-	"github.com/term-llm/term-llm/internal/llm/core"
 	"sync"
+
+	"github.com/term-llm/term-llm/internal/llm/core"
 )
 
 // syncToolSupervisor owns synchronous bridge calls for one provider turn. A
@@ -32,6 +33,7 @@ type syncToolSupervisorEntry struct {
 	done      chan struct{}
 	respond   func(toolCallOutcome)
 	finalized bool
+	delivery  *scriptDelivery
 }
 
 func newSyncToolSupervisor(parent context.Context, parallel bool) *syncToolSupervisor {
@@ -74,7 +76,11 @@ func (s *syncToolSupervisor) worker() {
 					outcome = toolCallOutcome{call: job.entry.call, err: fmt.Errorf("sync tool execution panicked: %v", recovered)}
 				}
 			}()
-			return job.run(s.ctx)
+			ctx := s.ctx
+			if job.entry.delivery != nil {
+				ctx = context.WithValue(ctx, scriptDeliveryKey{}, job.entry.delivery)
+			}
+			return job.run(ctx)
 		}()
 		s.finish(job.entry, outcome)
 	}
@@ -109,6 +115,9 @@ func (s *syncToolSupervisor) finish(entry *syncToolSupervisorEntry, outcome tool
 
 func (s *syncToolSupervisor) dispatch(call core.ToolCall, run func(context.Context) toolCallOutcome, respond func(toolCallOutcome)) {
 	entry := &syncToolSupervisorEntry{call: call, done: make(chan struct{}), respond: respond}
+	if isAsyncScriptControl(call.Name) {
+		entry.delivery = &scriptDelivery{}
+	}
 	s.mu.Lock()
 	s.entries = append(s.entries, entry)
 	if err := s.ctx.Err(); err != nil {
@@ -172,19 +181,14 @@ func (s *syncToolSupervisor) settle(ctx context.Context) []toolCallOutcome {
 	s.mu.Lock()
 	entries := append([]*syncToolSupervisorEntry(nil), s.entries...)
 	s.mu.Unlock()
-	cancelled := false
+settling:
 	for i, entry := range entries {
 		select {
 		case <-entry.done:
 		case <-ctx.Done():
 			s.cancel()
-			for _, remaining := range entries[i:] {
-				s.finish(remaining, toolCallOutcome{call: remaining.call, err: ctx.Err()})
-			}
-			cancelled = true
-		}
-		if cancelled {
-			break
+			s.cancelEntries(entries[i:], ctx.Err())
+			break settling
 		}
 	}
 	s.cancel()
@@ -199,17 +203,25 @@ func (s *syncToolSupervisor) settle(ctx context.Context) []toolCallOutcome {
 	return outcomes
 }
 
+func (s *syncToolSupervisor) cancelEntries(entries []*syncToolSupervisorEntry, cause error) {
+	// Finalize unrelated and not-yet-started calls before joining any script
+	// control that might already have consumed an observation.
+	for _, entry := range entries {
+		if !entry.delivery.mustCollect() {
+			s.finish(entry, toolCallOutcome{call: entry.call, err: cause})
+		}
+	}
+	for _, entry := range entries {
+		<-entry.done
+	}
+}
+
 func (s *syncToolSupervisor) abort(cause error) []toolCallOutcome {
 	s.cancel()
 	s.mu.Lock()
 	entries := append([]*syncToolSupervisorEntry(nil), s.entries...)
 	s.mu.Unlock()
-	for _, entry := range entries {
-		s.finish(entry, toolCallOutcome{call: entry.call, err: cause})
-	}
-	for _, entry := range entries {
-		<-entry.done
-	}
+	s.cancelEntries(entries, cause)
 	outcomes := make([]toolCallOutcome, len(entries))
 	s.mu.Lock()
 	for i, entry := range entries {

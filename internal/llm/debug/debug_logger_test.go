@@ -2,11 +2,13 @@ package debug
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	. "github.com/term-llm/term-llm/internal/llm/core"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -420,5 +422,61 @@ func TestDebugLogger_LogReasoningDeltaEventData(t *testing.T) {
 	}
 	if got := data["text"]; got != "reasoning summary" {
 		t.Fatalf("expected text reasoning summary, got %#v", got)
+	}
+}
+
+func TestDebugLogger_RequestToolResultUsesCanonicalText(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := NewLogger(dir, "script")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const receipt = `{"cell_id":"cell-1","status":"completed"}`
+	req := Request{Messages: []Message{
+		ToolResultMessageFromOutput("call-1", "spawn_script", ToolOutput{
+			Content: receipt,
+			ContentParts: []ToolContentPart{
+				{Type: ToolContentPartText, Text: "first emission"},
+				{Type: ToolContentPartImageData, ImageData: &ToolImageData{MediaType: "image/png", Base64: "aW1hZ2UtYnl0ZXM="}},
+				{Type: ToolContentPartText, Text: "\nsecond emission"},
+				{Type: ToolContentPartText, Text: "\n" + receipt},
+			},
+			Images: []string{"/private/legacy.png"},
+			Media:  []MediaArtifact{{SourcePath: "/private/attachment.png"}},
+		}, nil),
+	}}
+	logger.LogRequest("provider", "model", req)
+	logger.LogTurnRequest(1, "provider", "model", req)
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "script.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"/private/", "aW1hZ2UtYnl0ZXM=", `"content_parts"`, `"media"`, `"images"`} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Errorf("request log includes %q", forbidden)
+		}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	for _, kind := range []string{"request", "turn_request"} {
+		var entry struct {
+			Type    string
+			Request struct {
+				Messages []struct{ Content []debugPart }
+			}
+		}
+		if err := decoder.Decode(&entry); err != nil {
+			t.Fatal(err)
+		}
+		if entry.Type != kind || len(entry.Request.Messages) != 1 || len(entry.Request.Messages[0].Content) != 1 {
+			t.Fatalf("unexpected %s log entry: %+v", kind, entry)
+		}
+		result := entry.Request.Messages[0].Content[0].ToolResult
+		if want := "first emission\nsecond emission\n" + receipt; result == nil || result.Content != want {
+			t.Errorf("%s tool result = %+v; want text %q", kind, result, want)
+		}
 	}
 }

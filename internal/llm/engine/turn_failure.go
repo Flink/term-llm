@@ -54,7 +54,7 @@ type engineStreamFailureContext struct {
 	ctx                                                                    context.Context
 	req                                                                    *core.Request
 	send                                                                   corestream.Sender
-	stream                                                                 core.Stream
+	closeStream                                                            func()
 	compaction                                                             *runCompactionController
 	originalTools                                                          []core.ToolSpec
 	originalToolChoice                                                     core.ToolChoice
@@ -67,7 +67,7 @@ type engineStreamFailureContext struct {
 	planner                                                                core.ToolSurfacePlanner
 	runID                                                                  string
 	retry                                                                  engineUncommittedRetry
-	recovery                                                               engineTurnRecovery
+	recovery                                                               *engineTurnRecovery
 	recoveryCompleted                                                      *bool
 }
 
@@ -83,11 +83,10 @@ func (e *Engine) handleChaosStreamFailure(f *engineStreamFailureContext, chaosEr
 	}
 	retryUncommittedAttempt := f.retry.retry
 	recoverCommittedToolWork := func(cause error) (bool, error) {
-		return e.recoverCommittedTurn(&f.recovery, cause)
+		return e.recoverCommittedTurn(f.recovery, cause)
 	}
-	stream := f.stream
 	finishSyncToolsAfterStreamFailure(chaosErr)
-	stream.Close()
+	f.closeStream()
 	if fallback, reason := requestNativeFallback(chaosErr, scratchpadCommitted || len(toolCalls) > 0 || syncToolsExecuted); fallback {
 		if scratchpadHasDiscardableOutput {
 			if sendErr := send.Send(core.Event{Type: core.EventAttemptDiscard}); sendErr != nil {
@@ -114,7 +113,6 @@ func (e *Engine) handleChaosStreamFailure(f *engineStreamFailureContext, chaosEr
 	} else if recovered {
 		return errEngineTurnAdvance
 	}
-	e.journalFailedSyncTurn(&f.recovery)
 	return chaosErr
 }
 
@@ -123,7 +121,7 @@ func (e *Engine) handleReceiveStreamFailure(f *engineStreamFailureContext, err e
 	compaction := f.compaction
 	originalTools, originalToolChoice := f.originalTools, f.originalToolChoice
 	recoveredToolWork, recoveredAtMessageCount := *f.recoveredToolWork, *f.recoveredAtMessageCount
-	toolCalls, syncToolCalls := *f.toolCalls, *f.syncToolCalls
+	toolCalls := *f.toolCalls
 	textBuilder, reasoningBuilder := f.textBuilder, f.reasoningBuilder
 	syncToolsExecuted := *f.syncToolsExecuted
 	scratchpadCommitted, scratchpadHasDiscardableOutput := *f.scratchpadCommitted, *f.scratchpadHasDiscardableOutput
@@ -133,12 +131,11 @@ func (e *Engine) handleReceiveStreamFailure(f *engineStreamFailureContext, err e
 	}
 	retryUncommittedAttempt := f.retry.retry
 	recoverCommittedToolWork := func(cause error) (bool, error) {
-		return e.recoverCommittedTurn(&f.recovery, cause)
+		return e.recoverCommittedTurn(f.recovery, cause)
 	}
-	stream := f.stream
 	finishSyncToolsAfterStreamFailure(err)
-	stream.Close()
-	if compaction.config != nil && IsContextOverflowError(err) && !compaction.reactiveDone && textBuilder.Len() == 0 && reasoningBuilder.Len() == 0 && len(toolCalls) == 0 && len(syncToolCalls) == 0 {
+	f.closeStream()
+	if compaction.config != nil && IsContextOverflowError(err) && !compaction.reactiveDone && textBuilder.Len() == 0 && reasoningBuilder.Len() == 0 && len(toolCalls) == 0 && len(*f.syncToolCalls) == 0 {
 		if retry, reactErr := compaction.compactReactiveOverflow(originalTools, originalToolChoice); reactErr != nil {
 			return reactErr
 		} else if retry {
@@ -174,7 +171,6 @@ func (e *Engine) handleReceiveStreamFailure(f *engineStreamFailureContext, err e
 	if compaction.softActive {
 		compaction.restoreSoftFailure(originalTools, originalToolChoice, err)
 	}
-	e.journalFailedSyncTurn(&f.recovery)
 	return err
 }
 
@@ -183,7 +179,7 @@ func (e *Engine) handleEventStreamFailure(f *engineStreamFailureContext, eventEr
 	compaction := f.compaction
 	originalTools, originalToolChoice := f.originalTools, f.originalToolChoice
 	recoveredToolWork, recoveredAtMessageCount := *f.recoveredToolWork, *f.recoveredAtMessageCount
-	toolCalls, syncToolCalls := *f.toolCalls, *f.syncToolCalls
+	toolCalls := *f.toolCalls
 	textBuilder, reasoningBuilder := f.textBuilder, f.reasoningBuilder
 	syncToolsExecuted := *f.syncToolsExecuted
 	scratchpadCommitted, scratchpadHasDiscardableOutput := *f.scratchpadCommitted, *f.scratchpadHasDiscardableOutput
@@ -193,12 +189,11 @@ func (e *Engine) handleEventStreamFailure(f *engineStreamFailureContext, eventEr
 	}
 	retryUncommittedAttempt := f.retry.retry
 	recoverCommittedToolWork := func(cause error) (bool, error) {
-		return e.recoverCommittedTurn(&f.recovery, cause)
+		return e.recoverCommittedTurn(f.recovery, cause)
 	}
-	stream := f.stream
 	finishSyncToolsAfterStreamFailure(eventErr)
-	stream.Close()
-	if compaction.config != nil && IsContextOverflowError(eventErr) && !compaction.reactiveDone && textBuilder.Len() == 0 && reasoningBuilder.Len() == 0 && len(toolCalls) == 0 && len(syncToolCalls) == 0 {
+	f.closeStream()
+	if compaction.config != nil && IsContextOverflowError(eventErr) && !compaction.reactiveDone && textBuilder.Len() == 0 && reasoningBuilder.Len() == 0 && len(toolCalls) == 0 && len(*f.syncToolCalls) == 0 {
 		if retry, reactErr := compaction.compactReactiveOverflow(originalTools, originalToolChoice); reactErr != nil {
 			return reactErr
 		} else if retry {
@@ -234,6 +229,5 @@ func (e *Engine) handleEventStreamFailure(f *engineStreamFailureContext, eventEr
 	if compaction.softActive {
 		compaction.restoreSoftFailure(originalTools, originalToolChoice, eventErr)
 	}
-	e.journalFailedSyncTurn(&f.recovery)
 	return eventErr
 }

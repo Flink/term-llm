@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/term-llm/term-llm/internal/llm/core"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"github.com/term-llm/term-llm/internal/codemode"
+	"github.com/term-llm/term-llm/internal/llm/core"
 )
 
 func TestSyncToolSupervisorRunsParallelAndSettlesInDispatchOrder(t *testing.T) {
@@ -224,4 +227,107 @@ func TestSyncToolSupervisorCancellationDoesNotWaitForNonCooperativeCall(t *testi
 	if len(outcomes) != 1 || outcomes[0].err == nil {
 		t.Fatalf("cancelled outcomes = %#v", outcomes)
 	}
+}
+
+func TestSyncToolSupervisorFinalizesUnstartedCallsBeforeJoiningScriptControl(t *testing.T) {
+	for _, mode := range []string{"settle", "abort"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				step, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				// As on a bridge, cancelling the provider step does not cancel
+				// the dispatcher until settlement explicitly shuts it down.
+				s := newSyncToolSupervisor(context.Background(), false)
+				started := make(chan error, 1)
+				publish := make(chan struct{})
+				call := core.ToolCall{ID: "drained", Name: codemode.WaitToolName}
+				s.dispatch(call, func(ctx context.Context) toolCallOutcome {
+					delivery, _ := ctx.Value(scriptDeliveryKey{}).(*scriptDelivery)
+					started <- startScriptDelivery(ctx, delivery)
+					<-publish
+					return toolCallOutcome{call: call, output: core.TextOutput("observation")}
+				}, func(toolCallOutcome) {})
+				if err := <-started; err != nil {
+					t.Error(err)
+				}
+
+				responded := make(chan toolCallOutcome, 4)
+				queued := []core.ToolCall{{ID: "queued", Name: codemode.WaitToolName}, {ID: "unrelated", Name: "probe"}}
+				for _, queuedCall := range queued {
+					s.dispatch(queuedCall, func(context.Context) toolCallOutcome {
+						t.Errorf("queued call %q executed after cancellation", queuedCall.ID)
+						return toolCallOutcome{call: queuedCall}
+					}, func(outcome toolCallOutcome) { responded <- outcome })
+				}
+				delivery := s.entries[1].delivery
+				settled := make(chan []toolCallOutcome, 1)
+				cancel()
+				go func() {
+					if mode == "abort" {
+						settled <- s.abort(context.Canceled)
+						return
+					}
+					settled <- s.settle(step)
+				}()
+				synctest.Wait()
+				for _, queuedCall := range queued {
+					select {
+					case got := <-responded:
+						if got.call.ID != queuedCall.ID || !errors.Is(got.err, context.Canceled) {
+							t.Errorf("bridge response = %+v, want cancellation for %q", got, queuedCall.ID)
+						}
+					default:
+						t.Errorf("%q was not finalized before joining the started control", queuedCall.ID)
+					}
+				}
+				// Even without a cancelled context, the collector's abandonment
+				// must prevent a late worker from starting destructive work.
+				if err := startScriptDelivery(context.Background(), delivery); !errors.Is(err, context.Canceled) {
+					t.Errorf("abandoned script control could start: %v", err)
+				}
+				close(publish)
+				outcomes := <-settled
+				if len(outcomes) != 3 || outcomes[0].output.Content != "observation" || outcomes[0].err != nil {
+					t.Fatalf("settlement did not retain the observation: %+v", outcomes)
+				}
+			})
+		})
+	}
+}
+
+func TestSyncToolSupervisorCancelledSettleJoinsFinalizedResponses(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		s := newSyncToolSupervisor(context.Background(), true)
+		responding := make(chan struct{}, 2)
+		release := []chan struct{}{make(chan struct{}), make(chan struct{})}
+		for i, gate := range release {
+			call := core.ToolCall{ID: fmt.Sprint(i), Name: "probe"}
+			s.dispatch(call, func(context.Context) toolCallOutcome {
+				return toolCallOutcome{call: call, output: core.TextOutput(call.ID)}
+			}, func(toolCallOutcome) {
+				responding <- struct{}{}
+				<-gate
+			})
+		}
+		<-responding
+		<-responding
+		cancel()
+		settled := make(chan []toolCallOutcome, 1)
+		go func() { settled <- s.settle(ctx) }()
+		close(release[0])
+		synctest.Wait()
+		select {
+		case <-settled:
+			close(release[1])
+			t.Fatal("settlement returned before the last bridge response finished")
+		default:
+		}
+		close(release[1])
+		outcomes := <-settled
+		if len(outcomes) != 2 || outcomes[0].output.Content != "0" || outcomes[1].output.Content != "1" {
+			t.Fatalf("settlement lost already finalized outcomes: %+v", outcomes)
+		}
+	})
 }

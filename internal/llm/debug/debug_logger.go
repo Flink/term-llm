@@ -648,7 +648,7 @@ func convertParts(parts []Part) any {
 				dp.ToolResult = &debugToolResult{
 					ID:      part.ToolResult.ID,
 					Name:    part.ToolResult.Name,
-					Content: part.ToolResult.Content,
+					Content: ToolResultTextContent(part.ToolResult),
 					IsError: part.ToolResult.IsError,
 				}
 			}

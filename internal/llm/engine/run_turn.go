@@ -9,6 +9,7 @@ import (
 	corestream "github.com/term-llm/term-llm/internal/llm/core/stream"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	internalreasoning "github.com/term-llm/term-llm/internal/reasoning"
@@ -51,6 +52,7 @@ type providerTurnFrame struct {
 	providerReplayParts            []core.Part
 	turnMetrics                    core.TurnMetrics
 	syncToolsExecuted              bool
+	hasScriptObservation           bool
 	finishingToolExecuted          bool
 	syncToolCalls                  []core.ToolCall
 	syncToolResults                []core.Message
@@ -80,6 +82,7 @@ func (s *providerTurnSyncTools) ensure() *syncToolSupervisor {
 
 func (s *providerTurnSyncTools) absorb(outcomes []toolCallOutcome) {
 	for _, outcome := range outcomes {
+		s.turn.hasScriptObservation = s.turn.hasScriptObservation || outcome.scriptObservation
 		s.turn.syncToolCalls = append(s.turn.syncToolCalls, outcome.call)
 		s.turn.syncToolResults = append(s.turn.syncToolResults, outcome.message())
 		if s.engine.tools.IsFinishingTool(outcome.call.Name) {
@@ -277,7 +280,7 @@ type engineRunTurnContext struct {
 	sendDone                 func() error
 }
 
-func (e *Engine) runProviderTurn(state *engineRunTurnContext, attempt int) error {
+func (e *Engine) runProviderTurn(state *engineRunTurnContext, attempt int) (returnErr error) {
 	// A retry or a later tool turn must not inherit an earlier finish reason.
 	*state.terminationReason = ""
 	ctx, send := state.ctx, state.send
@@ -328,6 +331,8 @@ func (e *Engine) runProviderTurn(state *engineRunTurnContext, attempt int) error
 		return err
 	}
 
+	closeStream := sync.OnceFunc(func() { _ = stream.Close() })
+	defer closeStream()
 	// Collect tool calls and model output for this provider attempt.
 	turn := &providerTurnFrame{}
 	syncTools := &providerTurnSyncTools{engine: e, ctx: ctx, bridgeCtx: syncBridgeCtx, run: run, turn: turn}
@@ -409,6 +414,7 @@ func (e *Engine) runProviderTurn(state *engineRunTurnContext, attempt int) error
 	recovery := engineTurnRecovery{
 		ctx: ctx, req: &run.req, send: send, attempt: attempt, settleSyncTools: syncTools.settle,
 		toolCalls: &turn.toolCalls, syncToolsExecuted: &turn.syncToolsExecuted, recoveredToolCallIDs: &run.recoveredToolCallIDs,
+		hasScriptObservation: &turn.hasScriptObservation, nextTurn: &run.nextTurn,
 		recoveredToolWork: &run.recoveredToolWork, recoveredAtMessageCount: &run.recoveredAtMessageCount, recoveryPriorErr: &run.recoveryPriorErr,
 		syncToolCalls: &turn.syncToolCalls, syncToolResults: &turn.syncToolResults, preserveInlineToolOrder: preserveInlineToolOrder,
 		inlineSyncParts: &turn.inlineSyncParts, buildOrderedInlineAssistant: buildOrderedInlineAssistant,
@@ -418,6 +424,7 @@ func (e *Engine) runProviderTurn(state *engineRunTurnContext, attempt int) error
 		runID: runID, modelSwitchOrdinal: &run.modelSwitchOrdinal, responseCallback: responseCallback,
 		finishingToolExecuted: &turn.finishingToolExecuted, recoveryCompleted: &turn.recoveryCompleted, sendDone: sendDone,
 	}
+	defer syncTools.journalOnTerminalFailure(e, closeStream, &recovery, &returnErr)
 	retryState := engineUncommittedRetry{
 		send: send, compaction: compaction, recoveredToolWork: &run.recoveredToolWork,
 		toolCalls: &turn.toolCalls, syncToolsExecuted: &turn.syncToolsExecuted,
@@ -426,13 +433,13 @@ func (e *Engine) runProviderTurn(state *engineRunTurnContext, attempt int) error
 	}
 
 	failures := &engineStreamFailureContext{
-		ctx: ctx, req: &run.req, send: send, stream: stream, compaction: compaction,
+		ctx: ctx, req: &run.req, send: send, closeStream: closeStream, compaction: compaction,
 		originalTools: originalTools, originalToolChoice: originalToolChoice,
 		recoveredToolWork: &run.recoveredToolWork, recoveredAtMessageCount: &run.recoveredAtMessageCount,
 		toolCalls: &turn.toolCalls, syncToolCalls: &turn.syncToolCalls, textBuilder: &turn.textBuilder, reasoningBuilder: &turn.reasoningBuilder, syncToolsExecuted: &turn.syncToolsExecuted,
 		scratchpadCommitted: &turn.scratchpadCommitted, scratchpadHasDiscardableOutput: &turn.scratchpadHasDiscardableOutput,
 		finishSyncToolsAfterStreamFailure: syncTools.finishAfterStreamFailure, planner: planner, runID: runID,
-		retry: retryState, recovery: recovery, recoveryCompleted: &turn.recoveryCompleted,
+		retry: retryState, recovery: &recovery, recoveryCompleted: &turn.recoveryCompleted,
 	}
 	toolEvents := &providerTurnToolEvents{
 		engine: e, ctx: ctx, send: send, run: run, turn: turn, syncTools: syncTools,
@@ -606,7 +613,7 @@ func (e *Engine) runProviderTurn(state *engineRunTurnContext, attempt int) error
 		}
 	}
 	syncTools.settle()
-	stream.Close()
+	closeStream()
 	if ctx.Err() == nil {
 		run.providerInFlight = false
 	}
@@ -644,6 +651,7 @@ func (e *Engine) runProviderTurn(state *engineRunTurnContext, attempt int) error
 		return err
 	}
 	if handled, err := e.completeSyncTurn(completion); handled {
+		recovery.syncJournaled = true // completion owns the transcript and callback
 		return err
 	}
 	return e.completeAsyncTurn(completion)

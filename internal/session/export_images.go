@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/term-llm/term-llm/internal/codemode"
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/share"
 	"golang.org/x/image/draw"
@@ -498,10 +499,32 @@ func applyEXIFOrientation(img image.Image, orientation int) image.Image {
 	return dst
 }
 
-// toolResultDisplayedImages returns image sources that clients display beside
-// a tool result without a Markdown reference: legacy image paths (for example
-// image_generate output) and unreferenced image media artifacts.
-func toolResultDisplayedImages(result *core.ToolResult) []exportImageSource {
+// scriptUploadStems matches the engine's content-addressed upload aliases.
+func scriptUploadStems(result *core.ToolResult) map[string]bool {
+	if len(result.Images) == 0 {
+		return nil
+	}
+	switch result.Name {
+	case codemode.LegacyToolName, codemode.ExecToolName, codemode.WaitToolName, codemode.CancelToolName:
+	default:
+		return nil
+	}
+	stems := map[string]bool{}
+	for _, part := range result.ContentParts {
+		if part.Type == core.ToolContentPartImageData && part.ImageData != nil {
+			source := toolContentImageSource(part)
+			if raw, err := readExportImageSource(source); err == nil && len(raw) > 0 {
+				sum := sha256.Sum256(raw)
+				stems["uploaded_image_"+hex.EncodeToString(sum[:16])] = true
+			}
+		}
+	}
+	return stems
+}
+
+// Full transcripts already render ordered image parts. Tool-stripped shares
+// still need their materialized paths, as well as other displayed images.
+func toolResultDisplayedImages(result *core.ToolResult, orderedPartsRendered bool) []exportImageSource {
 	if result == nil {
 		return nil
 	}
@@ -521,8 +544,16 @@ func toolResultDisplayedImages(result *core.ToolResult) []exportImageSource {
 		}
 		add(exportImageSource{Path: item.Path(), MediaType: item.MediaType, Alt: exportMediaAlt(item)})
 	}
+	var aliases map[string]bool
+	if orderedPartsRendered {
+		aliases = scriptUploadStems(result)
+	}
 	for _, path := range result.Images {
-		add(exportImageSource{Path: path, Alt: exportImageAltForTool(result.Name)})
+		clean := filepath.Clean(path)
+		stem := strings.TrimSuffix(filepath.Base(clean), filepath.Ext(clean))
+		if !aliases[stem] || filepath.Base(filepath.Dir(clean)) != "uploads" {
+			add(exportImageSource{Path: path, Alt: exportImageAltForTool(result.Name)})
+		}
 	}
 	return sources
 }

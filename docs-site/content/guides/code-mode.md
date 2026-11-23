@@ -231,6 +231,11 @@ reload. Calling `show_media` without emitting its URL leaves the file out of
 the reply. If an observation’s budget is too small for a complete media URL,
 use a larger `max_output_tokens` on `wait_script`.
 
+A nested `image_generate` saves the file without displaying it. To show it,
+pass the path labeled for publication in the result to `show_media` and emit that tool's
+URL. Use `show_media` instead of the legacy `show_image` in scripts. The
+`image(...)` helper takes an image block or handle, not a local file path.
+
 ### State is session-managed, not durable
 
 ```javascript

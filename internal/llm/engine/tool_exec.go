@@ -4,14 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/term-llm/term-llm/internal/codemode"
-	"github.com/term-llm/term-llm/internal/llm/core"
-	corestream "github.com/term-llm/term-llm/internal/llm/core/stream"
 	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/term-llm/term-llm/internal/codemode"
+	"github.com/term-llm/term-llm/internal/llm/core"
+	corestream "github.com/term-llm/term-llm/internal/llm/core/stream"
 	"github.com/term-llm/term-llm/internal/restart"
 )
 
@@ -19,9 +19,10 @@ import (
 // execution. Both API providers and synchronous CLI bridges adapt this same
 // value to their respective result protocols.
 type toolCallOutcome struct {
-	call   core.ToolCall
-	output core.ToolOutput
-	err    error
+	call              core.ToolCall
+	output            core.ToolOutput
+	err               error
+	scriptObservation bool
 }
 
 func (o toolCallOutcome) message() core.Message {
@@ -65,58 +66,7 @@ func (e *Engine) executeToolCallOutcomes(ctx context.Context, calls []core.ToolC
 		return outcomes, nil
 	}
 
-	type indexedOutcome struct {
-		index   int
-		outcome toolCallOutcome
-	}
-	resultChan := make(chan indexedOutcome, len(calls))
-	workerCount := maxParallelToolWorkers(len(calls))
-	var nextCall atomic.Uint32
-	for worker := 0; worker < workerCount; worker++ {
-		workerCtx, release, err := restart.Child(toolCtx)
-		if err != nil {
-			return nil, err
-		}
-		go func() {
-			defer release()
-			for {
-				if ctx.Err() != nil {
-					return
-				}
-				idx := int(nextCall.Add(1)) - 1
-				if idx >= len(calls) {
-					return
-				}
-				if ctx.Err() != nil {
-					return
-				}
-				resultChan <- indexedOutcome{index: idx, outcome: e.executeSingleToolCallOutcomeSafe(workerCtx, calls[idx], send, debug, debugRaw)}
-			}
-		}()
-	}
-
-	for remaining := len(calls); remaining > 0; remaining-- {
-		select {
-		case result := <-resultChan:
-			outcomes[result.index] = result.outcome
-		case <-ctx.Done():
-			for drained := false; !drained; {
-				select {
-				case result := <-resultChan:
-					outcomes[result.index] = result.outcome
-				default:
-					drained = true
-				}
-			}
-			for i := range outcomes {
-				if outcomes[i].call.ID == "" {
-					outcomes[i] = toolCallOutcome{call: calls[i], err: ctx.Err()}
-				}
-			}
-			return outcomes, nil
-		}
-	}
-	return outcomes, nil
+	return e.executeParallelToolCalls(toolCtx, calls, send, debug, debugRaw, outcomes)
 }
 
 // executeToolCalls executes multiple tool calls, potentially in parallel.
@@ -174,6 +124,16 @@ func (e *Engine) executeToolWithCancellation(ctx context.Context, tool core.Tool
 		return core.ToolOutput{}, err, nil
 	}
 
+	cooperative := cooperativeScriptControl(ctx, tool)
+	if cooperative {
+		delivery, _ := ctx.Value(scriptDeliveryKey{}).(*scriptDelivery)
+		if err := startScriptDelivery(ctx, delivery); err != nil {
+			e.actualSteeringToolDone()
+			release()
+			return core.ToolOutput{}, err, nil
+		}
+	}
+
 	lease, _ := ctx.Value(nestedContextKey{}).(*nestedLease)
 	if lease != nil {
 		lease.started = true
@@ -199,7 +159,7 @@ func (e *Engine) executeToolWithCancellation(ctx context.Context, tool core.Tool
 	case result := <-results:
 		return result.output, result.err, result.panicValue
 	case <-ctx.Done():
-		if tool.Spec().Name == "code_mode" {
+		if cooperative || tool.Spec().Name == codemode.LegacyToolName {
 			result := <-results
 			return result.output, result.err, result.panicValue
 		}
@@ -410,7 +370,7 @@ func (e *Engine) executeSingleToolCallOutcome(ctx context.Context, call core.Too
 		ToolImages:                 eventOutput.Images,
 		ToolMedia:                  append([]core.MediaArtifact(nil), eventOutput.Media...),
 	})
-	return toolCallOutcome{call: call, output: output}
+	return toolCallOutcome{call: call, output: output, scriptObservation: cooperativeScriptControl(toolCtx, tool)}
 }
 
 // toolCallAllowed applies ordinary execution policy. A planner may separately

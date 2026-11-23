@@ -1,7 +1,13 @@
 package session
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"html"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -367,5 +373,110 @@ func TestExportToMarkdownNeverExportsProviderReplay(t *testing.T) {
 	}
 	if strings.Contains(got, "opaque-secret") || strings.Contains(got, "provider_replay") {
 		t.Fatalf("provider replay leaked into export: %q", got)
+	}
+}
+
+func TestExportPreservesOrderedScriptEmissions(t *testing.T) {
+	const receipt = `{"cell_id":"cell-1","status":"completed","state_committed":true}`
+	png := testPNG(t, 4, 4, true)
+	sum := sha256.Sum256(png)
+	dir := t.TempDir()
+	uploads := filepath.Join(dir, "uploads")
+	if err := os.Mkdir(uploads, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	materialized := filepath.Join(uploads, fmt.Sprintf("uploaded_image_%x.png", sum[:16]))
+	legacyPNG := testPNG(t, 5, 4, true)
+	legacySum := sha256.Sum256(legacyPNG)
+	legacy := filepath.Join(uploads, fmt.Sprintf("uploaded_image_%x.png", legacySum[:16]))
+	artifact := filepath.Join(dir, "artifact.png")
+	for path, data := range map[string][]byte{
+		materialized: png,
+		legacy:       legacyPNG,
+		artifact:     testPNG(t, 6, 4, true),
+	} {
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result := &core.ToolResult{
+		ID: "call-1", Name: "spawn_script", Content: receipt, PreserveJSON: true,
+		Images: []string{legacy, materialized},
+		Media:  []core.MediaArtifact{{SourcePath: artifact, MediaType: "image/png", Caption: "Unrelated artifact"}},
+		ContentParts: []core.ToolContentPart{
+			{Type: core.ToolContentPartText, Text: "before the image"},
+			{Type: core.ToolContentPartImageData, ImageData: &core.ToolImageData{
+				MediaType: "image/png", Base64: base64.StdEncoding.EncodeToString(png), Width: 4, Height: 4,
+			}},
+			{Type: core.ToolContentPartText, Text: "\nafter the image"},
+			{Type: core.ToolContentPartText, Text: "\n" + receipt},
+		},
+	}
+	sess := &Session{ID: "script-export"}
+	toolMessage := Message{Role: core.RoleTool, Parts: []core.Part{{Type: core.PartToolResult, ToolResult: result}}}
+	stripped, _ := StripToolActivity([]Message{toolMessage})
+	if len(stripped) != 1 || len(stripped[0].Parts) != 3 || stripped[0].Parts[2].ImagePath != materialized {
+		t.Fatalf("tool-stripped share lost the materialized image: %#v", stripped)
+	}
+	for _, tc := range []struct {
+		name     string
+		messages []Message
+	}{
+		{"matched", []Message{
+			{Role: core.RoleAssistant, Parts: []core.Part{{Type: core.PartToolCall, ToolCall: &core.ToolCall{ID: result.ID, Name: result.Name}}}},
+			toolMessage,
+		}},
+		{"orphan", []Message{toolMessage}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files, err := ShareBundle(sess, tc.messages, ExportOptions{Images: ExportImagesAssets, AssetMediaTypes: []string{"image/png"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			inline, err := ExportToHTML(sess, tc.messages, ExportOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			outputs := map[string]string{
+				"local Markdown": ExportToMarkdown(sess, tc.messages, ExportOptions{}),
+				"inline HTML":    inline,
+			}
+			for _, file := range files {
+				if file.Name == "index.html" || file.Name == "session.md" {
+					outputs[file.Name] = string(file.Content)
+				}
+			}
+			for _, output := range []struct{ name, image, receipt, imageRef, artifactRef, legacyRef string }{
+				{"local Markdown", "Tool image omitted", receipt, "Tool image omitted", "", ""},
+				{"session.md", "![Tool image](assets/", receipt, "](assets/", "![Unrelated artifact](assets/", "![Image](assets/"},
+				{"index.html", `alt="Tool image"`, html.EscapeString(receipt), `src="assets/`, `alt="Unrelated artifact"`, `alt="Image"`},
+				{"inline HTML", `alt="Tool image"`, html.EscapeString(receipt), `src="data:image/png;base64,`, `alt="Unrelated artifact"`, `alt="Image"`},
+			} {
+				t.Run(output.name, func(t *testing.T) {
+					text := outputs[output.name]
+					wantImages := 1
+					if output.artifactRef != "" {
+						wantImages = 3
+					}
+					if n := strings.Count(text, output.imageRef); n != wantImages {
+						t.Errorf("got %d image references; want %d", n, wantImages)
+					}
+					if n := strings.Count(text, output.receipt); n != 1 {
+						t.Errorf("receipt appears %d times; want once", n)
+					}
+					wantOrder := []string{"before the image", output.image, "after the image", output.receipt}
+					if output.artifactRef != "" {
+						wantOrder = append(wantOrder, output.artifactRef, output.legacyRef)
+					}
+					for _, want := range wantOrder {
+						_, rest, ok := strings.Cut(text, want)
+						if !ok {
+							t.Fatalf("missing or out-of-order output %q", want)
+						}
+						text = rest
+					}
+				})
+			}
+		})
 	}
 }

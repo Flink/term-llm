@@ -238,8 +238,9 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args json.RawMessage) (
 	// output.Images out-of-band and owns rendering the image artifact. Avoid
 	// returning a public web image URL here, otherwise models tend to embed the
 	// same image again in markdown after the client already displayed it.
-	output := core.ToolOutput{Content: t.describeImageResult(a, result, provider.Name(), outputPath, servedPath, width, height)}
-	if showImage {
+	nested := core.IsNestedCodeModeCall(ctx)
+	output := core.ToolOutput{Content: t.describeImageResult(a, result, provider.Name(), outputPath, servedPath, width, height, nested)}
+	if showImage && !nested {
 		output.Images = []string{servedPath}
 	}
 
@@ -483,9 +484,12 @@ func (t *ImageGenerateTool) saveImageResult(a ImageGenerateArgs, result *image.I
 }
 
 // describeImageResult builds the model-facing result text for a saved image.
-func (t *ImageGenerateTool) describeImageResult(a ImageGenerateArgs, result *image.ImageResult, providerName, outputPath, servedPath string, width, height int) string {
+func (t *ImageGenerateTool) describeImageResult(a ImageGenerateArgs, result *image.ImageResult, providerName, outputPath, servedPath string, width, height int, nested bool) string {
 	var sb strings.Builder
-	if t.serveMode {
+	if nested {
+		fmt.Fprintf(&sb, "Generated image saved to: %s\n", outputPath)
+		fmt.Fprintf(&sb, "The image was not displayed. To show it, pass this path to show_media and emit its returned URL: %s\n", servedPath)
+	} else if t.serveMode {
 		sb.WriteString("Generated image successfully.\n")
 		sb.WriteString("The image has already been displayed to the user by the client UI.\n")
 	} else {

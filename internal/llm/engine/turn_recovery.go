@@ -17,6 +17,9 @@ type engineTurnRecovery struct {
 	settleSyncTools                            func()
 	toolCalls                                  *[]core.ToolCall
 	syncToolsExecuted                          *bool
+	syncJournaled                              bool
+	hasScriptObservation                       *bool
+	nextTurn                                   *int
 	recoveredToolCallIDs                       *map[string]bool
 	recoveredToolWork                          *bool
 	recoveredAtMessageCount                    *int
@@ -40,6 +43,13 @@ type engineTurnRecovery struct {
 	finishingToolExecuted                      *bool
 	recoveryCompleted                          *bool
 	sendDone                                   func() error
+}
+
+// advanceCommittedTurn records the boundary before callbacks or any subsequent
+// cancellation can checkpoint it. First-turn search has already been spent.
+func (r *engineTurnRecovery) advanceCommittedTurn(req *core.Request) {
+	*r.nextTurn = r.attempt + 1
+	req.Search = false
 }
 
 func (e *Engine) recoverCommittedTurn(r *engineTurnRecovery, cause error) (bool, error) {
@@ -128,6 +138,7 @@ func (e *Engine) recoverCommittedTurn(r *engineTurnRecovery, cause error) (bool,
 		compaction.maybeAfterResponse(append([]core.Message{assistantMsg}, syncToolResults...))
 		req.Messages = append(req.Messages, assistantMsg)
 		req.Messages = append(req.Messages, syncToolResults...)
+		r.advanceCommittedTurn(&req)
 		recoveredAtMessageCount = len(req.Messages)
 		if turnCallback != nil {
 			turnMetrics.ToolCalls = len(syncToolCalls)
@@ -136,6 +147,10 @@ func (e *Engine) recoverCommittedTurn(r *engineTurnRecovery, cause error) (bool,
 			cbCtx, cancel := callbackContext(ctx)
 			_ = turnCallback(cbCtx, attempt, turnMessages, turnMetrics)
 			cancel()
+		}
+		r.syncJournaled = true
+		if err := ctx.Err(); err != nil {
+			return false, err
 		}
 		if err := e.applyPendingRequestModelSwitch(ctx, &req, send, runID, &modelSwitchOrdinal, attempt+1); err != nil {
 			return false, err
@@ -262,6 +277,7 @@ func (e *Engine) recoverCommittedTurn(r *engineTurnRecovery, cause error) (bool,
 
 	req.Messages = append(req.Messages, assistantMsg)
 	req.Messages = append(req.Messages, toolResults...)
+	r.advanceCommittedTurn(&req)
 	recoveredAtMessageCount = len(req.Messages)
 	if turnCallback != nil {
 		turnMetrics.ToolCalls = len(registered)

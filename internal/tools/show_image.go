@@ -129,6 +129,10 @@ func (t *ShowImageTool) Execute(ctx context.Context, args json.RawMessage) (core
 		sb.WriteString(fmt.Sprintf("Focus: %s\n", a.Prompt))
 	}
 
+	if core.IsNestedCodeModeCall(ctx) {
+		sb.WriteString("The image was not displayed. Call show_media with this file and emit its returned URL to show it.\n")
+		return core.TextOutput(sb.String()), nil
+	}
 	return core.ToolOutput{
 		Content: sb.String(),
 		Images:  []string{a.FilePath},

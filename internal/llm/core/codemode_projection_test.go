@@ -89,7 +89,7 @@ func TestControlProjectionKeepsImagesIdentityAndCancelSuccess(t *testing.T) {
 func TestCodeModeProjectionFiltersMediaOutsideRetainedEmissions(t *testing.T) {
 	kept := MediaArtifact{Reference: strings.Repeat("a", 32), StoredPath: "/private/kept.png"}
 	clipped := MediaArtifact{Reference: strings.Repeat("b", 32), StoredPath: "/private/clipped.png"}
-	keptURL := CodeModeMediaURLPrefix + kept.Reference
+	keptURL := CodeModeMediaURLPrefix + strings.ToUpper(kept.Reference)
 	clippedURL := CodeModeMediaURLPrefix + clipped.Reference
 	for _, legacy := range []bool{false, true} {
 		// The clipped URL also occurs in the receipt; that copy must not grant it.

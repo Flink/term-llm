@@ -18,7 +18,7 @@ func TestChildEngineDoesNotInheritScriptExecutionOverride(t *testing.T) {
 		parentCalls.Add(1)
 		return core.TextOutput("wrong parent execution"), nil
 	}}
-	ctx := context.WithValue(context.Background(), nestedContextKey{}, parentLease)
+	ctx := core.ContextWithNestedCodeModeCall(context.WithValue(context.Background(), nestedContextKey{}, parentLease))
 	ctx = context.WithValue(ctx, nestedToolOverrideKey{}, core.Tool(parentTool))
 	ctx = core.ContextWithCodeModeToolPause(ctx, func() (func() error, error) {
 		t.Error("child used parent's permit parking hook")
@@ -28,7 +28,7 @@ func TestChildEngineDoesNotInheritScriptExecutionOverride(t *testing.T) {
 	provider.AddToolCall("child-call", "child-leaf", map[string]any{}).AddTextResponse("done")
 	e := NewEngine(provider, nil)
 	if err := e.RegisterTool(codeTestTool{name: "child-leaf", run: func(ctx context.Context, _ json.RawMessage) (core.ToolOutput, error) {
-		if nestedExecution(ctx) || nestedParent(ctx) != "" {
+		if nestedExecution(ctx) || nestedParent(ctx) != "" || core.IsNestedCodeModeCall(ctx) {
 			t.Error("child tool retained parent script attribution")
 		}
 		resume, err := core.PauseCodeModeTool(ctx)

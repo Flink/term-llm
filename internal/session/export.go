@@ -1,8 +1,8 @@
 package session
 
 import (
-	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/formatutil"
@@ -32,10 +32,7 @@ type ExportOptions struct {
 
 // escapeTableCell escapes special characters for markdown table cells.
 func escapeTableCell(s string) string {
-	// Replace pipe characters and newlines which break tables
-	s = strings.ReplaceAll(s, "|", "\\|")
-	s = strings.ReplaceAll(s, "\n", " ")
-	return s
+	return strings.NewReplacer("|", "\\|", "\n", " ").Replace(s)
 }
 
 // ExportToMarkdown exports a session and its messages to a pretty markdown format.
@@ -50,20 +47,9 @@ func ExportToMarkdown(sess *Session, messages []Message, opts ExportOptions) str
 // historical text-only local export.
 func exportToMarkdown(sess *Session, messages []Message, opts ExportOptions, images *exportImages) string {
 	var b strings.Builder
-	mediaReferences := htmlMediaReferences(VisibleExportMessages(messages), opts.Media)
+	messages = VisibleExportMessages(messages)
+	mediaReferences := htmlMediaReferences(messages, opts.Media)
 	assets := images.assetsMode()
-	writeImage := func(target *strings.Builder, source exportImageSource) {
-		resolved := images.resolve(source)
-		alt := source.Alt
-		if alt == "" {
-			alt = "Image"
-		}
-		if resolved.Omitted {
-			fmt.Fprintf(target, "_%s omitted — %s._\n\n", escapeTableCell(alt), resolved.Reason)
-			return
-		}
-		fmt.Fprintf(target, "![%s](%s)\n\n", escapeMarkdownImageAlt(alt), resolved.URL)
-	}
 	rewriteText := func(text string) string {
 		if images == nil {
 			return replaceMarkdownAudioReferences(text, mediaReferences)
@@ -74,91 +60,55 @@ func exportToMarkdown(sess *Session, messages []Message, opts ExportOptions, ima
 		return replaceHTMLMediaReferences(text, mediaReferences, images)
 	}
 
-	// Title
 	title := sess.PreferredShortTitle()
 	if title == "" {
 		title = ShortID(sess.ID)
 	}
+	heading := "Session"
 	if opts.ResponseOnly {
-		b.WriteString(fmt.Sprintf("# Assistant response: %s\n\n", escapeTableCell(title)))
-	} else {
-		b.WriteString(fmt.Sprintf("# Session: %s\n\n", escapeTableCell(title)))
+		heading = "Assistant response"
 	}
+	fmt.Fprintf(&b, "# %s: %s\n\n", heading, escapeTableCell(title))
 
-	// Header with link
 	b.WriteString("> Exported from [term-llm](https://github.com/term-llm/term-llm)\n\n")
 
 	if !opts.ResponseOnly {
-		// Setup section
-		b.WriteString("## Setup\n\n")
-		b.WriteString("| | |\n")
-		b.WriteString("|---|---|\n")
-
-		// Agent (if set)
+		b.WriteString("## Setup\n\n| | |\n|---|---|\n")
 		if sess.Agent != "" {
 			b.WriteString(fmt.Sprintf("| **Agent** | %s |\n", escapeTableCell(sess.Agent)))
 		}
+		fmt.Fprintf(&b, "| **Provider** | %s |\n| **Model** | %s |\n", escapeTableCell(sess.Provider), escapeTableCell(sess.Model))
 
-		// Provider and model
-		b.WriteString(fmt.Sprintf("| **Provider** | %s |\n", escapeTableCell(sess.Provider)))
-		b.WriteString(fmt.Sprintf("| **Model** | %s |\n", escapeTableCell(sess.Model)))
-
-		// Mode
 		mode := string(sess.Mode)
 		if mode == "" {
 			mode = "chat"
 		}
-		b.WriteString(fmt.Sprintf("| **Mode** | %s |\n", mode))
-
-		// Created at
-		b.WriteString(fmt.Sprintf("| **Created** | %s |\n", sess.CreatedAt.UTC().Format("2006-01-02 15:04 UTC")))
-
-		// Working directory
+		fmt.Fprintf(&b, "| **Mode** | %s |\n| **Created** | %s |\n", mode, sess.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"))
 		if sess.CWD != "" {
 			b.WriteString(fmt.Sprintf("| **Working Directory** | `%s` |\n", escapeTableCell(sess.CWD)))
 		}
 
 		b.WriteString("\n")
 
-		// Tools (if set)
 		if sess.Tools != "" {
-			b.WriteString("<details>\n")
-			b.WriteString("<summary>Tools</summary>\n\n")
-			b.WriteString(sess.Tools)
-			b.WriteString("\n\n</details>\n\n")
+			fmt.Fprintf(&b, "<details>\n<summary>Tools</summary>\n\n%s\n\n</details>\n\n", sess.Tools)
 		}
-
-		// MCP servers (if set)
 		if sess.MCP != "" {
-			b.WriteString("<details>\n")
-			b.WriteString("<summary>MCP Servers</summary>\n\n")
-			b.WriteString(sess.MCP)
-			b.WriteString("\n\n</details>\n\n")
+			fmt.Fprintf(&b, "<details>\n<summary>MCP Servers</summary>\n\n%s\n\n</details>\n\n", sess.MCP)
 		}
 	}
 
 	if !opts.Partial && !opts.ResponseOnly {
-		// Metrics section
-		b.WriteString("## Metrics\n\n")
-		b.WriteString("| Turns | Tool Calls | Tokens |\n")
-		b.WriteString("|-------|------------|--------|\n")
-		tokens := formatTokens(sess.InputTokens, sess.OutputTokens)
-		b.WriteString(fmt.Sprintf("| %d user / %d LLM | %d | %s |\n\n",
-			sess.UserTurns, sess.LLMTurns, sess.ToolCalls, tokens))
+		fmt.Fprintf(&b, "## Metrics\n\n| Turns | Tool Calls | Tokens |\n|-------|------------|--------|\n| %d user / %d LLM | %d | %s |\n\n",
+			sess.UserTurns, sess.LLMTurns, sess.ToolCalls, formatTokens(sess.InputTokens, sess.OutputTokens))
 	}
 
 	if !opts.ResponseOnly {
-		b.WriteString("---\n\n")
-		b.WriteString("## Conversation\n\n")
+		b.WriteString("---\n\n## Conversation\n\n")
 	}
 
-	// Track tool calls to pair with their results
-	// We buffer tool calls and only render when we have the result
+	// Pair calls with results as they arrive.
 	toolCalls := make(map[string]*core.ToolCall)
-
-	// Buffer for pending content within an assistant turn
-	// Tool calls are rendered inline when their results arrive
-	var pendingText strings.Builder
 	var pendingToolCalls []*core.ToolCall
 	inAssistantTurn := false
 
@@ -166,15 +116,10 @@ func exportToMarkdown(sess *Session, messages []Message, opts ExportOptions, ima
 		if !inAssistantTurn {
 			return
 		}
-		// Write any buffered text
-		if pendingText.Len() > 0 {
-			b.WriteString(pendingText.String())
-			pendingText.Reset()
-		}
 		// Write any orphan tool calls (no results received)
 		for _, tc := range pendingToolCalls {
 			if _, exists := toolCalls[tc.ID]; exists {
-				writeToolCall(&b, tc, nil)
+				writeToolCall(&b, tc, nil, nil)
 				delete(toolCalls, tc.ID)
 			}
 		}
@@ -183,28 +128,22 @@ func exportToMarkdown(sess *Session, messages []Message, opts ExportOptions, ima
 		inAssistantTurn = false
 	}
 
-	for _, msg := range VisibleExportMessages(messages) {
-		// Skip system messages unless explicitly included
+	for _, msg := range messages {
 		if msg.Role == core.RoleSystem {
 			if opts.IncludeSystem {
 				flushAssistant()
-				b.WriteString("### System\n\n")
-				b.WriteString(replaceMarkdownAudioReferences(msg.TextContent, mediaReferences))
-				b.WriteString("\n\n---\n\n")
+				fmt.Fprintf(&b, "### System\n\n%s\n\n---\n\n", replaceMarkdownAudioReferences(msg.TextContent, mediaReferences))
 			}
 			continue
 		}
 
-		// Handle user messages
 		if msg.Role == core.RoleUser {
 			flushAssistant()
-			b.WriteString("### User\n\n")
-			b.WriteString(replaceMarkdownAudioReferences(msg.TextContent, mediaReferences))
-			b.WriteString("\n\n")
+			fmt.Fprintf(&b, "### User\n\n%s\n\n", replaceMarkdownAudioReferences(msg.TextContent, mediaReferences))
 			if assets {
 				for _, part := range msg.Parts {
 					if part.Type == core.PartImage {
-						writeImage(&b, partImageSource(part, "Attached image"))
+						writeMarkdownExportImage(&b, images, partImageSource(part, "Attached image"))
 					}
 				}
 			}
@@ -212,7 +151,6 @@ func exportToMarkdown(sess *Session, messages []Message, opts ExportOptions, ima
 			continue
 		}
 
-		// Handle assistant messages
 		if msg.Role == core.RoleAssistant {
 			flushAssistant()
 			inAssistantTurn = true
@@ -221,15 +159,15 @@ func exportToMarkdown(sess *Session, messages []Message, opts ExportOptions, ima
 			for _, part := range msg.Parts {
 				if part.Type == core.PartText {
 					if rendered := RenderExportReasoning(part, opts); rendered != "" {
-						pendingText.WriteString(rendered)
+						b.WriteString(rendered)
 					}
 					if part.Text != "" {
-						pendingText.WriteString(rewriteText(part.Text))
-						pendingText.WriteString("\n\n")
+						b.WriteString(rewriteText(part.Text))
+						b.WriteString("\n\n")
 					}
 				}
 				if part.Type == core.PartImage && assets {
-					writeImage(&pendingText, partImageSource(part, "Image"))
+					writeMarkdownExportImage(&b, images, partImageSource(part, "Image"))
 				}
 				if part.Type == core.PartToolCall && part.ToolCall != nil {
 					pendingToolCalls = append(pendingToolCalls, part.ToolCall)
@@ -239,41 +177,25 @@ func exportToMarkdown(sess *Session, messages []Message, opts ExportOptions, ima
 			continue
 		}
 
-		// Handle tool results - render tool call with result inline
 		if msg.Role == core.RoleTool {
-			// First flush any pending text before tool results
-			if pendingText.Len() > 0 {
-				b.WriteString(pendingText.String())
-				pendingText.Reset()
-			}
 
 			for _, part := range msg.Parts {
-				if part.Type == core.PartToolResult && part.ToolResult != nil {
-					// Find the matching tool call
-					tc := toolCalls[part.ToolResult.ID]
-					if tc != nil {
-						// Write tool call with result
-						writeToolCall(&b, tc, part.ToolResult)
-						delete(toolCalls, part.ToolResult.ID)
-						if assets {
-							for _, source := range toolResultDisplayedImages(part.ToolResult) {
-								writeImage(&b, source)
-							}
-						}
-					} else {
-						// Orphan tool result (shouldn't happen, but handle gracefully)
-						b.WriteString("<details>\n")
-						b.WriteString(fmt.Sprintf("<summary>%s (result)</summary>\n\n", part.ToolResult.Name))
-						b.WriteString("**Result:**\n```\n")
-						b.WriteString(part.ToolResult.Content)
-						b.WriteString("\n```\n\n</details>\n\n")
+				result := part.ToolResult
+				if part.Type != core.PartToolResult || result == nil {
+					continue
+				}
+				call := toolCalls[result.ID]
+				writeToolCall(&b, call, result, images)
+				delete(toolCalls, result.ID)
+				if assets {
+					for _, source := range toolResultDisplayedImages(result, true) {
+						writeMarkdownExportImage(&b, images, source)
 					}
 				}
 			}
 		}
 	}
 
-	// Flush any remaining assistant content
 	flushAssistant()
 
 	return b.String()
@@ -322,36 +244,17 @@ func RenderExportReasoning(part core.Part, opts ExportOptions) string {
 }
 
 // writeToolCall writes a tool call with optional result in a collapsible block.
-func writeToolCall(b *strings.Builder, tc *core.ToolCall, result *core.ToolResult) {
+func writeToolCall(b *strings.Builder, tc *core.ToolCall, result *core.ToolResult, images *exportImages) {
 	b.WriteString("<details>\n")
-	b.WriteString(fmt.Sprintf("<summary>%s</summary>\n\n", tc.Name))
-
-	// Write arguments as JSON
-	b.WriteString("```json\n")
-	// Pretty print the JSON arguments
-	var prettyArgs interface{}
-	if err := json.Unmarshal(tc.Arguments, &prettyArgs); err == nil {
-		if pretty, err := json.MarshalIndent(prettyArgs, "", "  "); err == nil {
-			b.Write(pretty)
-		} else {
-			b.Write(tc.Arguments)
-		}
+	if tc != nil {
+		fmt.Fprintf(b, "<summary>%s</summary>\n\n", tc.Name)
+		writeMarkdownToolCode(b, prettyJSON(tc.Arguments), "json")
 	} else {
-		b.Write(tc.Arguments)
+		fmt.Fprintf(b, "<summary>%s (result)</summary>\n\n", result.Name)
 	}
-	b.WriteString("\n```\n\n")
-
-	// Write result if provided
 	if result != nil {
-		if result.IsError {
-			b.WriteString("**Error:**\n```\n")
-		} else {
-			b.WriteString("**Result:**\n```\n")
-		}
-		b.WriteString(result.Content)
-		b.WriteString("\n```\n\n")
+		writeMarkdownToolResult(b, result, images)
 	}
-
 	b.WriteString("</details>\n\n")
 }
 
@@ -367,4 +270,72 @@ func formatTokens(input, output int) string {
 // same compact token formatter as terminal surfaces.
 func formatCount(n int) string {
 	return strings.Replace(formatutil.FormatTokens(int64(n)), "k", "K", 1)
+}
+
+// Structured text is authoritative when present. In particular, scripts
+// already put their scalar receipt at the end of the ordered parts. Keep the
+// scalar fallback for legacy and image-only results without structured text.
+func exportToolResultParts(result *core.ToolResult) []core.ToolContentPart {
+	parts := result.ContentParts
+	if result.Content != "" && !slices.ContainsFunc(parts, func(part core.ToolContentPart) bool {
+		return part.Type == core.ToolContentPartText && part.Text != ""
+	}) {
+		return append([]core.ToolContentPart{{Type: core.ToolContentPartText, Text: result.Content}}, parts...)
+	}
+	return parts
+}
+
+func toolContentImageSource(part core.ToolContentPart) exportImageSource {
+	source := exportImageSource{Alt: "Tool image"}
+	if part.ImageData != nil {
+		source.MediaType = part.ImageData.MediaType
+		source.Base64 = part.ImageData.Base64
+	}
+	return source
+}
+
+func writeMarkdownToolResult(b *strings.Builder, result *core.ToolResult, images *exportImages) {
+	if result.IsError {
+		b.WriteString("**Error:**\n")
+	} else {
+		b.WriteString("**Result:**\n")
+	}
+	for _, part := range exportToolResultParts(result) {
+		switch part.Type {
+		case core.ToolContentPartText:
+			if part.Text != "" {
+				writeMarkdownToolCode(b, part.Text, "")
+			}
+		case core.ToolContentPartImageData:
+			if images.assetsMode() {
+				writeMarkdownExportImage(b, images, toolContentImageSource(part))
+			} else {
+				b.WriteString("\n_Tool image omitted._\n\n")
+			}
+		}
+	}
+}
+
+// Emitted text may contain Markdown fences. Keep it inside the code block.
+func writeMarkdownToolCode(b *strings.Builder, text, language string) {
+	longest, run := 2, 0
+	for i := 0; i < len(text); i++ {
+		if text[i] == '`' {
+			run++
+			longest = max(longest, run)
+		} else {
+			run = 0
+		}
+	}
+	fence := strings.Repeat("`", longest+1)
+	fmt.Fprintf(b, "%s%s\n%s\n%s\n\n", fence, language, text, fence)
+}
+
+func writeMarkdownExportImage(target *strings.Builder, images *exportImages, source exportImageSource) {
+	image := buildHTMLImage(images, source)
+	if image.Omitted {
+		fmt.Fprintf(target, "_%s omitted — %s._\n\n", escapeTableCell(image.Alt), image.Reason)
+		return
+	}
+	fmt.Fprintf(target, "![%s](%s)\n\n", escapeMarkdownImageAlt(image.Alt), image.URL)
 }

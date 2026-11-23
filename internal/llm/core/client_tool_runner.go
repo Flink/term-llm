@@ -54,6 +54,7 @@ func ScopeClientToolRunner(ctx context.Context, tools []ToolSpec) context.Contex
 	ctx = context.WithValue(ctx, codeModeCellKey{}, struct{}{})
 	ctx = context.WithValue(ctx, codeModeControllerKey{}, struct{}{})
 	ctx = context.WithValue(ctx, codeModePauseKey{}, struct{}{})
+	ctx = context.WithValue(ctx, nestedCodeModeCallKey{}, false)
 	runner := clientToolRunnerFromContext(ctx)
 	if runner == nil {
 		return ctx
