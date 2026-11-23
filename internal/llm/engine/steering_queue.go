@@ -445,6 +445,15 @@ func (e *Engine) continueWithSteering(ctx context.Context, send corestream.Sende
 	if len(finalMsg.Parts) > 0 {
 		req.Messages = append(req.Messages, finalMsg)
 	}
+	err := appendTurnSteering(ctx, send, req, turnCallback, attempt, steering)
+	return err == nil, err
+}
+
+// appendTurnSteering persists and publishes steering already committed by the queue.
+func appendTurnSteering(ctx context.Context, send corestream.Sender, req *core.Request, turnCallback TurnCompletedCallback, attempt int, steering []queuedSteering) error {
+	if len(steering) == 0 {
+		return nil
+	}
 	steeringMsgs := make([]core.Message, 0, len(steering))
 	for _, steering := range steering {
 		steeringMsg := steering.Message
@@ -463,8 +472,8 @@ func (e *Engine) continueWithSteering(ctx context.Context, send corestream.Sende
 			text = core.MessageText(steering.Message)
 		}
 		if err := send.Send(core.Event{Type: core.EventSteering, Text: text, SteeringID: steering.ID, Message: steering.Message, SteeringStatus: core.SteeringCommitted}); err != nil {
-			return false, err
+			return err
 		}
 	}
-	return true, nil
+	return nil
 }

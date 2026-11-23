@@ -17,8 +17,9 @@ import (
 )
 
 var (
-	errEngineTurnAdvance = errors.New("advance engine turn")
-	errEngineTurnRetry   = errors.New("retry engine turn")
+	errEngineTurnAdvance    = errors.New("advance engine turn")
+	errEngineTurnRetry      = errors.New("retry engine turn")
+	errEngineReplayFollowup = fmt.Errorf("%w after replay-only output", errEngineTurnAdvance)
 )
 
 // providerTurnRunFrame owns values that survive helper calls during one
@@ -276,13 +277,14 @@ type engineRunTurnContext struct {
 	activeSyncTools          **syncToolSupervisor
 	nextTurn                 *int
 	providerInFlight         *bool
-	terminationReason        *string
+	doneEvent                *core.Event
+	replayFollowup           bool
 	sendDone                 func() error
 }
 
 func (e *Engine) runProviderTurn(state *engineRunTurnContext, attempt int) (returnErr error) {
-	// A retry or a later tool turn must not inherit an earlier finish reason.
-	*state.terminationReason = ""
+	// A retry or a later tool turn must not inherit an earlier completion.
+	*state.doneEvent = core.Event{Type: core.EventDone}
 	ctx, send := state.ctx, state.send
 	run := &providerTurnRunFrame{
 		req: *state.req, forcedChoice: *state.forcedChoice,
@@ -467,6 +469,7 @@ func (e *Engine) runProviderTurn(state *engineRunTurnContext, attempt int) (retu
 			turn.observeInlineReasoning(event)
 		}
 		if event.Type == core.EventAttemptDiscard {
+			*state.doneEvent = core.Event{Type: core.EventDone}
 			turn.textBuilder.Reset()
 			turn.reasoningBuilder.Reset()
 			turn.reasoningTextItemID = ""
@@ -604,7 +607,7 @@ func (e *Engine) runProviderTurn(state *engineRunTurnContext, attempt int) (retu
 			continue
 		}
 		if event.Type == core.EventDone {
-			*state.terminationReason = event.TerminationReason
+			*state.doneEvent = event
 			continue
 		}
 		e.observeReportedContext(event)
@@ -637,6 +640,7 @@ func (e *Engine) runProviderTurn(state *engineRunTurnContext, attempt int) (retu
 		modelSwitchOrdinal: &run.modelSwitchOrdinal, nextTurn: &run.nextTurn, forcedChoice: &run.forcedChoice,
 		originalToolChoice: originalToolChoice, originalTools: originalTools, turnCallback: turnCallback,
 		responseCallback: responseCallback, compaction: compaction, sendDone: sendDone, task: task,
+		hasFinalAnswer: state.doneEvent.HasFinalAnswer, replayFollowup: state.replayFollowup,
 		checkpointErr: state.checkpointErr, baseMessageCount: baseMessageCount, toolCalls: turn.toolCalls,
 		syncToolCalls: turn.syncToolCalls, syncToolResults: turn.syncToolResults, textBuilder: &turn.textBuilder,
 		reasoningBuilder: &turn.reasoningBuilder, reasoningSummaryParts: turn.reasoningSummaryParts,

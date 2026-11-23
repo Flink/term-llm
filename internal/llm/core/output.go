@@ -263,6 +263,9 @@ type Event struct {
 	// TerminationReason is the raw provider finish/stop reason (or terminal
 	// status for protocols such as Responses). Empty means not supplied.
 	TerminationReason string
+	// HasFinalAnswer on EventDone means the provider explicitly completed a
+	// top-level assistant answer, even if it contains no visible text.
+	HasFinalAnswer bool `json:",omitempty"`
 	// ProviderTurnIndex identifies the zero-based engine turn that emitted model
 	// output. ProviderTurnIndexSet distinguishes the first turn from events that
 	// originate outside the engine loop and carry no turn identity.

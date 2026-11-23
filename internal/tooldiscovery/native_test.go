@@ -80,7 +80,11 @@ func TestNativeStrategyOrchestratesDiscoveryWithoutTopLevelSchemaMutation(t *tes
 	manager := startDiscoveryTestManager(t)
 	defer manager.StopAll()
 	provider := &nativeScriptProvider{supported: true, turns: []nativeScriptTurn{
-		{events: []core.Event{{Type: core.EventDiscoveryCall, DiscoveryCall: &core.ToolDiscoveryCall{ID: "search-1", Arguments: json.RawMessage(`{"tool_names":["special_action"]}`)}}}},
+		{events: []core.Event{
+			{Type: core.EventDiscoveryCall, DiscoveryCall: &core.ToolDiscoveryCall{ID: "search-1", Arguments: json.RawMessage(`{"tool_names":["special_action"]}`)}},
+			// The client still owes the discovery result, even alongside an empty final.
+			{Type: core.EventDone, HasFinalAnswer: true},
+		}},
 		{events: []core.Event{{Type: core.EventToolCall, Tool: &core.ToolCall{ID: "external-1", Namespace: "federation", ChildName: "special_action", Arguments: json.RawMessage(`{"project_id":"P-42"}`)}}}},
 		{events: []core.Event{{Type: core.EventTextDelta, Text: "done"}}},
 	}}

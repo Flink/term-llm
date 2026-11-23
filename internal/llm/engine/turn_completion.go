@@ -39,32 +39,27 @@ type engineTurnCompletion struct {
 	buildOrderedInlineAssistant                                       func([]core.Part) core.Message
 	finishingToolExecuted, preserveInlineToolOrder, syncToolsExecuted bool
 	inlineToolLoop                                                    bool
+	hasFinalAnswer, replayFollowup                                    bool
 	recoveredToolWork                                                 bool
 	recoveryPriorErr, uncommittedPriorErr                             error
 }
 
 func (e *Engine) completeTextTurn(c *engineTurnCompletion) (bool, error) {
-	ctx, send, req := c.ctx, c.send, *c.req
-	attempt, maxTurns, runID := c.attempt, c.maxTurns, c.runID
-	modelSwitchOrdinal, nextTurn := *c.modelSwitchOrdinal, *c.nextTurn
+	send, req := c.send, *c.req
 	forcedChoice := *c.forcedChoice
 	originalToolChoice, originalTools := c.originalToolChoice, c.originalTools
-	turnCallback := c.turnCallback
-	compaction, sendDone := c.compaction, c.sendDone
+	compaction := c.compaction
 	compaction.req = &req
 	toolCalls := c.toolCalls
 	textBuilder, reasoningBuilder := c.textBuilder, c.reasoningBuilder
 	reasoningSummaryParts, reasoningItemID := c.reasoningSummaryParts, c.reasoningItemID
 	reasoningEncryptedContent, reasoningKind := c.reasoningEncryptedContent, c.reasoningKind
 	providerReplayParts := c.providerReplayParts
-	turnMetrics := c.turnMetrics
 	syncToolsExecuted := c.syncToolsExecuted
 	recoveredToolWork := c.recoveredToolWork
 	recoveryPriorErr, uncommittedPriorErr := c.recoveryPriorErr, c.uncommittedPriorErr
 	defer func() {
 		*c.req = req
-		*c.modelSwitchOrdinal = modelSwitchOrdinal
-		*c.nextTurn = nextTurn
 		*c.forcedChoice = forcedChoice
 		compaction.req = c.req
 	}()
@@ -81,11 +76,14 @@ func (e *Engine) completeTextTurn(c *engineTurnCompletion) (bool, error) {
 		forcedChoice = forcedChoiceSpent
 	}
 	if len(toolCalls) == 0 && !syncToolsExecuted {
-		if recoveredToolWork && textBuilder.Len() == 0 && reasoningBuilder.Len() == 0 && len(reasoningSummaryParts) == 0 && reasoningItemID == "" && reasoningEncryptedContent == "" && len(providerReplayParts) == 0 && recoveryPriorErr != nil {
-			return true, recoveryPriorErr
-		}
-		if uncommittedPriorErr != nil && textBuilder.Len() == 0 && reasoningBuilder.Len() == 0 && len(reasoningSummaryParts) == 0 && reasoningItemID == "" && reasoningEncryptedContent == "" && len(providerReplayParts) == 0 {
-			return true, uncommittedPriorErr
+		hasContent := textBuilder.Len() > 0 || reasoningBuilder.Len() > 0 || len(reasoningSummaryParts) > 0 || reasoningItemID != "" || reasoningEncryptedContent != "" || len(providerReplayParts) > 0
+		if !hasContent && !c.hasFinalAnswer {
+			if recoveredToolWork && recoveryPriorErr != nil {
+				return true, recoveryPriorErr
+			}
+			if uncommittedPriorErr != nil {
+				return true, uncommittedPriorErr
+			}
 		}
 		// The model ignored a forced tool_choice: retry once, still forced.
 		// openProviderTurnStream applies the force to that retry turn.
@@ -94,11 +92,8 @@ func (e *Engine) completeTextTurn(c *engineTurnCompletion) (bool, error) {
 			forcedChoice = forcedChoiceRetryNext
 			return true, errEngineTurnAdvance
 		}
-		// Call turnCallback with final text-only response (no tools)
-		// Note: responseCallback is NOT called here because no tool execution follows.
-		// responseCallback is only for persisting assistant messages before tool execution.
 		var finalMsg core.Message
-		if textBuilder.Len() > 0 || reasoningBuilder.Len() > 0 || len(reasoningSummaryParts) > 0 || reasoningItemID != "" || reasoningEncryptedContent != "" || len(providerReplayParts) > 0 {
+		if hasContent {
 			finalMsg = buildAssistantMessageWithReasoningMetadata(
 				textBuilder.String(),
 				nil,
@@ -136,30 +131,6 @@ func (e *Engine) completeTextTurn(c *engineTurnCompletion) (bool, error) {
 				compaction.restoreSoftFailure(originalTools, originalToolChoice, errCompactionBriefUnusable)
 				return true, errEngineTurnRetry
 			}
-			// A turn that only carries replay items (reasoning, native discovery)
-			// has not answered yet. Native discovery also needs the next turn even
-			// when the model wrote text alongside it: the text is usually a
-			// commentary line ("I will look up..."), and the model has not seen the
-			// discovered tools yet. Ending here dropped the lookup and stalled the
-			// chat until the user said "go on".
-			if (textBuilder.Len() == 0 || partsContainDiscoveryCall(providerReplayParts)) && len(providerReplayParts) > 0 && attempt < maxTurns-1 {
-				req.Messages = append(req.Messages, finalMsg)
-				if turnCallback != nil {
-					cbCtx, cancel := callbackContext(ctx)
-					_ = turnCallback(cbCtx, attempt, []core.Message{finalMsg}, turnMetrics)
-					cancel()
-				}
-				if err := e.applyPendingRequestModelSwitch(ctx, &req, send, runID, &modelSwitchOrdinal, attempt+1); err != nil {
-					return true, err
-				}
-				return true, errEngineTurnAdvance
-			}
-			compaction.maybeAfterResponse([]core.Message{finalMsg})
-			if turnCallback != nil {
-				cbCtx, cancel := callbackContext(ctx)
-				_ = turnCallback(cbCtx, attempt, []core.Message{finalMsg}, turnMetrics)
-				cancel()
-			}
 		}
 		if compaction.softActive {
 			if compaction.config != nil {
@@ -173,20 +144,7 @@ func (e *Engine) completeTextTurn(c *engineTurnCompletion) (bool, error) {
 			compaction.restoreSoftFailure(originalTools, originalToolChoice, errCompactionBriefUnusable)
 			return true, errEngineTurnRetry
 		}
-		continued, err := e.continueWithSteering(ctx, send, &req, turnCallback, attempt, finalMsg, attempt < maxTurns-1, attempt < maxTurns-2)
-		if err != nil {
-			return true, err
-		}
-		if continued {
-			if err := e.applyPendingRequestModelSwitch(ctx, &req, send, runID, &modelSwitchOrdinal, attempt+1); err != nil {
-				return true, err
-			}
-			return true, errEngineTurnAdvance
-		}
-		if err := sendDone(); err != nil {
-			return true, err
-		}
-		return true, nil
+		return true, e.settleTextResponse(c, &req, finalMsg)
 	}
 
 	// If only sync tools were executed (MCP path), decide whether to continue

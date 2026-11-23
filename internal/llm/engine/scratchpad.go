@@ -35,7 +35,7 @@ func (e *Engine) runSimpleScratchpad(ctx context.Context, req core.Request, send
 		var reasoningKind core.ReasoningKind
 		var providerReplayParts []core.Part
 		var metrics core.TurnMetrics
-		var terminationReason string
+		doneEvent := core.Event{Type: core.EventDone}
 		var failed error
 		fireSnapshot := func() {
 			if snapshotCallback == nil {
@@ -137,7 +137,7 @@ func (e *Engine) runSimpleScratchpad(ctx context.Context, req core.Request, send
 				}
 			case core.EventDone:
 				// The engine emits one done event after committing the scratchpad.
-				terminationReason = event.TerminationReason
+				doneEvent = event
 			default:
 				e.observeReportedContext(event)
 				if err := send.Send(event); err != nil {
@@ -169,7 +169,7 @@ func (e *Engine) runSimpleScratchpad(ctx context.Context, req core.Request, send
 			continue
 		}
 
-		if textBuilder.Len() == 0 && reasoningBuilder.Len() == 0 && len(reasoningSummaryParts) == 0 && reasoningItemID == "" && reasoningEncryptedContent == "" && len(providerReplayParts) == 0 && priorErr != nil {
+		if textBuilder.Len() == 0 && reasoningBuilder.Len() == 0 && len(reasoningSummaryParts) == 0 && reasoningItemID == "" && reasoningEncryptedContent == "" && len(providerReplayParts) == 0 && !doneEvent.HasFinalAnswer && priorErr != nil {
 			return priorErr
 		}
 		if turnCallback != nil && (textBuilder.Len() > 0 || reasoningBuilder.Len() > 0 || len(reasoningSummaryParts) > 0 || reasoningItemID != "" || reasoningEncryptedContent != "" || len(providerReplayParts) > 0) {
@@ -199,7 +199,7 @@ func (e *Engine) runSimpleScratchpad(ctx context.Context, req core.Request, send
 			_ = turnCallback(cbCtx, 0, []core.Message{finalMsg}, metrics)
 			cancel()
 		}
-		return send.Send(core.Event{Type: core.EventDone, TerminationReason: terminationReason})
+		return send.Send(doneEvent)
 	}
 }
 

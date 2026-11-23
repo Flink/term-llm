@@ -258,21 +258,37 @@ type responsesAPIResponse struct {
 	Error  *responsesError       `json:"error,omitempty"`
 }
 
+// The terminal response repeats output items, sometimes without a preceding
+// output_item.done. Read only identity and disposition from that snapshot, not
+// a second copy of its text, encrypted reasoning or generated images.
+type responsesOutputItemHeader struct {
+	Type   string `json:"type"`
+	ID     string `json:"id,omitempty"`
+	Role   string `json:"role,omitempty"`
+	Phase  string `json:"phase,omitempty"`
+	Agent  string `json:"agent,omitempty"`
+	Status string `json:"status,omitempty"`
+}
+
+func (item responsesOutputItemHeader) isFinalAnswer() bool {
+	// On a completed item, compatible providers may omit the redundant role
+	// or status, but commentary and explicitly incomplete messages aren't finals.
+	return item.Type == "message" && item.Phase == "final_answer" &&
+		(item.Role == "" || item.Role == "assistant") && (item.Status == "" || item.Status == "completed")
+}
+
 type responsesOutputItem struct {
-	Type    string                   `json:"type"` // "message" or "function_call"
+	responsesOutputItemHeader
 	Content []responsesOutputContent `json:"content,omitempty"`
 	// For reasoning
 	EncryptedContent string                          `json:"encrypted_content,omitempty"`
 	Summary          []responsesReasoningSummaryPart `json:"summary,omitempty"`
 	// For function_call
-	ID            string `json:"id,omitempty"`
 	CallID        string `json:"call_id,omitempty"`
 	Name          string `json:"name,omitempty"`
 	Namespace     string `json:"namespace,omitempty"`
 	Arguments     string `json:"arguments,omitempty"`
 	Caller        string `json:"caller,omitempty"`
-	Phase         string `json:"phase,omitempty"`
-	Agent         string `json:"agent,omitempty"`
 	Program       string `json:"program,omitempty"`
 	ProgramOutput string `json:"program_output,omitempty"`
 	Fingerprint   string `json:"fingerprint,omitempty"`
@@ -281,7 +297,6 @@ type responsesOutputItem struct {
 	RevisedPrompt string `json:"revised_prompt,omitempty"` // model's revised prompt
 	// For web_search_call. Action is kept raw because other output item types
 	// (notably image_generation_call) may use the same field with a string value.
-	Status string          `json:"status,omitempty"`
 	Action json.RawMessage `json:"action,omitempty"`
 }
 

@@ -91,10 +91,10 @@ func (e *Engine) runLoop(ctx context.Context, req core.Request, send corestream.
 			runtimeoutput.Debug("reset provider conversation for tool-surface change", "reason", resetReason, "session_id", req.SessionID)
 		}
 	}
-	var terminationReason string
+	doneEvent := core.Event{Type: core.EventDone}
 	sendDone := func() error {
 		e.markSteeringRunNonConsuming()
-		return send.Send(core.Event{Type: core.EventDone, TerminationReason: terminationReason})
+		return send.Send(doneEvent)
 	}
 	maxTurns := getMaxTurns(req)
 	originalToolChoice := req.ToolChoice
@@ -178,6 +178,9 @@ func (e *Engine) runLoop(ctx context.Context, req core.Request, send corestream.
 		activeSyncTools.abort(cause)
 	}()
 
+	// Only consecutive replay-only completions share the follow-up allowance.
+	// A transport retry repeats the same turn; advancing for real work resets it.
+	var replayFollowup bool
 	for attempt := nextTurn; attempt < maxTurns; attempt++ {
 		nextTurn = attempt
 		turnErr := e.runProviderTurn(&engineRunTurnContext{
@@ -190,13 +193,14 @@ func (e *Engine) runLoop(ctx context.Context, req core.Request, send corestream.
 			recoveredAtMessageCount: &recoveredAtMessageCount, recoveryPriorErr: &recoveryPriorErr,
 			uncommittedStreamRetries: &uncommittedStreamRetries, uncommittedPriorErr: &uncommittedPriorErr,
 			activeSyncTools: &activeSyncTools, nextTurn: &nextTurn, providerInFlight: &providerInFlight,
-			sendDone: sendDone, terminationReason: &terminationReason,
+			sendDone: sendDone, doneEvent: &doneEvent, replayFollowup: replayFollowup,
 		}, attempt)
 		if errors.Is(turnErr, errEngineTurnRetry) {
 			attempt--
 			continue
 		}
 		if errors.Is(turnErr, errEngineTurnAdvance) {
+			replayFollowup = errors.Is(turnErr, errEngineReplayFollowup)
 			continue
 		}
 		return turnErr

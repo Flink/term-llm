@@ -17,6 +17,7 @@ type responsesStreamEventHandler struct {
 	reasoningState                 *responsesReasoningState
 	lastUsage                      *Usage
 	terminationReason              string
+	hasFinalAnswer                 bool
 	outputItems                    []ResponsesInputItem
 	replayItems                    []ProviderReplayItem
 	visibleMessageByOutputIndex    map[int]bool
@@ -25,6 +26,7 @@ type responsesStreamEventHandler struct {
 	textByItemID                   map[string]*strings.Builder
 	textItemIDByOutputIndex        map[int]string
 	doneMessageItemIDs             map[string]struct{}
+	doneMessageIDByIndex           map[int]string
 	webSearchStarted               map[string]struct{}
 	allowResponseState             bool
 	stateSessionID                 string
@@ -49,6 +51,7 @@ func newResponsesStreamEventHandler(client *ResponsesClient, responseStateGenera
 		textByItemID:                   make(map[string]*strings.Builder),
 		textItemIDByOutputIndex:        make(map[int]string),
 		doneMessageItemIDs:             make(map[string]struct{}),
+		doneMessageIDByIndex:           make(map[int]string),
 		webSearchStarted:               make(map[string]struct{}),
 	}
 }
@@ -334,10 +337,7 @@ func (h *responsesStreamEventHandler) recordAddedOutputItem(ctx responsesEventCo
 	case "message":
 		agent := strings.TrimSpace(item.Agent)
 		visible := agent == "" || agent == "/root"
-		h.visibleMessageByOutputIndex[outputIndex] = visible
-		if item.ID != "" {
-			h.visibleMessageByItemID[item.ID] = visible
-		}
+		h.rememberMessageVisibility(outputIndex, item.ID, visible)
 	}
 	return nil
 }
@@ -362,17 +362,21 @@ func (h *responsesStreamEventHandler) handleOutputItemDone(ctx responsesEventCon
 	if err := ctx.decode(&envelope); err != nil {
 		return err
 	}
+	return h.recordDoneItem(ctx, envelope.OutputIndex, envelope.Item)
+}
+
+func (h *responsesStreamEventHandler) recordDoneItem(ctx responsesEventContext, outputIndex int, raw json.RawMessage) error {
 	var itemType struct {
 		Type string `json:"type"`
 	}
-	if err := json.Unmarshal(envelope.Item, &itemType); err != nil {
+	if err := json.Unmarshal(raw, &itemType); err != nil {
 		return fmt.Errorf("decode Responses API output item type: %w", err)
 	}
 	if itemType.Type == "tool_search_call" {
-		return h.handleToolDiscoveryDone(ctx, envelope.Item)
+		return h.handleToolDiscoveryDone(ctx, raw)
 	}
 	var item responsesOutputItem
-	if err := json.Unmarshal(envelope.Item, &item); err != nil {
+	if err := json.Unmarshal(raw, &item); err != nil {
 		return fmt.Errorf("decode Responses API output item: %w", err)
 	}
 	if item.Type == "message" && item.ID != "" {
@@ -380,10 +384,9 @@ func (h *responsesStreamEventHandler) handleOutputItemDone(ctx responsesEventCon
 			return nil
 		}
 	}
-	if len(envelope.Item) > 0 {
-		h.replayItems = append(h.replayItems, ProviderReplayItem{Raw: append(json.RawMessage(nil), envelope.Item...)})
-	}
-	return h.recordDoneOutputItem(ctx, envelope.OutputIndex, item)
+	// json.RawMessage from the event decoder already owns these bytes.
+	h.replayItems = append(h.replayItems, ProviderReplayItem{Raw: raw})
+	return h.recordDoneOutputItem(ctx, outputIndex, item)
 }
 
 func (h *responsesStreamEventHandler) handleToolDiscoveryDone(ctx responsesEventContext, raw json.RawMessage) error {
@@ -483,22 +486,34 @@ func (h *responsesStreamEventHandler) handleReasoningDone(ctx responsesEventCont
 	return nil
 }
 
-func (h *responsesStreamEventHandler) markMessageDone(itemID string) {
+func (h *responsesStreamEventHandler) markMessageDone(index int, itemID string) {
+	h.doneMessageIDByIndex[index] = itemID
 	if itemID != "" {
 		h.doneMessageItemIDs[itemID] = struct{}{}
 	}
 }
 
+func (h *responsesStreamEventHandler) rememberMessageVisibility(index int, id string, visible bool) {
+	h.visibleMessageByOutputIndex[index] = visible
+	if id != "" {
+		h.visibleMessageByItemID[id] = visible
+	}
+}
+
+func (h *responsesStreamEventHandler) rootMessageVisible(index int, item responsesOutputItemHeader) bool {
+	agent := strings.TrimSpace(item.Agent)
+	return (agent == "" || agent == "/root") && h.messageVisible(index, item.ID)
+}
+
 func (h *responsesStreamEventHandler) handleMessageDone(ctx responsesEventContext, outputIndex int, item responsesOutputItem) error {
 	h.outputItems = append(h.outputItems, responsesOutputItemToInputItem(item)...)
-	if !h.messageVisible(outputIndex, item.ID) {
-		h.markMessageDone(item.ID)
+	if !h.rootMessageVisible(outputIndex, item.responsesOutputItemHeader) {
+		h.rememberMessageVisibility(outputIndex, item.ID, false)
+		h.markMessageDone(outputIndex, item.ID)
 		return nil
 	}
-	agent := strings.TrimSpace(item.Agent)
-	if agent != "" && agent != "/root" {
-		h.markMessageDone(item.ID)
-		return nil
+	if item.isFinalAnswer() {
+		h.hasFinalAnswer = true
 	}
 	streamedText := ""
 	var streamed *strings.Builder
@@ -527,7 +542,7 @@ func (h *responsesStreamEventHandler) handleMessageDone(ctx responsesEventContex
 			}
 		}
 	}
-	h.markMessageDone(item.ID)
+	h.markMessageDone(outputIndex, item.ID)
 	return nil
 }
 
@@ -628,11 +643,43 @@ func (h *responsesStreamEventHandler) handleReasoningSummaryDone(ctx responsesEv
 	return nil
 }
 
+// A normal stream has already delivered each final via output_item.done. If a
+// compatible provider supplies one only in the terminal snapshot, deliver its
+// text and replay too: recognizing a final must not hide a nonempty answer.
+func (h *responsesStreamEventHandler) reconcileTerminalFinals(ctx responsesEventContext, items []responsesOutputItemHeader) error {
+	var snapshot struct {
+		Response struct {
+			Output []json.RawMessage `json:"output"`
+		} `json:"response"`
+	}
+	for i, item := range items {
+		if !item.isFinalAnswer() || !h.rootMessageVisible(i, item) {
+			continue
+		}
+		h.hasFinalAnswer = true
+		_, doneByID := h.doneMessageItemIDs[item.ID]
+		priorID, doneAtIndex := h.doneMessageIDByIndex[i]
+		if doneByID || (doneAtIndex && (item.ID == "" || priorID == "")) {
+			continue
+		}
+		if snapshot.Response.Output == nil {
+			if err := ctx.decode(&snapshot); err != nil {
+				return err
+			}
+		}
+		if err := h.recordDoneItem(ctx, i, snapshot.Response.Output[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (h *responsesStreamEventHandler) handleResponseTerminal(ctx responsesEventContext, eventType string) (bool, error) {
 	var event struct {
 		Response struct {
-			ID                string          `json:"id"`
-			Usage             *responsesUsage `json:"usage,omitempty"`
+			ID                string                      `json:"id"`
+			Output            []responsesOutputItemHeader `json:"output"`
+			Usage             *responsesUsage             `json:"usage,omitempty"`
 			IncompleteDetails struct {
 				Reason string `json:"reason"`
 			} `json:"incomplete_details,omitempty"`
@@ -647,7 +694,7 @@ func (h *responsesStreamEventHandler) handleResponseTerminal(ctx responsesEventC
 	h.recordUsage(event.Response.Usage)
 	h.terminationReason = strings.TrimPrefix(eventType, "response.")
 	if eventType != "response.incomplete" {
-		return true, nil
+		return true, h.reconcileTerminalFinals(ctx, event.Response.Output)
 	}
 	if err := h.FinishIncomplete(ctx.send); err != nil {
 		return false, err
@@ -854,5 +901,5 @@ func (h *responsesStreamEventHandler) Finish(send eventSender) error {
 	if err := h.emitFinalItems(send); err != nil {
 		return err
 	}
-	return send.Send(Event{Type: EventDone, TerminationReason: h.terminationReason})
+	return send.Send(Event{Type: EventDone, TerminationReason: h.terminationReason, HasFinalAnswer: h.hasFinalAnswer})
 }

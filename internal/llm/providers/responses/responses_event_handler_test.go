@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/term-llm/term-llm/internal/llm/core/stream"
+	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/term-llm/term-llm/internal/llm/core/stream"
 )
 
 func TestResponsesDoneTextCompletesPartialAndUnstreamedParts(t *testing.T) {
@@ -461,5 +464,77 @@ func TestResponsesCompletedTerminationReason(t *testing.T) {
 	event := <-events
 	if event.Type != EventDone || event.TerminationReason != "completed" {
 		t.Fatalf("completion = %+v", event)
+	}
+}
+
+func TestResponsesIdentifiesOnlyCompletedRootFinalAnswers(t *testing.T) {
+	const final = `{"type":"message","id":"msg","phase":"final_answer","role":"assistant","status":"completed","content":[{"type":"output_text","text":""}]}`
+	const child = `{"type":"message","id":"msg","phase":"final_answer","agent":"/worker"}`
+	for _, tc := range []struct {
+		name, added, done, terminal string
+		want                        bool
+	}{
+		{"item_done", "", final, "", true},
+		{"terminal_only", "", "", final, true},
+		{"root_implicit_role_and_status", "", `{"type":"message","phase":"final_answer","agent":"/root"}`, "", true},
+		{"hidden_agent", "", child, child, false},
+		{"hidden_in_added_only", child, final, final, false},
+		{"hidden_in_done_only", "", child, final, false},
+		{"commentary", "", strings.Replace(final, "final_answer", "commentary", 1), "", false},
+		{"incomplete_message", "", strings.Replace(final, "completed", "incomplete", 1), "", false},
+		{"not_assistant", "", strings.Replace(final, "assistant", "user", 1), "", false},
+		{"not_message", "", "", `{"type":"reasoning","phase":"final_answer"}`, false},
+		{"no_items", "", "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var sse strings.Builder
+			if tc.added != "" {
+				fmt.Fprintf(&sse, "data: {\"type\":\"response.output_item.added\",\"item\":%s}\n\n", tc.added)
+			}
+			if tc.done != "" {
+				fmt.Fprintf(&sse, "data: {\"type\":\"response.output_item.done\",\"item\":%s}\n\n", tc.done)
+			}
+			fmt.Fprintf(&sse, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[%s]}}\n\n", tc.terminal)
+			events := streamResponsesFixture(t, sse.String(), ResponsesRequest{Model: "gpt-test", Stream: true})
+			if len(events) == 0 {
+				t.Fatal("missing completion")
+			}
+			done := events[len(events)-1]
+			if done.Type != EventDone || done.TerminationReason != "completed" || done.HasFinalAnswer != tc.want {
+				t.Fatalf("terminal event = %+v, want HasFinalAnswer=%t", done, tc.want)
+			}
+		})
+	}
+}
+
+func TestResponsesTerminalFinalCompletesStreamedTextAndReplayOnce(t *testing.T) {
+	// No item ID: a done event and the terminal snapshot still describe one message.
+	const item = `{"type":"message","phase":"final_answer","content":[{"type":"output_text","text":"hello"}]}`
+	for _, alsoDone := range []bool{false, true} {
+		t.Run(fmt.Sprintf("item_done=%t", alsoDone), func(t *testing.T) {
+			sse := "data: " + `{"type":"response.output_text.delta","output_index":0,"delta":"hel"}` + "\n\n"
+			if alsoDone {
+				sse += "data: " + `{"type":"response.output_item.done","output_index":0,"item":` + item + "}\n\n"
+			}
+			sse += "data: " + `{"type":"response.completed","response":{"output":[` + item + "]}}\n\n"
+			var text strings.Builder
+			var replay int
+			for _, event := range streamResponsesFixture(t, sse, ResponsesRequest{Model: "gpt-test", Stream: true}) {
+				switch event.Type {
+				case EventTextDelta:
+					text.WriteString(event.Text)
+				case EventProviderReplay:
+					replay++
+					if string(event.ProviderReplay.Raw) != item {
+						t.Fatalf("replay = %s", event.ProviderReplay.Raw)
+					}
+				case EventError:
+					t.Fatal(event.Err)
+				}
+			}
+			if text.String() != "hello" || replay != 1 {
+				t.Fatalf("visible text = %q, replay count = %d", text.String(), replay)
+			}
+		})
 	}
 }
