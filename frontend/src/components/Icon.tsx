@@ -25,6 +25,7 @@ export type IconName =
   | 'chevrons-up-down'
   | 'clock'
   | 'close'
+  | 'code'
   | 'compact'
   | 'copy'
   | 'diff'

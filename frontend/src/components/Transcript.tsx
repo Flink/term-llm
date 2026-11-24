@@ -14,7 +14,7 @@ import { Markdown } from './Markdown';
 import { codeModeDisplayTool, isCodeModeTool } from '../domain/code-mode';
 import { AudioMedia } from './AudioMedia';
 import { useAttachmentPreview } from './useAttachmentPreview';
-import { trustedPublishedMediaURL } from '../domain/published-media';
+import { isDocumentMedia, trustedPublishedMediaURL } from '../domain/published-media';
 import { bindTranscriptMedia } from './transcript-media';
 import { lazyComponent } from './lazyComponent';
 import { Icon, type IconName } from './Icon';
@@ -50,10 +50,10 @@ const CodeModeScript = lazyComponent(() =>
 
 function publishedMediaURL(store: AppStore, value: string, type: string): string {
   const url = rebaseHubAssetURL(store.config, value);
-  if (type !== 'html') return trustedPublishedMediaURL(url);
-  // An executable document must be on this chat’s media route, not just any
+  if (!isDocumentMedia(type)) return trustedPublishedMediaURL(url);
+  // Preview documents must be on this chat's media route, not just any
   // same-origin mount ending in a plausible asset name.
-  if (!trustedPublishedMediaURL(url, 'html')) return '';
+  if (!trustedPublishedMediaURL(url, type)) return '';
   const parsed = new URL(url, location.href);
   const mount = store.config.prefix.replace(/\/$/, '');
   return parsed.pathname.slice(0, parsed.pathname.lastIndexOf('/')) === `${mount}/media`

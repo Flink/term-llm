@@ -2273,12 +2273,22 @@ describe('durable published media', () => {
     'audio/mp4',
     'audio/webm',
     'text/html',
+    'text/markdown',
+    'text/plain',
   ])('retains and rebases %s with metadata on reload', (type) => {
+    const name =
+      (
+        {
+          'text/html': 'demo.html',
+          'text/markdown': 'notes.md',
+          'text/plain': 'code.rb',
+        } as Record<string, string>
+      )[type] || 'narration.wav';
     const artifact = {
       reference: '0123456789abcdef0123456789abcdef',
-      url: type === 'text/html' ? '/ui/media/demo.html' : '/ui/media/audio.wav',
+      url: `/ui/media/${type === 'text/plain' ? 'code.txt' : name}`,
       type,
-      name: type === 'text/html' ? 'demo.html' : 'narration.wav',
+      name,
       caption: 'Summary',
     };
     const messages = convertServerMessages(

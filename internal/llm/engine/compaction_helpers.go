@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/llm/core"
+	"github.com/term-llm/term-llm/internal/mediatype"
 )
 
 func compactToolCallSummary(call *core.ToolCall) string {
@@ -964,15 +965,19 @@ func IsContextOverflowError(err error) bool {
 func compactMediaSummary(media []core.MediaArtifact) []string {
 	counts := map[string]int{}
 	for _, item := range media {
-		kind := strings.SplitN(strings.ToLower(item.MediaType), "/", 2)[0]
-		if strings.EqualFold(item.MediaType, "text/html") {
+		mime := strings.ToLower(item.MediaType)
+		switch mime {
+		case "text/html":
 			counts["HTML preview"]++
-		} else if kind == "image" || kind == "video" || kind == "audio" {
+		case mediatype.MarkdownMIME, mediatype.PlainTextMIME:
+			counts["text document"]++
+		default:
+			kind, _, _ := strings.Cut(mime, "/")
 			counts[kind]++
 		}
 	}
 	var details []string
-	for _, kind := range []string{"image", "video", "audio", "HTML preview"} {
+	for _, kind := range []string{"image", "video", "audio", "HTML preview", "text document"} {
 		if counts[kind] > 0 {
 			details = append(details, fmt.Sprintf("%d %s(s)", counts[kind], kind))
 		}

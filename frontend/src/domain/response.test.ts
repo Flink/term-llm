@@ -1137,12 +1137,22 @@ describe('live and recovered published media', () => {
     'audio/mp4',
     'audio/webm',
     'text/html',
+    'text/markdown',
+    'text/plain',
   ])('preserves %s metadata through completion and recovery-seeded updates', (type) => {
+    const name =
+      (
+        {
+          'text/html': 'demo.html',
+          'text/markdown': 'notes.md',
+          'text/plain': 'code.rb',
+        } as Record<string, string>
+      )[type] || 'narration.wav';
     const artifact = {
       reference: '0123456789abcdef0123456789abcdef',
-      url: type === 'text/html' ? '/ui/media/demo.html' : '/ui/media/audio.wav',
+      url: `/ui/media/${type === 'text/plain' ? 'code.txt' : name}`,
       type,
-      name: type === 'text/html' ? 'demo.html' : 'narration.wav',
+      name,
       caption: 'Summary',
     };
     let projection = reduceResponse(
@@ -1155,7 +1165,7 @@ describe('live and recovered published media', () => {
       projection,
       event('response.tool_exec.end', 2, {
         call_id: 'audio',
-        media: [artifact, { url: '/not-media', type: 'text/plain' }],
+        media: [artifact, { url: '/not-media', type: 'application/pdf' }],
       }),
     );
     expect(projection.messages[0].tools?.[0].media).toEqual([artifact]);

@@ -18,6 +18,7 @@ const (
 	Image Kind = "image"
 	Video Kind = "video"
 	Audio Kind = "audio"
+	Text  Kind = "text"
 )
 
 // Format describes a supported MIME type, canonical stored suffix, and byte cap.
@@ -27,6 +28,17 @@ type Format struct {
 	Kind      Kind
 	MaxBytes  int64
 }
+
+const (
+	MarkdownMIME  = "text/markdown"
+	PlainTextMIME = "text/plain"
+	maxTextBytes  = 4 << 20
+)
+
+var (
+	markdownFormat  = Format{MarkdownMIME, ".md", Text, maxTextBytes}
+	plainTextFormat = Format{PlainTextMIME, ".txt", Text, maxTextBytes}
+)
 
 var formats = []Format{
 	{"image/png", ".png", Image, 25 << 20}, {"image/jpeg", ".jpg", Image, 25 << 20},
@@ -65,6 +77,7 @@ func ForExtension(ext string) (Format, bool) {
 // ErrUnsupported denotes unsupported, malformed, or truncated input. Genuine
 // reader errors are returned separately (and may be tested with errors.Is).
 var ErrUnsupported = errors.New("unsupported or malformed media")
+var errUnrecognized = errors.New("unrecognized binary signature")
 var errBudget = errors.New("media inspection budget exhausted")
 
 // Detect inspects only the supplied bytes, returning an empty MIME on failure.
@@ -84,6 +97,19 @@ func Detect(data []byte) string {
 // Payloads are skipped, not decoded. It does not enforce Format.MaxBytes;
 // callers must enforce that cap before copying.
 func Inspect(r io.ReaderAt, size int64) (Format, error) {
+	return inspect(r, size, false)
+}
+
+// InspectWithTextFallback recognizes existing binary formats first. Only files
+// without a recognized signature are eligible for plain-text validation.
+func InspectWithTextFallback(r io.ReaderAt, size int64) (Format, error) {
+	return inspect(r, size, true)
+}
+
+func inspect(r io.ReaderAt, size int64, allowText bool) (Format, error) {
+	if allowText && size == 0 {
+		return inspectText(r, size, plainTextFormat)
+	}
 	if size <= 0 || r == nil {
 		return Format{}, ErrUnsupported
 	}
@@ -95,6 +121,12 @@ func Inspect(r io.ReaderAt, size int64) (Format, error) {
 	mime := imageType(data)
 	if mime == "" {
 		mime, err = inspectContainer(s, data)
+	}
+	if err == errUnrecognized {
+		if allowText {
+			return inspectText(r, size, plainTextFormat)
+		}
+		return Format{}, ErrUnsupported
 	}
 	if errors.Is(err, errBudget) {
 		err = ErrUnsupported
@@ -125,7 +157,7 @@ func inspectContainer(s *scanner, b []byte) (string, error) {
 	case bytes.HasPrefix(b, []byte{0x1a, 0x45, 0xdf, 0xa3}):
 		return inspectWebM(s)
 	default:
-		return "", ErrUnsupported
+		return "", errUnrecognized
 	}
 }
 

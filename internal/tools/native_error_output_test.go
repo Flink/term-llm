@@ -75,7 +75,7 @@ func TestNativeToolFailuresAreErrors(t *testing.T) {
 		{"show image unsupported", NewShowImageTool(nil), map[string]any{"file_path": textPath}, "UNSUPPORTED_FORMAT"},
 		{"show media missing", NewShowMediaTool(nil), map[string]any{"path": missing}, "FILE_NOT_FOUND"},
 		{"show media directory", NewShowMediaTool(nil), map[string]any{"path": dir}, "regular file"},
-		{"show media unsupported", NewShowMediaTool(nil), map[string]any{"path": textPath}, "UNSUPPORTED_FORMAT"},
+		{"show media unsupported", NewShowMediaTool(nil), map[string]any{"path": binaryPath}, "UNSUPPORTED_FORMAT"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

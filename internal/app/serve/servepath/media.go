@@ -9,14 +9,23 @@ import (
 	"github.com/term-llm/term-llm/internal/mediatype"
 )
 
-var publishedHTMLName = regexp.MustCompile(`^[0-9a-f]{32}\.html$`)
+var canonicalMediaName = regexp.MustCompile(`^[0-9a-f]{32}\.[a-z0-9]+$`)
 
-// PublishedMediaType maps passive media suffixes and canonical published HTML names.
+// IsCanonicalMediaName reports whether name uses the publication store's hash format.
+func IsCanonicalMediaName(name string) bool { return canonicalMediaName.MatchString(name) }
+
+// PublishedMediaType maps binary media suffixes and canonical published document names.
 func PublishedMediaType(name string) (string, bool) {
-	if publishedHTMLName.MatchString(filepath.Base(name)) {
-		return mediatype.HTMLFormat().MIME, true
+	ext := filepath.Ext(name)
+	if IsCanonicalMediaName(filepath.Base(name)) {
+		if f, ok := mediatype.DocumentForExtension(ext); ok && ext == f.Extension {
+			return f.MIME, true
+		}
+		if ext == ".txt" {
+			return mediatype.PlainTextMIME, true
+		}
 	}
-	f, ok := mediatype.ForExtension(filepath.Ext(name))
+	f, ok := mediatype.ForExtension(ext)
 	return f.MIME, ok
 }
 

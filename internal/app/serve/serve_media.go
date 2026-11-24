@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/app/serve/servepath"
+	appserver "github.com/term-llm/term-llm/internal/app/serve/server"
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/mediatype"
 	"github.com/term-llm/term-llm/internal/session"
@@ -139,11 +140,7 @@ func (p *serveMediaPublisher) PublishMedia(ctx context.Context, sourcePath, medi
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	inspect := mediatype.Inspect
-	if ext == mediatype.HTMLFormat().Extension {
-		inspect = mediatype.InspectHTML
-	}
-	format, inspectErr := inspect(tmp, written)
+	format, inspectErr := inspectPublishedMedia(tmp, written, mediaType)
 	if errors.Is(inspectErr, mediatype.ErrUnsupported) {
 		return "", fmt.Errorf("published copy failed media verification: %w", inspectErr)
 	}
@@ -177,6 +174,19 @@ func (p *serveMediaPublisher) PublishMedia(ctx context.Context, sourcePath, medi
 	return destination, nil
 }
 
+func inspectPublishedMedia(r io.ReaderAt, size int64, mediaType string) (mediatype.Format, error) {
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "text/html":
+		return mediatype.InspectHTML(r, size)
+	case mediatype.MarkdownMIME:
+		return mediatype.InspectMarkdown(r, size)
+	case mediatype.PlainTextMIME:
+		return mediatype.InspectWithTextFallback(r, size)
+	default:
+		return mediatype.Inspect(r, size)
+	}
+}
+
 type contextReader struct {
 	ctx    context.Context
 	reader io.Reader
@@ -192,7 +202,7 @@ func (r *contextReader) Read(p []byte) (int, error) {
 }
 
 func serveMediaExtension(mediaType string) (extension string, limit int64, ok bool) {
-	if f := mediatype.HTMLFormat(); strings.EqualFold(strings.TrimSpace(mediaType), f.MIME) {
+	if f, ok := mediatype.LookupDocument(mediaType); ok {
 		return f.Extension, f.MaxBytes, true
 	}
 	f, ok := mediatype.Lookup(mediaType)
@@ -201,9 +211,8 @@ func serveMediaExtension(mediaType string) (extension string, limit int64, ok bo
 
 func serveMediaTypeForName(name string) (string, bool) { return servepath.PublishedMediaType(name) }
 
-const passiveFileCSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"
-
-const interactiveHTMLCSP = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; media-src data:; font-src data:; connect-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+const passiveFileCSP = appserver.PassiveFileCSP
+const interactiveHTMLCSP = appserver.InteractiveHTMLCSP
 
 func (s *serveServer) handleMedia(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -215,33 +224,7 @@ func (s *serveServer) handleMedia(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	name := strings.TrimPrefix(r.URL.Path, "/media/")
-	mediaType, ok := serveMediaTypeForName(name)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	f, opened, err := servepath.OpenMedia(s.mediaPublisher.dir, name)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	defer f.Close()
-	h := w.Header()
-	h.Set("Content-Type", mediaType)
-	h.Set("Content-Disposition", `inline; filename="media`+filepath.Ext(name)+`"`)
-	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Content-Security-Policy", passiveFileCSP)
-	h.Set("Cache-Control", "private, max-age=86400")
-	h.Add("Vary", "Authorization, Cookie")
-	if mediaType == "text/html" {
-		h.Set("Content-Type", "text/html; charset=utf-8")
-		h.Set("Content-Security-Policy", interactiveHTMLCSP)
-		h.Set("Cache-Control", "private, no-store")
-		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("X-DNS-Prefetch-Control", "off")
-	}
-	http.ServeContent(w, r, name, opened.ModTime(), f)
+	appserver.ServePublishedMedia(w, r, s.mediaPublisher.dir)
 }
 
 func (s *serveServer) mediaURL(storedPath string) string {

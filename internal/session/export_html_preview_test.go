@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/term-llm/term-llm/internal/llm/core"
+	"github.com/term-llm/term-llm/internal/share"
 )
 
 func TestInteractiveHTMLIsNotIncludedInExports(t *testing.T) {
@@ -19,7 +20,7 @@ func TestInteractiveHTMLIsNotIncludedInExports(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, output := range []string{html, ExportToMarkdown(sess, msgs, opts), replaceHTMLMediaReferences(text, map[string]core.MediaArtifact{ref: item}, newExportImages(opts))} {
-		if !strings.Contains(output, omittedHTMLPreview) || strings.Contains(output, ref) || strings.Contains(output, item.SourcePath) || strings.Contains(output, "<iframe") {
+		if !strings.Contains(output, share.OmittedHTMLPreview) || strings.Contains(output, ref) || strings.Contains(output, item.SourcePath) || strings.Contains(output, "<iframe") {
 			t.Fatal("expected text-only HTML preview placeholder")
 		}
 	}

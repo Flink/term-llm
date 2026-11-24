@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/llm/core"
+	"github.com/term-llm/term-llm/internal/share"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/parser"
@@ -60,8 +61,8 @@ func (t *exportMediaTransformer) replace(node *ast.Image, source []byte) {
 		return
 	}
 	kind := normalizedMediaType(item.MediaType)
-	if kind == "text/html" {
-		node.Parent().ReplaceChild(node.Parent(), node, ast.NewString([]byte(omittedHTMLPreview)))
+	if note := share.OmittedDocumentNote(kind); note != "" {
+		node.Parent().ReplaceChild(node.Parent(), node, ast.NewString([]byte(note)))
 		return
 	}
 	if strings.HasPrefix(kind, "audio/") {

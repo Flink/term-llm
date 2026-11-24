@@ -62,7 +62,7 @@ The older `agents export/import gist` and `sessions export gist` commands remain
 
 ## Audio and local HTML exports
 
-Interactive HTML previews from `show_media` are not published in shares. A text note replaces the preview; including images or audio does not include its HTML or scripts.
+Interactive HTML and text previews from `show_media` are not published in shares. A text note replaces the preview; including images or audio does not include those files.
 
 Audio shown with `show_media` is **excluded by default**. To copy short recordings into a share, explicitly pass `term-llm sessions share 42 --include-audio`, select the Web UI's separate **Include audio** checkbox (off by default), or set `include_audio: true` in the share API request. `--no-images` / `include_images: false` still affects only images; it does not enable or disable audio consent. Removing tool activity or sharing just a response preserves registered audio references, but never overrides the audio opt-in.
 

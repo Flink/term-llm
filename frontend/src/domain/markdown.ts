@@ -1,4 +1,9 @@
-import { trustedPublishedMediaURL } from './published-media';
+import {
+  isDocumentMedia,
+  publishedMediaDownloadURL,
+  trustedPublishedMediaURL,
+  type DocumentMediaKind,
+} from './published-media';
 import DOMPurify from 'dompurify';
 import { marked, Marked, Renderer } from 'marked';
 import { findStableMarkdownBoundary, isInCodeBlockFast } from './markdown-streaming';
@@ -148,7 +153,7 @@ export function sanitizeMarkdownHTML(
 
 export interface MarkdownMediaTarget {
   url: string;
-  type: 'image' | 'video' | 'audio' | 'html';
+  type: 'image' | 'video' | 'audio' | DocumentMediaKind;
   name?: string;
   caption?: string;
 }
@@ -170,32 +175,32 @@ function mediaRenderer(
     const label = token.text.trim() || 'Media';
     const reference = token.href.slice(prefix.length).trim().toLowerCase();
     const media = /^[a-f0-9]{32}$/.test(reference) ? resolveMedia(reference) : undefined;
-    if (
-      !media ||
-      ((media.type === 'audio' || media.type === 'html') &&
-        !trustedPublishedMediaURL(media.url, media.type))
-    )
+    const kind = media?.type;
+    const card = kind === 'audio' || isDocumentMedia(kind);
+    if (!media || (card && !trustedPublishedMediaURL(media.url, kind)))
       return `<span class="media-reference-missing">[${escapeHTML(label)} unavailable]</span>`;
-    if (media.type === 'audio' || media.type === 'html') {
-      // The namespace is private to this render, never supplied by model HTML.
-      const placeholder = `TERM_LLM_MEDIA_${crypto.getRandomValues(new Uint32Array(4)).join('-')}_TOKEN`;
-      mediaSlots.set(
-        placeholder,
-        media.type === 'html'
-          ? `<button type="button" class="btn html-media-preview"${streaming ? ' disabled' : ''} data-demo-reference="${reference}">Preview: ${escapeHTML(token.text.trim() || media.caption || media.name || 'HTML demo')}</button>`
-          : audioMediaHTML({
+    if (kind === 'image') return `<img src="${escapeHTML(media.url)}" alt="${escapeHTML(label)}">`;
+    let video = '';
+    if (kind === 'video') {
+      video = `<video src="${escapeHTML(media.url)}" controls playsinline preload="metadata" aria-label="${escapeHTML(label)}"></video>`;
+      if (!trustedPublishedMediaURL(media.url)) return video;
+    }
+    // The namespace is private to this render, never supplied by model HTML.
+    const placeholder = `TERM_LLM_MEDIA_${crypto.getRandomValues(new Uint32Array(4)).join('-')}_TOKEN`;
+    mediaSlots.set(
+      placeholder,
+      kind === 'video'
+        ? `<span>${video} <a href="${escapeHTML(publishedMediaDownloadURL(media.url, media.name || ''))}" download>Download video</a></span>`
+        : kind === 'audio'
+          ? audioMediaHTML({
               url: media.url,
               name: media.name,
               caption: media.caption,
               label: token.text,
-            }),
-      );
-      return `<span data-media-placeholder="${placeholder}"></span>`;
-    }
-    if (media.type === 'video') {
-      return `<video src="${escapeHTML(media.url)}" controls playsinline preload="metadata" aria-label="${escapeHTML(label)}"></video>`;
-    }
-    return `<img src="${escapeHTML(media.url)}" alt="${escapeHTML(label)}">`;
+            })
+          : `<button type="button" class="btn"${streaming ? ' disabled' : ''}${kind !== 'html' ? ' data-auto-preview' : ''} data-media-reference="${reference}">Preview: ${escapeHTML(token.text.trim() || media.caption || media.name || 'Document')}</button>`,
+    );
+    return `<span data-media-placeholder="${placeholder}"></span>`;
   };
   return renderer;
 }
@@ -252,11 +257,6 @@ export function stableMarkdownBoundary(value: string): number {
   );
 }
 
-const MATH = [
-  { expression: /\$\$([\s\S]+?)\$\$/g, display: true },
-  { expression: /\\\[([\s\S]+?)\\\]/g, display: true },
-  { expression: /\\\((.+?)\\\)/g, display: false },
-];
 // Bound synchronous highlighting work; larger blocks retain their full plain text.
 // Measured in UTF-16 code units, including the rendered code's trailing newline.
 const MAX_HIGHLIGHT_CHARACTERS = 50_000;
@@ -308,43 +308,16 @@ export async function decorateRichContent(
       highlight.highlightElement(block);
     });
   }
-  if (math) {
-    const { katex } = math;
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    const nodes: Text[] = [];
-    while (walker.nextNode()) {
-      const node = walker.currentNode as Text;
-      if (!node.parentElement?.closest('pre,code,textarea,script,style,.katex')) nodes.push(node);
-    }
-    for (const node of nodes) {
-      let html = escapeHTML(node.data);
-      let changed = false;
-      for (const rule of MATH)
-        html = html.replace(rule.expression, (all, expression: string) => {
-          changed = true;
-          try {
-            return katex.renderToString(expression, {
-              displayMode: rule.display,
-              throwOnError: false,
-              trust: false,
-              strict: 'warn',
-            });
-          } catch {
-            return escapeHTML(all);
-          }
-        });
-      if (!changed) continue;
-      const span = document.createElement('span');
-      span.innerHTML = DOMPurify.sanitize(html, {
-        ADD_ATTR: ['class', 'style', 'aria-hidden'],
-        FORBID_TAGS: ['script', 'iframe', 'object', 'embed'],
-      });
-      node.replaceWith(...Array.from(span.childNodes));
-    }
-  }
+  math?.decorateMath(root);
 }
 
-export const VIDEO_LINK_PATTERN = /\.(?:mp4|webm|mov|ogv)(?:[?#].*)?$/i;
+export function isVideoPreviewLink(anchor: HTMLAnchorElement): boolean {
+  return (
+    !anchor.hasAttribute('download') &&
+    !anchor.closest('.audio-media-card') &&
+    /\.(?:mp4|webm|mov|ogv)(?:[?#].*)?$/i.test(anchor.href)
+  );
+}
 export function rebaseRenderedAssetURLs(
   root: HTMLElement,
   rebase: (value: string) => string,
@@ -359,7 +332,6 @@ export function rebaseRenderedAssetURLs(
   root.querySelectorAll<HTMLAnchorElement>('a[href]').forEach((anchor) => {
     const raw = anchor.getAttribute('href') || '';
     if (/^(?:\/|https?:)/i.test(raw)) anchor.href = rebase(raw);
-    if (!anchor.closest('.audio-media-card') && VIDEO_LINK_PATTERN.test(raw))
-      anchor.classList.add('video-link');
+    if (isVideoPreviewLink(anchor)) anchor.classList.add('video-link');
   });
 }

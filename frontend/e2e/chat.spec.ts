@@ -309,6 +309,73 @@ async function open(
   return requests;
 }
 
+test('published Markdown preview switches between rendered text and raw source', async ({
+  page,
+}) => {
+  const reference = '0123456789abcdef0123456789abcdef';
+  const url = `/ui/media/${reference}.md`;
+  const source = '# Notes\n\n**Bold** text.\n\n```js\nconst example = true;\n```\n';
+  const tallTail = '\n\n' + 'Spacer paragraph.\n\n'.repeat(120);
+  let requests = 0;
+  await page.route(`**${url}`, (route) => {
+    requests++;
+    return route.fulfill({ contentType: 'text/markdown; charset=utf-8', body: source });
+  });
+  await open(page, 'chat/s1', {
+    extraMessages: [
+      {
+        id: 2,
+        sequence: 1,
+        role: 'assistant',
+        parts: [{ type: 'tool_call', tool_call_id: 'show', tool_name: 'show_media' }],
+      },
+      {
+        id: 3,
+        sequence: 2,
+        role: 'tool',
+        parts: [
+          {
+            type: 'tool_result',
+            tool_call_id: 'show',
+            tool_name: 'show_media',
+            media: [{ reference, url, type: 'text/markdown', name: 'notes.md' }],
+          },
+        ],
+      },
+      {
+        id: 4,
+        sequence: 3,
+        role: 'assistant',
+        parts: [{ type: 'text', text: `![Notes](term-llm-media://${reference})${tallTail}` }],
+      },
+    ],
+  });
+  const launcher = page.getByRole('button', { name: 'Preview: Notes' });
+  await expect(launcher).not.toBeInViewport();
+  expect(requests).toBe(0);
+  await launcher.scrollIntoViewIfNeeded();
+  const preview = page.getByRole('dialog', { name: 'Preview: Notes' });
+  await expect(preview).toBeVisible();
+  expect(requests).toBe(1);
+  await expect(preview.getByRole('button', { name: 'Full screen' })).not.toBeFocused();
+  const heading = preview.getByRole('heading', { name: 'Notes' });
+  const raw = preview.getByRole('button', { name: 'Raw source' });
+  await expect(heading).toBeVisible();
+  await expect(preview.locator('.hljs-keyword')).toHaveText('const');
+  await expect(raw.locator('svg[data-icon="code"]')).toBeVisible();
+  await expect(preview.getByRole('link', { name: 'Download notes.md' })).toHaveAttribute(
+    'href',
+    new URL(`${url}?download=notes.md`, page.url()).href,
+  );
+  await raw.click();
+  await expect(heading).toBeHidden();
+  await expect(preview.locator('.document-preview-source .hljs-section')).toHaveText('# Notes');
+  expect(await preview.locator('.document-preview-source').textContent()).toBe(source);
+  await expect(preview.locator('.document-preview-source')).toBeVisible();
+  await raw.click();
+  await expect(heading).toBeVisible();
+});
+
 test('fullscreen HTML preview preserves the iframe document and restores focus', async ({
   page,
 }) => {
@@ -336,6 +403,7 @@ test('fullscreen HTML preview preserves the iframe document and restores focus',
     ],
   });
 
+  await expect(page.locator('iframe[title="Preview: Demo"]')).toHaveCount(0);
   await page.getByRole('button', { name: 'Preview: Demo', exact: true }).click();
   const frameSelector = 'iframe[title="Preview: Demo"]';
   const frame = page.locator(frameSelector);
@@ -343,6 +411,10 @@ test('fullscreen HTML preview preserves the iframe document and restores focus',
   await expect(page.locator('p > dialog.html-preview')).toHaveCount(0);
   await expect(header.getByText('Demo', { exact: true })).toBeVisible();
   await expect(header.getByRole('button', { name: 'Full screen' })).toBeVisible();
+  await expect(header.getByRole('link', { name: 'Download Demo (ZIP)' })).toHaveAttribute(
+    'href',
+    new URL(`${url}?download=zip`, page.url()).href,
+  );
   expect(await header.evaluate((el) => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(
     await frame.evaluate((el) => el.getBoundingClientRect().top + 1),
   );
@@ -413,6 +485,7 @@ test('fullscreen HTML preview preserves the iframe document and restores focus',
     await enter.click();
     await expect(modal.locator(frameSelector)).toBeVisible();
     const exit = modal.getByRole('button', { name: 'Exit full screen', exact: true });
+    await expect(exit).toBeFocused();
     await expect(exit.locator('svg[data-icon="restore"]')).toBeVisible();
     const edges = await modal.evaluate((dialog) => {
       const { left, top, right, bottom } = dialog.getBoundingClientRect();

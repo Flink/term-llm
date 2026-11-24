@@ -13,6 +13,7 @@ import (
 	"github.com/term-llm/term-llm/internal/htmlesc"
 	"github.com/term-llm/term-llm/internal/llm/core"
 	internalreasoning "github.com/term-llm/term-llm/internal/reasoning"
+	"github.com/term-llm/term-llm/internal/share"
 	"github.com/yuin/goldmark"
 )
 
@@ -246,8 +247,8 @@ func replaceHTMLMediaReferences(value string, media map[string]core.MediaArtifac
 			}
 			return "Media unavailable in exported transcript"
 		}
-		if normalizedMediaType(item.MediaType) == "text/html" {
-			return omittedHTMLPreview
+		if note := share.OmittedDocumentNote(normalizedMediaType(item.MediaType)); note != "" {
+			return note
 		}
 		kind := "Image"
 		if strings.HasPrefix(strings.ToLower(item.MediaType), "audio/") {

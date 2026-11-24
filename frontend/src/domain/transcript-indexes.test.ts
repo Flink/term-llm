@@ -100,7 +100,7 @@ it('classifies audio explicitly and updates metadata without invalidating equal 
         status: 'done',
         media: [
           { reference: 'A', url: '/a.ogg', type: 'audio/ogg', name: 'a.ogg', caption: 'Original' },
-          { reference: 'bad', url: '/text', type: 'text/plain' },
+          { reference: 'bad', url: '/unsupported', type: 'application/pdf' },
         ],
       },
     ],

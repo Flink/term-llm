@@ -58,7 +58,7 @@ func TestShowMediaToolPublishesTypedMedia(t *testing.T) {
 func TestShowMediaToolRejectsUnsafeTypeAndPublisherFailure(t *testing.T) {
 	dir := t.TempDir()
 	htmlPath := filepath.Join(dir, "page.png")
-	if err := os.WriteFile(htmlPath, []byte("<html><script>alert(1)</script>"), 0o600); err != nil {
+	if err := os.WriteFile(htmlPath, []byte("<html>\x00"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	tool := NewShowMediaTool(nil, &ToolConfig{BaseDir: dir})
@@ -203,7 +203,6 @@ func TestShowMediaHTML(t *testing.T) {
 		{"invalid.html", strings.Repeat("a", 65536) + "\xff", false},
 		{"nul.htm", "<html>\x00", false},
 		{"empty.html", "", false},
-		{"wrong.txt", "<!doctype html><title>résumé</title>", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -231,6 +230,43 @@ func TestShowMediaHTML(t *testing.T) {
 			m := out.Media[0]
 			if m.MediaType != "text/html" || m.StoredPath != stored || m.SourcePath != path || m.Caption != "Report" || m.Name != tc.name || m.Reference == "" || !strings.Contains(out.Content, "term-llm-media://"+m.Reference) || strings.Contains(out.Content, tc.data) {
 				t.Fatalf("unexpected registration: %+v", out)
+			}
+		})
+	}
+}
+
+func TestShowMediaTextDocuments(t *testing.T) {
+	for _, tc := range []struct{ name, body, mime string }{
+		{"notes.MD", "# Résumé\n", "text/markdown"},
+		{"notes.Markdown", "# Heading", "text/markdown"},
+		{"script.rb", "puts 'hi'\n", "text/plain"},
+		{"doc.whatever", "<script>never HTML</script>", "text/plain"},
+		{"plain", "\ta\r\nb\f", "text/plain"},
+		{"empty.txt", "", "text/plain"},
+		{"notes.md", strings.Repeat("x", 4<<20), "text/markdown"},
+		{"large.txt", strings.Repeat("x", 4<<20+1), ""},
+		{"invalid.md", "abc\xff", ""},
+		{"nul.md", "abc\x00", ""},
+		{"control.txt", "abc\u0085", ""},
+		{"bad.txt", "RIFFnot a WAV", ""},
+		{"bad.dat", "abcdftypno valid MP4 box", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, tc.name), []byte(tc.body), 0600); err != nil {
+				t.Fatal(err)
+			}
+			tool := NewShowMediaTool(nil, &ToolConfig{BaseDir: dir})
+			args, _ := json.Marshal(ShowMediaArgs{Path: tc.name})
+			out, err := tool.Execute(context.Background(), args)
+			if tc.mime == "" {
+				if err != nil || !out.IsError || len(out.Media) != 0 {
+					t.Fatalf("invalid document accepted: %+v, %v", out, err)
+				}
+				return
+			}
+			if err != nil || out.IsError || len(out.Media) != 1 || out.Media[0].MediaType != tc.mime || out.Media[0].Name != tc.name {
+				t.Fatalf("wrong document metadata: %+v, %v", out, err)
 			}
 		})
 	}

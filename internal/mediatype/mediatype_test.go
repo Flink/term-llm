@@ -40,7 +40,7 @@ func TestFormatsAndInspection(t *testing.T) {
 			}
 		})
 	}
-	for _, mime := range []string{"audio/aac", "text/plain", "image/svg+xml", "audio/mpeg; charset=utf-8"} {
+	for _, mime := range []string{"audio/aac", "text/html", "text/plain", "text/markdown", "image/svg+xml", "audio/mpeg; charset=utf-8"} {
 		if _, ok := mediatype.Lookup(mime); ok {
 			t.Errorf("accepted %q", mime)
 		}

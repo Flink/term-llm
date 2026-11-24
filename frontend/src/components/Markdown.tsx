@@ -1,4 +1,3 @@
-import { trustedPublishedMediaURL } from '../domain/published-media';
 import { iconHTML } from './Icon';
 import { copyText } from '../platform/clipboard';
 import { preserveAudioMediaCards } from '../domain/audio-media';
@@ -21,7 +20,7 @@ import {
   needsKatex,
   rebaseRenderedAssetURLs,
   renderMarkdown,
-  VIDEO_LINK_PATTERN,
+  isVideoPreviewLink,
   type MarkdownMediaResolver,
 } from '../domain/markdown';
 
@@ -41,11 +40,7 @@ interface MarkdownProps {
 // <use> is never passed through the untrusted-content sanitizer.
 function addVideoLinkIcons(root: HTMLElement): void {
   root.querySelectorAll<HTMLAnchorElement>('a[href]').forEach((anchor) => {
-    if (
-      anchor.closest('.audio-media-card') ||
-      !VIDEO_LINK_PATTERN.test(anchor.getAttribute('href') || '')
-    )
-      return;
+    if (!isVideoPreviewLink(anchor)) return;
     anchor.classList.add('video-link');
     if (!anchor.querySelector('[data-icon="play"]'))
       anchor.insertAdjacentHTML('beforeend', iconHTML('play'));
@@ -220,13 +215,18 @@ function prepareContent(
   };
 }
 
+const loadDocumentPreview = () => import('./html-preview');
+
 class AssistantStreamRenderer {
   readonly root: HTMLDivElement;
   private cancelStatic = () => {};
+  private disconnectPreviews?: () => void;
   private revision = 0;
 
   cancelPending(): void {
     this.cancelStatic();
+    this.disconnectPreviews?.();
+    this.disconnectPreviews = undefined;
     this.revision += 1;
     this.root.removeAttribute('aria-busy');
   }
@@ -267,10 +267,25 @@ class AssistantStreamRenderer {
     this.finalized = false;
   }
 
+  private mountDocumentPreviews(root: HTMLElement): void {
+    const revision = this.revision;
+    if (root.querySelector('[data-auto-preview]'))
+      void loadDocumentPreview()
+        .then(({ observeDocumentPreviews }) => {
+          if (revision !== this.revision) return;
+          this.disconnectPreviews?.();
+          this.disconnectPreviews = observeDocumentPreviews(root);
+        })
+        .catch(() => {});
+  }
+
   private decorate(root: HTMLElement, source: string, copyCode: boolean): void {
     if (this.rebase) rebaseRenderedAssetURLs(root, this.rebase);
     addVideoLinkIcons(root);
-    if (copyCode) addCodeCopyButtons(root);
+    if (copyCode) {
+      addCodeCopyButtons(root);
+      this.mountDocumentPreviews(root);
+    }
     const revision = this.revision;
     void decorateRichContent(root, source, () => revision === this.revision);
   }
@@ -318,7 +333,10 @@ class AssistantStreamRenderer {
           addVideoLinkIcons(prepared);
           addCodeCopyButtons(prepared);
         },
-        committed,
+        () => {
+          committed();
+          this.mountDocumentPreviews(this.root);
+        },
       );
     } else {
       this.root.innerHTML = html;
@@ -495,7 +513,7 @@ class AssistantStreamRenderer {
       // Incremental finalization adopts the streaming nodes. Canonical finalization
       // instead publishes fresh, enabled launchers from prepareContent.
       this.root
-        .querySelectorAll<HTMLButtonElement>('.html-media-preview:disabled')
+        .querySelectorAll<HTMLButtonElement>('button[data-media-reference]:disabled')
         .forEach((button) => {
           button.disabled = false;
         });
@@ -592,21 +610,26 @@ export function Markdown({
       onClick={(event) => {
         const target = event.target as HTMLElement;
         // Raw Markdown buttons are forbidden. Resolve the app-owned button's
-        // opaque reference again; never take a frame URL from model markup.
+        // opaque reference again; never take a preview URL from model markup.
         if (
           variant === 'chat' &&
           target instanceof HTMLButtonElement &&
-          target.matches('.html-media-preview[data-demo-reference]')
+          target.matches('[data-media-reference]')
         ) {
           if (target.disabled) return;
-          const media = resolveMedia?.(target.dataset.demoReference || '');
-          if (media?.type !== 'html' || !trustedPublishedMediaURL(media.url, 'html')) return;
+          const media = resolveMedia?.(target.dataset.mediaReference || '');
+          if (!media) return;
+          const automatic =
+            target.hasAttribute('data-auto-opening') && document.activeElement !== target;
+          const label = target.textContent;
           target.disabled = true;
-          void import('./html-preview')
-            .then(({ openHTMLPreview }) => openHTMLPreview(target, media.url))
+          target.setAttribute('aria-busy', 'true');
+          void loadDocumentPreview()
+            .then(({ openDocumentPreview }) => openDocumentPreview(target, media, automatic))
             .catch(() => {
+              if (!target.isConnected) return;
               target.disabled = false;
-              const label = target.textContent;
+              target.removeAttribute('aria-busy');
               target.textContent = `${label} — failed to load. Click to retry.`;
               target.onclick = () => {
                 target.textContent = label;
@@ -638,7 +661,7 @@ export function Markdown({
           return;
         }
         const link = target.closest('a');
-        if (link && onMedia && VIDEO_LINK_PATTERN.test(link.href)) {
+        if (link && onMedia && isVideoPreviewLink(link)) {
           event.preventDefault();
           onMedia(link.href, 'video');
         }

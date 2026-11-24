@@ -660,6 +660,26 @@ describe('trusted audio Markdown', () => {
   });
 });
 
+it('keeps a published video download separate from the video preview link after rebasing', () => {
+  const reference = '0123456789abcdef0123456789abcdef';
+  const url = `/ui/media/${reference}.mp4`;
+  const root = document.createElement('div');
+  root.innerHTML = renderMarkdown(
+    `[![Demo](term-llm-media://${reference})](https://example.com)`,
+    () => ({
+      url,
+      type: 'video',
+      name: 'my clip.mp4',
+    }),
+  );
+  rebaseRenderedAssetURLs(root, (value) => (value.startsWith('/ui/') ? `/node${value}` : value));
+  const download = root.querySelector('a[download]')!;
+  expect(download.textContent).toBe('Download video');
+  expect(download).toHaveAttribute('href', `/node${url}?download=my%20clip.mp4`);
+  expect(download).not.toHaveClass('video-link');
+  expect(download.parentElement?.closest('a')).toBeNull();
+});
+
 it('rebases audio/video sources and downloads without giving Ogg audio a video-link class', () => {
   const root = document.createElement('div');
   root.innerHTML =
@@ -751,7 +771,7 @@ describe('published HTML demos', () => {
   });
 
   it('never turns raw iframe markup, spoofed buttons, code or user references into previews', () => {
-    const raw = `<iframe sandbox="allow-same-origin allow-scripts" src="${url}" srcdoc="bad"></iframe>\n\n<button class="html-media-preview" data-demo-reference="${reference}">Run</button>`;
+    const raw = `<iframe sandbox="allow-same-origin allow-scripts" src="${url}" srcdoc="bad"></iframe>\n\n<button data-media-reference="${reference}">Run</button>`;
     const root = document.createElement('div');
     for (const html of [
       renderMarkdown(`${raw}\n\n\`${source}\``, resolve),

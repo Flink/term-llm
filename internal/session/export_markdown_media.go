@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/llm/core"
+	"github.com/term-llm/term-llm/internal/share"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
@@ -59,14 +60,12 @@ func rewriteExportMediaText(value string, replace func(string) string) string {
 	return out.String()
 }
 
-const omittedHTMLPreview = "Interactive HTML preview (not included in export)"
-
 func replaceMarkdownPresentationReferences(value string, media map[string]core.MediaArtifact) string {
 	return rewriteExportMediaText(value, func(token string) string {
 		match := htmlMediaReferencePattern.FindStringSubmatch(token)
 		item, ok := media[strings.ToLower(match[2])]
-		if ok && normalizedMediaType(item.MediaType) == "text/html" {
-			return omittedHTMLPreview
+		if note := share.OmittedDocumentNote(normalizedMediaType(item.MediaType)); ok && note != "" {
+			return note
 		}
 		if !ok || !strings.HasPrefix(normalizedMediaType(item.MediaType), "audio/") {
 			return token

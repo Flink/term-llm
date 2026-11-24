@@ -31,3 +31,18 @@ export async function fileText(
   }
   return response.text();
 }
+
+/** Like other published media, use the authenticated same-origin media route. */
+export async function publishedText(url: string, mime: 'text/markdown' | 'text/plain') {
+  const response = await fetch(url, {
+    credentials: 'same-origin',
+    redirect: 'error',
+    headers: { Accept: mime },
+  });
+  if (
+    !response.ok ||
+    response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== mime
+  )
+    throw new Error('Published text is unavailable.');
+  return response.text();
+}

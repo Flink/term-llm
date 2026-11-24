@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/preact';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/preact';
 import { expect, it, vi } from 'vitest';
 import * as markdown from '../domain/markdown';
 import { Markdown } from './Markdown';
@@ -7,6 +7,67 @@ const ref = '0123456789abcdef0123456789abcdef';
 const demo = `![Counter](term-llm-media://${ref})`;
 const resolveMedia = () => ({ type: 'html' as const, url: `/ui/media/${ref}.html` });
 const launcher = () => screen.getByRole('button', { name: 'Preview: Counter' });
+
+it.each([
+  {
+    type: 'markdown',
+    extension: 'md',
+    mime: 'text/markdown',
+    name: 'notes.md',
+    keyword: '.hljs-section',
+  },
+  { type: 'text', extension: 'txt', mime: 'text/plain', name: 'notes.txt', keyword: '' },
+  { type: 'text', extension: 'txt', mime: 'text/plain', name: 'notes.RB', keyword: '.hljs-string' },
+  { type: 'text', extension: 'txt', mime: 'text/plain', name: 'notes.whatever', keyword: '' },
+] as const)(
+  'previews $name without treating source as HTML',
+  async ({ type, extension, mime, name, keyword }) => {
+    const url = `/ui/media/${ref}.${extension}`;
+    const source =
+      type === 'markdown'
+        ? '# Notes\n\n**Bold**\n\n<img src="/private">\n'
+        : 'puts "<img src=private>"\n';
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(source, {
+        headers: { 'Content-Type': `${mime}; charset=utf-8` },
+      }),
+    );
+    try {
+      render(<Markdown value={demo} resolveMedia={() => ({ type, url, name })} />);
+      fireEvent.click(launcher());
+      const dialog = await screen.findByRole('dialog', { name: 'Preview: Counter' });
+      const preview = within(dialog);
+      const raw = dialog.querySelector('pre')!;
+      expect(dialog.querySelector('iframe, img')).toBeNull();
+      if (type === 'markdown') {
+        expect(preview.getByRole('heading', { name: 'Notes' })).toBeVisible();
+        expect(preview.getByText('Bold', { selector: 'strong' })).toBeVisible();
+        expect(raw).not.toBeVisible();
+        const toggle = preview.getByRole('button', { name: 'Raw source' });
+        expect(toggle).toHaveAttribute('title', 'Raw source');
+        expect(toggle.querySelector('svg[data-icon="code"]')).not.toBeNull();
+        fireEvent.click(toggle);
+        expect(toggle).toHaveAttribute('aria-pressed', 'true');
+        expect(preview.queryByRole('heading')).toBeNull();
+        expect(raw).toBeVisible();
+        fireEvent.click(toggle);
+        expect(preview.getByRole('heading', { name: 'Notes' })).toBeVisible();
+      } else {
+        expect(preview.queryByRole('button', { name: 'Raw source' })).toBeNull();
+        expect(raw).toBeVisible();
+      }
+      if (keyword) await waitFor(() => expect(raw.querySelector(keyword)).not.toBeNull());
+      else expect(raw.querySelector('code')).not.toHaveClass('hljs');
+      expect(raw.textContent).toBe(source);
+      expect(fetch).toHaveBeenCalledExactlyOnceWith(
+        url,
+        expect.objectContaining({ redirect: 'error' }),
+      );
+    } finally {
+      fetch.mockRestore();
+    }
+  },
+);
 
 it('keeps a streaming launcher disabled across tail updates while another row can launch', async () => {
   const rows = (value: string, streaming: boolean) => (
@@ -66,6 +127,9 @@ it('offers a retry after a failed import without changing the eventual preview t
     fireEvent.click(launcher());
     const retry = await screen.findByRole('button', { name: /click to retry/i });
     expect(retry).toBeEnabled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(retry).toBeEnabled());
+    expect(retry).toHaveTextContent(/^Preview: Counter — failed to load\. Click to retry\.$/);
     vi.doUnmock('./html-preview');
     fireEvent.click(retry);
     expect(await screen.findByTitle('Preview: Counter')).toBeVisible();
