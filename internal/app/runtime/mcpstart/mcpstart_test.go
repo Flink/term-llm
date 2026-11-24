@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -79,69 +80,119 @@ func TestWaitForMCPStartupBounded(t *testing.T) {
 }
 
 func TestAskMCPStartup(t *testing.T) {
+	const formerCutoff = 10 * time.Second
 	for _, tc := range []struct {
 		name            string
 		delay, deadline time.Duration
 		wantTimeout     bool
 	}{
-		// Cross ask's former 10-second cutoff while staying within the manager's budget.
-		{name: "slow server becomes ready", delay: 11 * time.Second, deadline: 20 * time.Second},
+		// Cross ask's former cutoff while staying within the manager's budget.
+		{name: "slow server becomes ready", delay: formerCutoff + time.Second, deadline: 20 * time.Second},
 		{name: "deadline names the server", delay: time.Minute, deadline: 500 * time.Millisecond, wantTimeout: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), tc.deadline)
-			defer cancel()
-			server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "slow", Version: "1"}, nil)
-			server.AddTool(&sdkmcp.Tool{Name: "test", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
-				return &sdkmcp.CallToolResult{}, nil
-			})
-			handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, &sdkmcp.StreamableHTTPOptions{Stateless: true})
-			var first sync.Once
-			httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				first.Do(func() {
-					timer := time.NewTimer(tc.delay)
-					defer timer.Stop()
-					select {
-					case <-timer.C:
-					case <-r.Context().Done():
-					case <-ctx.Done():
-					}
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), tc.deadline)
+				defer cancel()
+				server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "slow", Version: "1"}, nil)
+				server.AddTool(&sdkmcp.Tool{Name: "test", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+					return &sdkmcp.CallToolResult{}, nil
 				})
-				if r.Context().Err() == nil && ctx.Err() == nil {
-					handler.ServeHTTP(w, r)
+				handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, &sdkmcp.StreamableHTTPOptions{Stateless: true})
+				firstRequest := make(chan struct{})
+				var first sync.Once
+				// Keep this test serial: the manager clones the process-wide
+				// default transport. Restore it after the test server closes.
+				originalTransport := http.DefaultTransport
+				t.Cleanup(func() { http.DefaultTransport = originalTransport })
+				httpServer := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					first.Do(func() {
+						close(firstRequest)
+						timer := time.NewTimer(tc.delay)
+						defer timer.Stop()
+						select {
+						case <-timer.C:
+						case <-r.Context().Done():
+						case <-ctx.Done():
+						}
+					})
+					if r.Context().Err() == nil && ctx.Err() == nil {
+						handler.ServeHTTP(w, r)
+					}
+				}))
+				// MCP replaces DialContext on its clone of DefaultTransport but
+				// preserves DialTLSContext. Use the in-memory server's HTTPS dialer
+				// so the real MCP exchange can run on synctest's clock.
+				http.DefaultTransport = httpServer.Client().Transport
+				endpoint := "https://" + strings.TrimPrefix(httpServer.URL, "http://")
+				mcptest.WriteConfig(t, map[string]mcp.ServerConfig{"slow": {Type: "http", URL: endpoint}})
+
+				var feedback bytes.Buffer
+				var manager, startingManager *mcp.Manager
+				var err error
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					manager, err = EnableMCPServersWithFeedback(ctx, "slow", engine.NewEngine(nil, nil), &feedback, &MCPOptions{
+						LoadConfig: func(m *mcp.Manager) error {
+							startingManager = m
+							return m.LoadConfig()
+						},
+					})
+				}()
+				defer func() {
+					cancel()
+					<-done
+					if manager != nil {
+						manager.StopAll()
+					}
+				}()
+
+				synctest.Wait()
+				select {
+				case <-firstRequest:
+				default:
+					t.Fatal("background startup did not reach the MCP transport")
 				}
-			}))
-			defer func() {
-				cancel()
-				httpServer.Close()
-			}()
-			mcptest.WriteConfig(t, map[string]mcp.ServerConfig{"slow": {Type: "http", URL: httpServer.URL}})
-			var feedback bytes.Buffer
-			manager, err := EnableMCPServersWithFeedback(ctx, "slow", engine.NewEngine(nil, nil), &feedback, nil)
-			if got := feedback.String(); strings.ContainsAny(got, "\r⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") || !strings.HasPrefix(got, "Starting MCP: slow\n") {
-				t.Fatalf("non-terminal startup feedback = %q", got)
-			}
-			if manager != nil {
-				defer manager.StopAll()
-			}
-			if tc.wantTimeout {
-				if err == nil || !strings.Contains(err.Error(), "slow (startup timed out:") {
-					t.Fatalf("error = %v, want named startup timeout", err)
+				if !tc.wantTimeout {
+					// The transport waits 11 seconds. At the former cutoff the
+					// background startup must still be pending, as must the caller.
+					synctest.Sleep(formerCutoff)
+					select {
+					case <-done:
+						t.Fatalf("foreground startup returned before transport readiness: %v", err)
+					default:
+					}
+					if status, err := startingManager.ServerStatus("slow"); status != mcp.StatusStarting || err != nil {
+						t.Fatalf("background startup status = %v, %v; want starting", status, err)
+					}
 				}
-				if manager != nil {
-					t.Fatal("failed startup returned a manager")
+				<-done
+				if got := feedback.String(); strings.ContainsAny(got, "\r⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") || !strings.HasPrefix(got, "Starting MCP: slow\n") {
+					t.Fatalf("non-terminal startup feedback = %q", got)
 				}
-			} else {
-				if err != nil {
-					t.Fatal(err)
+				if tc.wantTimeout {
+					if err == nil || !strings.Contains(err.Error(), "slow (startup timed out:") {
+						t.Fatalf("error = %v, want named startup timeout", err)
+					}
+					if manager != nil {
+						t.Fatal("failed startup returned a manager")
+					}
+				} else {
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !strings.Contains(feedback.String(), "✓ MCP ready: 1 tools from slow\n") {
+						t.Fatalf("missing ready feedback: %q", feedback.String())
+					}
+					if manager == nil || len(manager.AllTools()) != 1 {
+						t.Fatal("slow server's tools were not loaded")
+					}
+					if status, err := manager.ServerStatus("slow"); status != mcp.StatusReady || err != nil {
+						t.Fatalf("background startup status = %v, %v; want ready", status, err)
+					}
 				}
-				if !strings.Contains(feedback.String(), "✓ MCP ready: 1 tools from slow\n") {
-					t.Fatalf("missing ready feedback: %q", feedback.String())
-				}
-				if manager == nil || len(manager.AllTools()) != 1 {
-					t.Fatal("slow server's tools were not loaded")
-				}
-			}
+			})
 		})
 	}
 }

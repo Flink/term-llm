@@ -244,7 +244,7 @@ func TestRuntimeSpawnPersistsChildForStats(t *testing.T) {
 			if tc.cancel {
 				output = executeCancelledStatsChild(t, toolCtx, cancel, env, spawn)
 			} else {
-				output, err = spawn.Execute(toolCtx, json.RawMessage(`{"agent_name":"stats-child","prompt":"Say hello","model":"debug:fast"}`))
+				output, err = spawn.Execute(toolCtx, json.RawMessage(`{"agent_name":"stats-child","prompt":"`+shortDebugChildPrompt+`","model":"debug:fast"}`))
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -305,6 +305,7 @@ func executeCancelledStatsChild(t *testing.T, ctx context.Context, cancel contex
 	}
 	finished := make(chan outcome, 1)
 	go func() {
+		// Keep the paced stream here: cancellation must happen before the provider finishes.
 		output, err := spawn.Execute(ctx, json.RawMessage(`{"agent_name":"stats-child","prompt":"Say hello","model":"debug:fast"}`))
 		finished <- outcome{output, err}
 	}()

@@ -11,4 +11,4 @@ Owns serve startup/lifecycle, HTTP and Hub routes, the shared runner and prepare
 
 Subpackages `hub/`, `jobs/`, `server/`, `shell/`, `protocol/`, `wire/` and `liveprogress/` must not import this package. Platform/service primitives and Telegram live in `internal/serve/`; shared run runtime, approval and bootstrap live in `internal/app/runtime/`.
 
-Focused checks: `make test PKG='./internal/app/serve/... ./cmd' ARGS=-count=1`, the same with `ARGS=-race`, and `make test PKG='./cmd/gentsapi ./internal/depguard'`.
+Focused checks: `make test PKG='./internal/app/serve/... ./cmd' ARGS=-count=1`, the same with `ARGS=-race`, and `make test PKG='./cmd/gentsapi ./internal/depguard'`. To reproduce the routine CI race lane, run `bash scripts/test_race_ci.sh` from the repository root. It selects concurrency and lifecycle test families in the main serve package; the scheduled/manual **Scheduled stress** workflow race-tests the full suite.

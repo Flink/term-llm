@@ -224,12 +224,10 @@ jobs:
         if: needs.changes.outputs.backend == 'true'
         run: make frontend
 
-      - name: Race-test Web UI lifecycle owners
+      - name: Race-test lifecycle and concurrency owners
         if: needs.changes.outputs.backend == 'true'
-        run: |
-          # Serve's race-instrumented integration suite can exceed Go's default 10m on CI runners.
-          go test -race -timeout=20m ./internal/session ./internal/termhost ./internal/app/serve/... ./cmd
-          go test -race -tags browserfixture ./internal/llm/debug -run '^TestDebugBrowserGate$'
+        # The scheduled stress workflow runs the unfiltered root suite under -race.
+        run: bash scripts/test_race_ci.sh
 
       - name: Race-test nested modules
         if: needs.changes.outputs.backend == 'true'

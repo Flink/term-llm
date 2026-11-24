@@ -297,7 +297,7 @@ func TestSpawnedChildPersistsInheritedPolicy(t *testing.T) {
 	childID := session.NewID()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if _, err := runner.runChildInternal(ctx, runpkg.ChildRunRequest{AgentName: "reviewer", ChildSessionID: childID, Prompt: "hello"}, nil); err != nil {
+	if _, err := runner.runChildInternal(ctx, runpkg.ChildRunRequest{AgentName: "reviewer", ChildSessionID: childID, Prompt: shortDebugChildPrompt}, nil); err != nil {
 		t.Fatalf("child run: %v", err)
 	}
 	saved, err := store.Get(context.Background(), childID)

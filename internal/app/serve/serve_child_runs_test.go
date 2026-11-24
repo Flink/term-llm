@@ -22,6 +22,10 @@ import (
 	"github.com/term-llm/term-llm/internal/tools"
 )
 
+// The debug provider treats this as two scripted text actions. Each fits in
+// one chunk even at the normal rate, so the stream reports usage without sleeps.
+const shortDebugChildPrompt = "markdown*16,markdown*16"
+
 type childRunFixture struct {
 	srv    *serveServer
 	store  session.Store
@@ -100,7 +104,7 @@ func newChildRunFixture(t *testing.T, withObserver bool) *childRunFixture {
 
 func (f *childRunFixture) spawnChild(t *testing.T) tools.SpawnAgentResult {
 	t.Helper()
-	output, err := f.spawn.Execute(f.ctx, json.RawMessage(`{"agent_name":"drill-child","prompt":"Say hello","model":"debug:fast"}`))
+	output, err := f.spawn.Execute(f.ctx, json.RawMessage(`{"agent_name":"drill-child","prompt":"`+shortDebugChildPrompt+`","model":"debug:fast"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,7 +625,7 @@ func TestHostedChildContinuesCompletedSession(t *testing.T) {
 	previousHook := serveRuntimeClosedHook.Swap(&hook)
 	t.Cleanup(func() { serveRuntimeClosedHook.Store(previousHook) })
 	ctx := core.ContextWithCallID(f.ctx, "continue-drill")
-	output, err := continueTool.Execute(ctx, json.RawMessage(fmt.Sprintf(`{"agent_id":%q,"instructions":"Say hello again","wait":5}`, first.SessionID)))
+	output, err := continueTool.Execute(ctx, json.RawMessage(fmt.Sprintf(`{"agent_id":%q,"instructions":%q,"wait":5}`, first.SessionID, "Say hello again,"+shortDebugChildPrompt)))
 	var continued tools.SpawnAgentResult
 	if err != nil || json.Unmarshal([]byte(output.Content), &continued) != nil || continued.Status != "completed" || continued.AgentID != first.SessionID {
 		t.Fatalf("continue child = %s, err = %v", output.Content, err)
@@ -675,7 +679,7 @@ func TestHostedChildContinueAdmissionFailureRemainsResumable(t *testing.T) {
 	if !ok {
 		t.Fatal("continue_agent tool missing")
 	}
-	args := json.RawMessage(fmt.Sprintf(`{"agent_id":%q,"instructions":"One more turn","wait":5}`, first.AgentID))
+	args := json.RawMessage(fmt.Sprintf(`{"agent_id":%q,"instructions":%q,"wait":5}`, first.AgentID, shortDebugChildPrompt))
 	output, err := continueTool.Execute(f.ctx, args)
 	var failed tools.SpawnAgentResult
 	if err != nil || json.Unmarshal([]byte(output.Content), &failed) != nil || !failed.Resumable || failed.Status != "completed" || !strings.Contains(failed.Error, errServeSessionBusy.Error()) {

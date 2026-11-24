@@ -1,24 +1,25 @@
 package serve
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/term-llm/term-llm/internal/hub"
 )
 
-// Pace real socket writes below the old20MiB/10s threshold. Crucially, a giant
+// Pace WebSocket writes below the old 20 MiB/10s threshold. Crucially, a giant
 // Gorilla write would hold its control-frame mutex during this entire wait;
 // bounded fragments instead yield that mutex between each paced network write.
 type throttledUploadConn struct {
@@ -37,9 +38,8 @@ func (c *throttledUploadConn) Write(p []byte) (int, error) {
 	if c.enabled.Load() {
 		for old := c.maxWrite.Load(); int64(len(p)) > old && !c.maxWrite.CompareAndSwap(old, int64(len(p))); old = c.maxWrite.Load() {
 		}
-		c.startOnce.Do(func() { close(c.started) })
-		//27MiB encoded bytes at768KiB/s last~36s: enough to exercise the
-		// DEFAULT20s ping and its10s control-write timeout, without test knobs.
+		// The encoded upload takes about 36s of virtual time at 768 KiB/s.
+		// Gorilla holds its write mutex during this delay, just as for slow I/O.
 		timer := time.NewTimer(time.Duration(len(p)) * time.Second / (768 << 10))
 		defer timer.Stop()
 		select {
@@ -48,7 +48,11 @@ func (c *throttledUploadConn) Write(p []byte) (int, error) {
 			return 0, net.ErrClosed
 		}
 	}
-	return c.Conn.Write(p)
+	n, err := c.Conn.Write(p)
+	if n > 0 && c.enabled.Load() {
+		c.startOnce.Do(func() { close(c.started) })
+	}
+	return n, err
 }
 
 func (c *throttledUploadConn) SetWriteDeadline(d time.Time) error {
@@ -66,33 +70,45 @@ func (c *throttledUploadConn) Close() error {
 	return c.Conn.Close()
 }
 
-type throttledUploadListener struct{ net.Listener }
+// Wrap the transport at upgrade so the real HTTP server, Hub handler and
+// Gorilla handshake all run over httptest's in-memory network.
+type throttledUploadResponseWriter struct{ http.ResponseWriter }
 
-func (l throttledUploadListener) Accept() (net.Conn, error) {
-	c, err := l.Listener.Accept()
+func (w throttledUploadResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := http.NewResponseController(w.ResponseWriter).Hijack()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &throttledUploadConn{Conn: c, started: make(chan struct{}), closed: make(chan struct{})}, nil
+	return &throttledUploadConn{Conn: conn, started: make(chan struct{}), closed: make(chan struct{})}, rw, nil
 }
 
 func TestHubReverseLargeCanceledUploadKeepsDefaultHeartbeatAndSibling(t *testing.T) {
+	synctest.Test(t, testHubReverseLargeCanceledUpload)
+}
+
+func testHubReverseLargeCanceledUpload(t *testing.T) {
+	const uploadSize = 20 << 20
 	node := hub.Node{ID: "slow-upload", Connection: "reverse", BasePath: "/chat", Token: "token"}
 	s := newHubServer(hub.NewRegistry(fakeHubResolver{nodes: []hub.Node{node}}), nil)
 	node, _ = s.registry.Lookup(node.ID)
-	ts := httptest.NewUnstartedServer(s.handler())
-	ts.Listener = throttledUploadListener{ts.Listener}
-	ts.Start()
-	defer ts.Close()
-	peer, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(ts.URL, "http")+"/api/connect?node_id="+node.ID, http.Header{"Authorization": {"Bearer token"}, hubNodeIDHeader: {node.ID}})
+	handler := s.handler()
+	ts := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(throttledUploadResponseWriter{w}, r)
+	}))
+	dialer := websocket.Dialer{
+		NetDialContext:   ts.Client().Transport.(*http.Transport).DialContext,
+		HandshakeTimeout: 10 * time.Second,
+	}
+	peer, _, err := dialer.Dial("ws://example.com/api/connect?node_id="+node.ID, http.Header{"Authorization": {"Bearer token"}, hubNodeIDHeader: {node.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer peer.Close()
-	waitForReverseNode(t, s, node.ID)
-	s.reverse.mu.RLock()
-	c := s.reverse.conns[node.ID]
-	s.reverse.mu.RUnlock()
+	synctest.Wait() // Let registration and the heartbeat ticker start before the upload.
+	c, err := s.reverse.connection(node)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer c.closeWithError(errors.New("throttled test complete"))
 	socket := c.conn.UnderlyingConn().(*throttledUploadConn)
 	beforePing := c.lastSeenValue()
@@ -109,7 +125,13 @@ func TestHubReverseLargeCanceledUploadKeepsDefaultHeartbeatAndSibling(t *testing
 	go func() {
 		for {
 			var frame hubReverseRequest
-			if err := peer.ReadJSON(&frame); err != nil {
+			// Read to the end of the WebSocket message, processing any
+			// interleaved control frames, before accepting the JSON request.
+			_, data, err := peer.ReadMessage()
+			if err == nil {
+				err = json.Unmarshal(data, &frame)
+			}
+			if err != nil {
 				peerFailure <- err
 				return
 			}
@@ -125,7 +147,7 @@ func TestHubReverseLargeCanceledUploadKeepsDefaultHeartbeatAndSibling(t *testing
 	socket.enabled.Store(true)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	first := containmentDo(s, ctx, node, "/upload", bytes.Repeat([]byte("x"), 20<<20))
+	first := containmentDo(s, ctx, node, "/upload", bytes.Repeat([]byte("x"), uploadSize))
 	select {
 	case <-socket.started:
 	case <-time.After(10 * time.Second):
@@ -142,19 +164,14 @@ func TestHubReverseLargeCanceledUploadKeepsDefaultHeartbeatAndSibling(t *testing
 	case <-time.After(hubReversePingInterval + 10*time.Second):
 		t.Fatal("default ping starved behind large JSON writer")
 	}
+	synctest.Wait() // Process the pong without advancing virtual time to another fragment.
 	select {
 	case err := <-first:
 		t.Fatalf("upload finished before heartbeat interleaved: %v", err)
 	default:
 	}
-	watchdog := time.After(3 * time.Second)
-	for !c.lastSeenValue().After(beforePing) {
-		select {
-		case <-watchdog:
-			t.Fatal("default pong did not refresh heartbeat")
-		default:
-			runtime.Gosched()
-		}
+	if !c.lastSeenValue().After(beforePing) {
+		t.Fatal("default pong did not refresh heartbeat")
 	}
 	if !s.reverse.isConnected(node.ID) {
 		t.Fatal("canceled in-flight upload detached shared tunnel")
@@ -167,13 +184,13 @@ func TestHubReverseLargeCanceledUploadKeepsDefaultHeartbeatAndSibling(t *testing
 	}
 	var uploadID string
 	gotCancel, gotSibling := false, false
-	watchdog = time.After(5 * time.Second)
+	watchdog := time.After(5 * time.Second)
 	for !gotCancel || !gotSibling {
 		select {
 		case frame := <-frames:
 			switch {
 			case frame.path == "/upload":
-				if frame.size != 20<<20 {
+				if frame.size != uploadSize {
 					t.Fatalf("partial original reached remote: %d", frame.size)
 				}
 				uploadID = frame.id
@@ -198,8 +215,9 @@ func TestHubReverseLargeCanceledUploadKeepsDefaultHeartbeatAndSibling(t *testing
 	if socket.maxWrite.Load() > (32<<10)+4096 {
 		t.Fatalf("unbounded Gorilla socket write=%d", socket.maxWrite.Load())
 	}
-	if !s.reverse.isConnected(node.ID) {
-		t.Fatal("healthy sibling required tunnel reconnect")
+	synctest.Wait() // The cancel writer may still be releasing its slot.
+	if current, err := s.reverse.connection(node); err != nil || current != c {
+		t.Fatalf("healthy sibling did not reuse the original tunnel: %v", err)
 	}
 	c.pendingMu.Lock()
 	pending := len(c.pending)
