@@ -39,14 +39,11 @@ func timelineGroupIdentity(rec MoneyRecord, caller, route, group string) (string
 	}
 	if group == "provider" {
 		key := cmp.Or(rec.Provider, route)
-		return key, cmp.Or(timelineProviderLabel(key), key, "Unknown provider")
+		return key, cmp.Or(timelineProviderLabels[strings.ToLower(strings.TrimSpace(key))], key, "Unknown provider")
 	}
 	if group == "model" {
 		model := timelineModel(rec)
-		if model == "" {
-			return "model:", "Unknown model"
-		}
-		return "model:" + model, model
+		return "model:" + model, cmp.Or(model, "Unknown model")
 	}
 	return "total", "Total"
 }
@@ -163,21 +160,11 @@ func accumulateTimelinePlanCost(a *timelineAggregate, e *APIEquivalent, currenci
 	currencies[e.Currency] = true
 }
 
-func timelineProviderLabel(raw string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "openai":
-		return "OpenAI"
-	case "anthropic", "claude-code", "claude-bin":
-		return "Claude"
-	case "chatgpt":
-		return "ChatGPT"
-	case "grok", "xai", "grok-bin":
-		return "Grok"
-	case "gemini", "google":
-		return "Gemini"
-	case "copilot":
-		return "Copilot"
-	default:
-		return ""
-	}
+var timelineProviderLabels = map[string]string{
+	"openai":    "OpenAI",
+	"anthropic": "Claude", "claude-code": "Claude", "claude-bin": "Claude",
+	"chatgpt": "ChatGPT",
+	"grok":    "Grok", "xai": "Grok", "grok-bin": "Grok",
+	"gemini": "Gemini", "google": "Gemini",
+	"copilot": "Copilot",
 }

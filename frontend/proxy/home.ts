@@ -153,7 +153,7 @@ export function homeView(
       view.replaceChildren(
         timelineView(
           timeline,
-          (range, group) => api.timeline(range, group, browserTimezone),
+          (range, group, scope) => api.timeline(range, group, browserTimezone, scope),
           prefs,
           remember,
           [planEstimatesView(api, context), moneySettingsView(state, api, context)],

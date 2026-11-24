@@ -9,10 +9,10 @@ import (
 	"github.com/term-llm/term-llm/internal/app/proxy/moneytimeline"
 )
 
-// timelinePrevious totals the prior window without grouping. It returns nil
-// unless retained history reaches its start, so an unrecorded past isn't
-// treated as a period with zero usage.
-func (s *Service) timelinePrevious(ctx context.Context, chart moneytimeline.Response) (*moneytimeline.Series, error) {
+// timelinePrevious totals matching rows in the prior window without grouping.
+// Coverage is based on retained history, regardless of scope, so a covered
+// period with no matching rows is distinct from an unrecorded past.
+func (s *Service) timelinePrevious(ctx context.Context, chart moneytimeline.Response, scope timelineScope) (*moneytimeline.Series, error) {
 	start, end := chart.PreviousWindow()
 	if !end.After(start) {
 		return nil, nil
@@ -32,7 +32,7 @@ func (s *Service) timelinePrevious(ctx context.Context, chart moneytimeline.Resp
 	}
 	total := newTimelineAggregate("Total")
 	currencySet := map[string]bool{}
-	if err := s.store.streamTimelineRows(ctx, from, through, func(_ int64, _, _ string, rec MoneyRecord) {
+	if err := s.store.streamTimelineRows(ctx, from, through, scope, func(_ int64, _, _ string, rec MoneyRecord) {
 		accumulateTimelineRecord(total, rec, currencySet)
 	}); err != nil {
 		return nil, fmt.Errorf("read previous timeline: %w", err)

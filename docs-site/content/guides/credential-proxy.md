@@ -756,16 +756,23 @@ Home opens on **30 days of cost by model**. Choose **Cost** or **Tokens**, a ran
 (**Today**, **7d**, **30d**), and a split (total, client, provider, or model).
 The breakdown lists the biggest contributors first, ranked by cost in the selected
 currency or by token count, not by request count. Expand **more** to see the rest
-by name. **Tokens** also splits usage into input, output, cache reads, and cache
-writes for the range and each group. Hover, tap, or focus a bar to see the top 20
+by name. Every breakdown row is clickable: select a **client** or **provider** to
+see its models, select a **model** to isolate its usage, or select **Total** to
+switch to the model breakdown. The **Viewing** breadcrumb shows the active
+filters. Use **×** to remove the last filter, or choose an earlier breadcrumb to
+go back. Changing the metric, time range, or split keeps the active filters.
+
+**Tokens** also splits usage into input, output, cache reads, and cache writes
+for the range and each group. Hover, tap, or focus a bar to see the top 20
 contributors for that hour or day. Expand the list for the rest; the total includes
 them all. The chart uses your browser timezone: Today starts at local midnight,
 and longer ranges use local calendar days. Currencies remain separate.
 
-The address bar reflects the active filters. Reload or bookmark that URL to
-restore the same view; opening bare `/_proxy/` restores this browser’s last
-selection. **Reset view** returns to the default. Only filter choices are saved,
-not costs, client identities, or request data.
+The address bar reflects the metric, range, split, and currency. Reload or
+bookmark that URL to restore those preferences; opening bare `/_proxy/` restores
+this browser’s last selection. Drill-down filters apply only while the Home view
+is open; client, provider, and model identities are not saved in the URL or in
+browser storage. **Reset view** clears the drill-down and returns to the default.
 
 Only traffic through this proxy is counted. Missing evidence is not zero.
 Provider token semantics are normalized without counting caches/reasoning twice;

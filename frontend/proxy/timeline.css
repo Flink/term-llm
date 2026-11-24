@@ -1,11 +1,138 @@
-/* Home timeline: summary, segmented controls, stacked bars, breakdown rail and
-   footer. timeline.ts owns the markup; this file only shapes it. Each bar is an
-   SVG group with a transparent hit rect so pointer, tap and keyboard share one
-   target, and the tooltip is absolutely positioned beside the selected bar. */
+/* Home timeline: summary, scope, controls, stacked bars, breakdown rail and
+   footer. Each chart bar has a transparent hit rect so pointer, tap and
+   keyboard share one target, and the tooltip sits beside the selected bar. */
 
 .timeline {
   padding: 1rem 0 0;
   font-variant-numeric: tabular-nums;
+}
+
+.timeline:has(> .timeline-scope:first-child) {
+  padding-block-start: 0;
+}
+
+.timeline-scope + .timeline-heading {
+  margin-block-start: 1rem;
+}
+
+.timeline-scope {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.75rem;
+  margin: 0;
+  padding: 0.35rem 0.7rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font-size: 0.8rem;
+}
+
+.timeline-scope-label {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.timeline-scope-trail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem 0.55rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.timeline-scope-trail > li {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.timeline-chevron {
+  display: block;
+  flex: none;
+  width: 0.35rem;
+  height: 0.35rem;
+  transform: rotate(-45deg);
+  border: solid currentcolor;
+  border-width: 0 1.5px 1.5px 0;
+  color: var(--muted);
+}
+
+.timeline-scope button {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+}
+
+.timeline-scope .timeline-scope-link {
+  min-width: 0;
+  padding: 0.15rem 0;
+  font-size: inherit;
+  font-weight: 550;
+  line-height: inherit;
+  overflow-wrap: anywhere;
+  text-align: start;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 0.18em;
+}
+
+.timeline-scope .timeline-scope-link:hover {
+  background: transparent;
+  color: var(--text);
+  text-decoration-color: currentcolor;
+}
+
+.timeline-scope-current {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.1rem 0.2rem 0.1rem 0.55rem;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  color: var(--text);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.timeline-scope .timeline-scope-clear {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 1.5rem;
+  min-height: 2rem;
+  padding: 0;
+  border-radius: 4px;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.timeline-scope .timeline-scope-clear:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.timeline-scope-clear:focus-visible {
+  outline-offset: -2px;
+}
+
+@media (pointer: coarse), (width <= 40rem) {
+  .timeline-scope .timeline-scope-clear {
+    width: 44px;
+    min-height: 44px;
+  }
+
+  .timeline-scope .timeline-scope-link {
+    min-width: 44px;
+  }
 }
 
 .timeline-heading {
@@ -72,6 +199,7 @@
   font-weight: 500;
   text-decoration: underline dotted;
   text-underline-offset: 3px;
+  white-space: nowrap;
 }
 
 .timeline-reset:hover {
@@ -328,6 +456,16 @@
   font-weight: 550;
 }
 
+.timeline-breakdown h3:has(+ .timeline-breakdown-hint) {
+  margin-block-end: 0.15rem;
+}
+
+.timeline-breakdown-hint {
+  margin: 0 0 0.3rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
 .timeline-breakdown ul {
   margin: 0;
   padding: 0;
@@ -335,12 +473,61 @@
 }
 
 .timeline-breakdown li {
+  border-bottom: 1px solid #f1f2f4;
+}
+
+.timeline-breakdown-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 0.4rem 0.5rem;
   padding: 0.55rem 0;
-  border-bottom: 1px solid #f1f2f4;
+}
+
+.timeline-breakdown .timeline-breakdown-action {
+  grid-template-columns: auto minmax(0, 1fr) fit-content(50%) auto 0.75rem;
+  width: 100%;
+  min-height: 3.75rem;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  font-weight: 550;
+  line-height: inherit;
+  text-align: start;
+}
+
+@media (hover: hover) {
+  .timeline-breakdown .timeline-breakdown-action:hover {
+    background: var(--surface-2);
+  }
+}
+
+.timeline-breakdown .timeline-breakdown-action:active {
+  background: var(--surface-3);
+}
+
+.timeline-breakdown-action:focus-visible {
+  z-index: 1;
+  position: relative;
+  background: var(--surface-2);
+  outline-offset: 1px;
+}
+
+.timeline-breakdown-affordance {
+  display: grid;
+  grid-area: 1 / 5;
+  place-items: center;
+  color: var(--muted);
+}
+
+.timeline-breakdown-cross {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.timeline-breakdown-action :is(.timeline-breakdown-note, .timeline-breakdown-meter) {
+  grid-column-end: 5;
 }
 
 .timeline-breakdown-name {
@@ -353,6 +540,12 @@
   font-size: 0.86rem;
   font-weight: 650;
   white-space: nowrap;
+}
+
+.timeline-breakdown .timeline-breakdown-action b {
+  overflow-wrap: anywhere;
+  text-align: end;
+  white-space: normal;
 }
 
 .timeline-breakdown-share {

@@ -1,5 +1,6 @@
 export type ChartRange = 'today' | '7d' | '30d';
 export type ChartGroup = 'total' | 'client' | 'provider' | 'model';
+export type TimelineScope = Partial<Record<Exclude<ChartGroup, 'total'>, string>>;
 
 /** Disjoint, normalized components of measured tokens; counted exactly once in `tokens`. */
 export interface TimelineTokenParts {

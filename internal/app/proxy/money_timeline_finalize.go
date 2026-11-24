@@ -1,25 +1,15 @@
 package proxy
 
 import (
-	"sort"
+	"maps"
+	"slices"
 
 	"github.com/term-llm/term-llm/internal/app/proxy/moneytimeline"
 )
 
-func finalizeTimelineBuckets(result *moneytimeline.Response, aggs []map[string]*timelineAggregate) {
-	for i := range result.Buckets {
-		result.Buckets[i].Series = timelineBucketSeries(aggs[i], result.Currencies)
-	}
-}
-
 func timelineBucketSeries(aggregates map[string]*timelineAggregate, currencies []string) []moneytimeline.Series {
-	keys := make([]string, 0, len(aggregates))
-	for key := range aggregates {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	series := make([]moneytimeline.Series, 0, len(keys))
-	for _, key := range keys {
+	series := make([]moneytimeline.Series, 0, len(aggregates))
+	for _, key := range slices.Sorted(maps.Keys(aggregates)) {
 		series = append(series, timelineSeriesFromAggregate(key, aggregates[key], currencies))
 	}
 	return series
@@ -28,9 +18,7 @@ func timelineBucketSeries(aggregates map[string]*timelineAggregate, currencies [
 func timelineSeriesFromAggregate(key string, a *timelineAggregate, currencies []string) moneytimeline.Series {
 	series := moneytimeline.Series{Key: key, Label: a.label, Costs: []moneytimeline.Cost{}, UnknownCost: a.unknownCost, UnknownTokens: a.unknownTokens, Plan: a.plan}
 	if a.tokenKnown {
-		n, parts := a.tokens, a.tokenParts
-		series.Tokens = &n
-		series.TokenParts = &parts
+		series.Tokens, series.TokenParts = new(a.tokens), new(a.tokenParts)
 	}
 	for _, currency := range currencies {
 		amount, hasCost := a.cost[currency]
@@ -55,10 +43,7 @@ func timelineSeriesFromAggregate(key string, a *timelineAggregate, currencies []
 }
 
 func sortedTimelineCurrencies(seen map[string]bool) []string {
-	currencies := make([]string, 0, len(seen))
-	for c := range seen {
-		currencies = append(currencies, c)
-	}
-	sort.Strings(currencies)
+	currencies := slices.AppendSeq(make([]string, 0, len(seen)), maps.Keys(seen))
+	slices.Sort(currencies)
 	return currencies
 }

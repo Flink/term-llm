@@ -1,4 +1,4 @@
-import type { ChartRange, ChartGroup, MoneyTimeline } from './proxy-timeline';
+import type { ChartRange, ChartGroup, MoneyTimeline, TimelineScope } from './proxy-timeline';
 import type {
   SerializedPublicKeyCredential,
   WebAuthnCreationWireOptions,
@@ -865,9 +865,14 @@ export class ProxyClient {
     range: ChartRange = '30d',
     group: ChartGroup = 'total',
     timezone?: string,
+    scope?: TimelineScope,
   ): Promise<MoneyTimeline> {
     const params = new URLSearchParams({ range, group });
     if (timezone) params.set('timezone', timezone);
+    for (const group of ['client', 'provider', 'model'] as const) {
+      const key = scope?.[group];
+      if (key !== undefined) params.set(`scope_${group}`, key);
+    }
     return this.request(`timeline?${params.toString()}`);
   }
   summary(): Promise<MoneySummary> {

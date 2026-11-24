@@ -2,13 +2,16 @@ import type {
   ChartGroup,
   ChartRange,
   MoneyTimeline,
+  TimelineScope,
   TimelineSeries,
 } from '../src/api/proxy-timeline';
 import { button, el } from './dom';
 import { moneyAmount } from './home';
-import { breakdownView, shareRows } from './timeline-breakdown';
+import { breakdownLimit, breakdownView, shareRows, type ShareRow } from './timeline-breakdown';
 import { drawChart } from './timeline-chart';
 import { groupingLabels, periodLabels, timelineControls } from './timeline-controls';
+import { scopeAction, scopeHint, scopeQuery, scopeRoots, type ScopeStep } from './timeline-drill';
+import { timelineScopeView } from './timeline-scope';
 import { defaultTimelinePrefs, type TimelinePrefs } from './timeline-prefs';
 import { timelineTooltip } from './timeline-tooltip';
 import { aggregateTokenMix, tokenMixText, tokenMixView } from './timeline-tokens';
@@ -54,7 +57,7 @@ function summarize<T>(
 /** `initial` was loaded with the supplied preferences; standalone callers default to Total. */
 export function timelineView(
   initial: MoneyTimeline,
-  load: (range: ChartRange, group: ChartGroup) => Promise<MoneyTimeline>,
+  load: (range: ChartRange, group: ChartGroup, scope?: TimelineScope) => Promise<MoneyTimeline>,
   prefs?: TimelinePrefs,
   onChange?: (prefs: TimelinePrefs) => void,
   details?: HTMLElement[],
@@ -63,6 +66,9 @@ export function timelineView(
     ? defaultTimelinePrefs
     : { ...defaultTimelinePrefs, group: 'total' as const };
   let settings = prefs ? { ...prefs } : { ...defaults, range: initial.range };
+  let steps: ScopeStep[] = [];
+  let returnFocus: { group: ChartGroup; key: string; anchor: HTMLElement } | undefined;
+  let scopeBar: HTMLElement | undefined;
   let data = initial;
   let currency = 'USD';
   let selected = -1;
@@ -131,6 +137,67 @@ export function timelineView(
   footer.className = 'timeline-footer';
   const mixSlot = el('div');
   view.append(heading, mixSlot, body, footer);
+
+  function renderScope(focus: boolean) {
+    scopeBar?.remove();
+    const first = steps[0];
+    const current = steps.at(-1);
+    if (!first || !current) {
+      scopeBar = undefined;
+      return;
+    }
+    scopeBar = timelineScopeView(
+      [
+        { label: scopeRoots[first.group], run: () => unwind(0) },
+        ...steps.slice(0, -1).map((step, index) => ({
+          label: step.label,
+          run: () => unwind(index + 1),
+        })),
+      ],
+      {
+        label: current.label,
+        clearLabel: `Clear ${current.group} filter`,
+        clear: () => unwind(steps.length - 1),
+      },
+    );
+    view.prepend(scopeBar);
+    if (focus) scopeBar.querySelector<HTMLButtonElement>('.timeline-scope-clear')?.focus();
+  }
+
+  function returnToRow(group: ChartGroup, key: string, remaining: ScopeStep[]) {
+    steps = remaining;
+    renderScope(false);
+    title.focus({ preventScroll: true });
+    returnFocus = { group, key, anchor: title };
+    apply({ ...settings, group }, { reload: true });
+  }
+
+  function unwind(index: number) {
+    const removed = steps[index];
+    if (removed) returnToRow(removed.group, removed.key, steps.slice(0, index));
+  }
+
+  function drill(row: ShareRow, group: ChartGroup) {
+    if (group === 'total') {
+      title.focus({ preventScroll: true });
+      apply({ ...settings, group: 'model' });
+      return;
+    }
+    if (steps.some((step) => step.group === group && step.key === row.key)) {
+      returnToRow(
+        group,
+        row.key,
+        steps.filter((step) => step.group !== group),
+      );
+      return;
+    }
+    steps = [
+      ...steps.filter((step) => step.group !== group),
+      { group, key: row.key, label: row.label },
+    ];
+    renderScope(true);
+    apply({ ...settings, group: 'model' }, { reload: true });
+  }
 
   function cost(series: TimelineSeries) {
     return series.costs.find((entry) => entry.currency === currency);
@@ -286,7 +353,8 @@ export function timelineView(
       settings,
       currencies,
       currency,
-      settings.metric === defaults.metric &&
+      steps.length === 0 &&
+        settings.metric === defaults.metric &&
         settings.range === defaults.range &&
         settings.group === defaults.group &&
         settings.currency === undefined,
@@ -350,17 +418,50 @@ export function timelineView(
     }
     // Reserve the most distinct colours for the leaders; retain assignments across metric changes.
     for (const key of ranks.keys()) colour(key);
+    const priorRail = body.querySelector('.timeline-breakdown');
+    const focusedRow = priorRail?.contains(document.activeElement)
+      ? document.activeElement?.getAttribute('data-series-key')
+      : null;
+    const restore =
+      returnFocus?.group === settings.group && document.activeElement === returnFocus.anchor
+        ? returnFocus.key
+        : focusedRow;
     const rail = breakdownView(
       rows,
       groupingLabels[settings.group],
       periodLabels[data.range],
       colour,
       (row) => qualified(row.amount, row.unknown, row.estimated),
-      !!body.querySelector('.timeline-breakdown details[open]'),
+      (returnFocus?.group === settings.group &&
+        rows.findIndex((row) => row.key === returnFocus?.key) >= breakdownLimit) ||
+        !!body.querySelector('.timeline-breakdown details[open]'),
       showTokenMix ? (row) => tokenMixText(aggregateTokenMix(row.series)) : undefined,
+      {
+        hint: scopeHint(
+          settings.group,
+          steps.some((step) => step.group === settings.group),
+        ),
+        action: (row) => {
+          const group = settings.group;
+          const selected = steps.some((step) => step.group === group && step.key === row.key);
+          return {
+            label: scopeAction(group, selected, row),
+            selected: selected || undefined,
+            run: () => drill(row, group),
+          };
+        },
+      },
     );
-    if (body.lastElementChild === plot) body.append(rail);
-    else body.lastElementChild?.replaceWith(rail);
+    if (priorRail) priorRail.replaceWith(rail);
+    else body.append(rail);
+    if (restore != null) {
+      // A client key can contain NUL, so don't interpolate it into a CSS selector.
+      const target = [...rail.querySelectorAll<HTMLButtonElement>('[data-series-key]')].find(
+        (row) => row.dataset.seriesKey === restore,
+      );
+      target?.focus({ preventScroll: returnFocus === undefined });
+    }
+    returnFocus = undefined;
 
     const hourly = data.range === 'today';
     const date = new Intl.DateTimeFormat(undefined, {
@@ -447,7 +548,10 @@ export function timelineView(
     view.setAttribute('aria-busy', 'true');
     draw();
     try {
-      const next = await load(settings.range, settings.group);
+      const scope = scopeQuery(steps);
+      const next = await (scope
+        ? load(settings.range, settings.group, scope)
+        : load(settings.range, settings.group));
       if (current !== sequence) return;
       data = next;
       phase = 'ready';
@@ -460,20 +564,31 @@ export function timelineView(
       if (current === sequence) view.setAttribute('aria-busy', 'false');
     }
   }
-  function apply(next: TimelinePrefs, retry = false) {
-    const needsData = next.range !== settings.range || next.group !== settings.group;
-    if (needsData || next.metric !== settings.metric || next.currency !== settings.currency) {
+  function apply(next: TimelinePrefs, options: { reload?: boolean; retry?: boolean } = {}) {
+    const needsData =
+      options.reload || next.range !== settings.range || next.group !== settings.group;
+    if (
+      next.range !== settings.range ||
+      next.group !== settings.group ||
+      next.metric !== settings.metric ||
+      next.currency !== settings.currency
+    ) {
       settings = next;
       onChange?.({ ...settings });
     }
-    if (needsData || (phase === 'failed' && retry)) void reload();
+    if (needsData || (phase === 'failed' && options.retry)) void reload();
     else draw();
   }
   function change(part: Partial<TimelinePrefs>) {
-    apply({ ...settings, ...part }, part.range !== undefined);
+    if (part.range !== undefined || part.group !== undefined) returnFocus = undefined;
+    apply({ ...settings, ...part }, { retry: part.range !== undefined });
   }
   function reset() {
-    apply({ ...defaults }, true);
+    const hadScope = steps.length > 0;
+    steps = [];
+    returnFocus = undefined;
+    renderScope(false);
+    apply({ ...defaults }, { reload: hadScope, retry: true });
   }
   draw();
   queueMicrotask(() => {
