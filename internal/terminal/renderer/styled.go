@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"image/color"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -230,6 +231,41 @@ func terminated[T []byte | string](seq T) bool {
 	return n >= 2 && seq[n-1] == '\\' && seq[n-2] == ansi.ESC
 }
 
+// styledDecoder leaves ANSI parsing and unmatched glyph widths to x/ansi.
+func styledDecoder[T string | []byte](s Screen, m WidthMethod) func(T, byte, *ansi.Parser) (T, int, int, byte) {
+	decode := ansi.DecodeSequenceWc[T]
+	if m == ansi.GraphemeWidth {
+		decode = ansi.DecodeSequence[T]
+	}
+	provider, ok := s.(interface{ wideEmojiPredicate() func(string) bool })
+	if !ok || provider.wideEmojiPredicate() == nil {
+		return decode
+	}
+	wide := provider.wideEmojiPredicate()
+	var remaining int // bytes of a rejected ASCII-start cluster still to decode normally
+	return func(str T, state byte, p *ansi.Parser) (T, int, int, byte) {
+		seq, width, n, next := decode(str, state, p)
+		if remaining > 0 {
+			remaining -= n
+			return seq, width, n, next
+		}
+		if state != ansi.NormalState || str[0] < ' ' || (str[0] >= ansi.DEL && str[0] < 0xc0) {
+			return seq, width, n, next
+		}
+		cluster := seq
+		// x/ansi returns printable ASCII one byte at a time. Only look for
+		// a longer cluster when a non-ASCII rune could extend that byte.
+		if str[0] < utf8.RuneSelf && len(str) > 1 && str[1] >= utf8.RuneSelf {
+			cluster, _ = ansi.FirstGraphemeCluster(str, ansi.GraphemeWidth)
+		}
+		if wide(string(cluster)) {
+			return cluster, 2, len(cluster), next
+		}
+		remaining = len(cluster) - n
+		return seq, width, n, next
+	}
+}
+
 // printString draws a string starting at the given position. If s is nil, it
 // will build and return a slice of [Line]s instead (unwrapped, ignoring bounds).
 func printString[T []byte | string](
@@ -247,10 +283,7 @@ func printString[T []byte | string](
 		tailc = *NewCell(m, tail)
 	}
 
-	decoder := ansi.DecodeSequenceWc[T]
-	if m == ansi.GraphemeWidth {
-		decoder = ansi.DecodeSequence[T]
-	}
+	decoder := styledDecoder[T](s, m)
 
 	if s == nil {
 		lines = []Line{}

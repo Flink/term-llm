@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	runapproval "github.com/term-llm/term-llm/internal/app/runtime/approval"
 	"github.com/term-llm/term-llm/internal/config"
+	"github.com/term-llm/term-llm/internal/emoji"
 	"github.com/term-llm/term-llm/internal/exitcode"
 	"github.com/term-llm/term-llm/internal/tools"
 	"github.com/term-llm/term-llm/internal/tui/chat"
@@ -86,7 +87,7 @@ func (r *chatInvocation) runChatOnce(ctx context.Context, initialText, cliAgent 
 	defer programInput.cleanup()
 
 	var opts []tea.ProgramOption
-	opts = append(opts, tea.WithoutSignalHandler())
+	opts = append(opts, tea.WithoutSignalHandler(), tea.WithWideEmoji(emoji.IsGlyph))
 	if programInput.disableInput {
 		opts = append(opts, tea.WithInput(nil))
 	} else if programInput.reader != nil {

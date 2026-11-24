@@ -181,7 +181,7 @@ func (m *Model) updateStreamingComposerKey(msg tea.KeyPressMsg) (tea.Model, tea.
 		}
 	}
 	if newVal != old || newCursor != oldCursor {
-		return m, tea.Batch(cmd, m.updateMentionQuery())
+		return m, tea.Batch(cmd, m.updateComposerPopups())
 	}
 	return m, cmd
 }
@@ -356,7 +356,7 @@ func (m *Model) updateIdleComposerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		}
 	}
 	if newVal != old || newCursor != oldCursor {
-		return m, tea.Batch(cmd, m.updateMentionQuery())
+		return m, tea.Batch(cmd, m.updateComposerPopups())
 	}
 	return m, cmd
 }

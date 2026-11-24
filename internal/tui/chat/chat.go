@@ -44,6 +44,7 @@ import (
 	"github.com/term-llm/term-llm/internal/termimage"
 	"github.com/term-llm/term-llm/internal/tooldiscovery"
 	"github.com/term-llm/term-llm/internal/tools"
+	"github.com/term-llm/term-llm/internal/tui/chat/composer"
 	"github.com/term-llm/term-llm/internal/tui/chat/streamview"
 	"github.com/term-llm/term-llm/internal/tui/inspector"
 	sessionsui "github.com/term-llm/term-llm/internal/tui/sessions"
@@ -424,6 +425,7 @@ type Model struct {
 
 	// Dialog components
 	completions *CompletionsModel
+	emojiPopup  composer.EmojiPopup
 	dialog      *DialogModel
 
 	// Inline mode state
