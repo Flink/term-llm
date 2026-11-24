@@ -142,6 +142,9 @@ func (p *Parser) chatCompletion(o object) {
 	p.observeTier(o)
 	u, bad := readOpenAIUsage(o, false)
 	p.bad = p.bad || bad // Invalid counters do not invalidate an independent charge.
+	if p.mistral {
+		p.mistralUsage(o, &u)
+	}
 	if hasCounts(u) {
 		p.set(u)
 	}

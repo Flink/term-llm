@@ -422,6 +422,10 @@ requests streaming usage automatically. Other streaming clients must send
 request bodies or invent missing counts. Existing unmeasured records cannot be
 backfilled from responses that were not retained.
 
+Mistral routes using `https://api.mistral.ai/v1` also enable token observation
+when `usage` is unset. Completed chat requests can show a USD estimate from
+models.dev when the response reports usage and its model has a matching rate.
+`usage: off` still disables observation, and this does not reprice old records.
 
 ### OpenCode Go: one key, one provider, one approval
 

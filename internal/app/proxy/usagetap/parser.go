@@ -88,6 +88,7 @@ type Parser struct {
 	usage                                  Usage
 	responses                              map[string]Usage
 	wsStarts                               map[string]struct{}
+	mistral                                bool // First-party Mistral Chat Completions usage semantics.
 	venice                                 *veniceCharge
 }
 

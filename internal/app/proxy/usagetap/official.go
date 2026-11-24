@@ -38,6 +38,14 @@ func IsTypeSafeRoot(raw string) bool { return isProviderRoot(raw, "api.typesafe.
 // IsVeniceRoot identifies the public Venice API root.
 func IsVeniceRoot(raw string) bool { return isProviderRoot(raw, "api.venice.ai", "/api/v1") }
 
+// IsMistralRoot identifies the public Mistral API root.
+func IsMistralRoot(raw string) bool { return isProviderRoot(raw, "api.mistral.ai", "/v1") }
+
+// IsMistralChatResponse scopes Mistral-specific accounting to its official chat API.
+func IsMistralChatResponse(upstream string, resp *http.Response) bool {
+	return IsMistralRoot(upstream) && isOfficialResponse(resp, "api.mistral.ai", "/v1/chat/completions") && resp.Request.Method == http.MethodPost
+}
+
 // IsVeniceChatResponse recognizes the actual first-party chat endpoint. The
 // transport format is validated separately by the Venice adapter.
 func IsVeniceChatResponse(upstream string, resp *http.Response) bool {

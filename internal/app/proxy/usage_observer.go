@@ -88,6 +88,9 @@ func selectUsageTap(route Route, resp *http.Response) (usageTap, usagetap.Protoc
 	if route.Usage != "off" && len(resp.Header.Values("Content-Type")) <= 1 && usagetap.IsVeniceChatResponse(route.Upstream, resp) {
 		return usagetap.ForVeniceChatCompletions(ct), usagetap.ChatCompletions
 	}
+	if route.Usage != "off" && len(resp.Header.Values("Content-Type")) <= 1 && usagetap.IsMistralChatResponse(route.Upstream, resp) {
+		return usagetap.ForMistralChatCompletions(ct), usagetap.ChatCompletions
+	}
 	if strings.EqualFold(strings.TrimSpace(strings.SplitN(ct, ";", 2)[0]), "application/vnd.amazon.eventstream") {
 		return usagetap.NewEventStream(), usagetap.Bedrock
 	}

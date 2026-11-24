@@ -95,6 +95,9 @@ func catalogProvider(route Route, catalog *modelsdev.Client) string {
 	if provider := offlinePriceProvider(route.Upstream); provider != "" {
 		return provider
 	}
+	if usagetap.IsMistralRoot(route.Upstream) {
+		return "mistral"
+	}
 	if isChatGPTAPIEquivalentEndpoint(route) {
 		return "openai"
 	}

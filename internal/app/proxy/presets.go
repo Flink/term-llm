@@ -102,7 +102,7 @@ func presetsFromProfiles(profiles []proxyprofile.Profile) []routePreset {
 		if p.Billing == "local" {
 			preset.Auth = Auth{} // Default bearer client authentication, no upstream key.
 		}
-		if p.Provider != "" || usagetap.IsExaRoot(p.Upstream) || p.ID == "typesafe" {
+		if proxyprofile.InferenceCapable(p) || usagetap.IsExaRoot(p.Upstream) || p.ID == "typesafe" {
 			preset.Usage = "auto"
 		} else if p.ClassifyProvider != "" {
 			preset.Usage = "off"
