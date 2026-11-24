@@ -1,3 +1,4 @@
+import { publishedMediaKind } from './published-media';
 import { authorFrom } from './authors';
 import { responseContentParts, responseSubagentProgress } from './response';
 import { parseSeenRev } from './attention-seen';
@@ -75,11 +76,7 @@ const mediaArtifacts = (value: unknown, rebase: (value: string) => string): Medi
       if (!item) return null;
       const url = rebase(text(item.url));
       const type = text(item.type || item.media_type);
-      if (
-        !url ||
-        (!type.startsWith('image/') && !type.startsWith('video/') && !type.startsWith('audio/'))
-      )
-        return null;
+      if (!url || !publishedMediaKind(type)) return null;
       return {
         url,
         type,

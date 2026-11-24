@@ -52,7 +52,7 @@ func exportToMarkdown(sess *Session, messages []Message, opts ExportOptions, ima
 	assets := images.assetsMode()
 	rewriteText := func(text string) string {
 		if images == nil {
-			return replaceMarkdownAudioReferences(text, mediaReferences)
+			return replaceMarkdownPresentationReferences(text, mediaReferences)
 		}
 		if !assets {
 			return replaceHTMLMediaReferences(text, mediaReferences, nil)
@@ -132,14 +132,14 @@ func exportToMarkdown(sess *Session, messages []Message, opts ExportOptions, ima
 		if msg.Role == core.RoleSystem {
 			if opts.IncludeSystem {
 				flushAssistant()
-				fmt.Fprintf(&b, "### System\n\n%s\n\n---\n\n", replaceMarkdownAudioReferences(msg.TextContent, mediaReferences))
+				fmt.Fprintf(&b, "### System\n\n%s\n\n---\n\n", replaceMarkdownPresentationReferences(msg.TextContent, mediaReferences))
 			}
 			continue
 		}
 
 		if msg.Role == core.RoleUser {
 			flushAssistant()
-			fmt.Fprintf(&b, "### User\n\n%s\n\n", replaceMarkdownAudioReferences(msg.TextContent, mediaReferences))
+			fmt.Fprintf(&b, "### User\n\n%s\n\n", replaceMarkdownPresentationReferences(msg.TextContent, mediaReferences))
 			if assets {
 				for _, part := range msg.Parts {
 					if part.Type == core.PartImage {

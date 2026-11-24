@@ -189,3 +189,49 @@ func TestShowMediaAudioFailurePaths(t *testing.T) {
 		}
 	}
 }
+
+func TestShowMediaHTML(t *testing.T) {
+	const limit = 4 << 20
+	for _, tc := range []struct {
+		name, data string
+		ok         bool
+	}{
+		{"report.html", "<!doctype html><title>résumé</title>", true},
+		{"fragment.HTM", "<p>Ω</p>", true},
+		{"exact.html", strings.Repeat("x", limit), true},
+		{"large.html", strings.Repeat("x", limit+1), false},
+		{"invalid.html", strings.Repeat("a", 65536) + "\xff", false},
+		{"nul.htm", "<html>\x00", false},
+		{"empty.html", "", false},
+		{"wrong.txt", "<!doctype html><title>résumé</title>", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, tc.name)
+			if err := os.WriteFile(path, []byte(tc.data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			tool := NewShowMediaTool(nil, &ToolConfig{BaseDir: dir})
+			stored := filepath.Join(dir, "stored.html")
+			tool.SetPublisher(testMediaPublisher{path: stored})
+			args, _ := json.Marshal(ShowMediaArgs{Path: tc.name, Caption: "Report"})
+			out, err := tool.Execute(context.Background(), args)
+			if err != nil || out.IsError == tc.ok || len(out.ContentParts) != 0 || len(out.Images) != 0 {
+				t.Fatalf("Execute = %+v, %v", out, err)
+			}
+			if !tc.ok {
+				if len(out.Media) != 0 {
+					t.Fatal("invalid artifact registered")
+				}
+				return
+			}
+			if len(out.Media) != 1 {
+				t.Fatalf("media = %+v", out.Media)
+			}
+			m := out.Media[0]
+			if m.MediaType != "text/html" || m.StoredPath != stored || m.SourcePath != path || m.Caption != "Report" || m.Name != tc.name || m.Reference == "" || !strings.Contains(out.Content, "term-llm-media://"+m.Reference) || strings.Contains(out.Content, tc.data) {
+				t.Fatalf("unexpected registration: %+v", out)
+			}
+		})
+	}
+}

@@ -1,3 +1,4 @@
+import { publishedMediaKind } from './published-media';
 import { authorFrom } from './authors';
 import { parsePendingToolCalls } from './client-tools';
 import { normalizeSteering } from './steering';
@@ -180,11 +181,7 @@ function responseMedia(value: unknown): MediaArtifact[] | undefined {
     .map((entry): MediaArtifact | null => {
       const url = text(entry.url);
       const type = text(entry.type || entry.media_type);
-      if (
-        !url ||
-        (!type.startsWith('image/') && !type.startsWith('video/') && !type.startsWith('audio/'))
-      )
-        return null;
+      if (!url || !publishedMediaKind(type)) return null;
       return {
         url,
         type,

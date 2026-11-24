@@ -1,3 +1,4 @@
+import { trustedPublishedMediaURL } from '../domain/published-media';
 import { iconHTML } from './Icon';
 import { copyText } from '../platform/clipboard';
 import { preserveAudioMediaCards } from '../domain/audio-media';
@@ -239,7 +240,6 @@ class AssistantStreamRenderer {
   tailPlain = false;
   unsafe = false;
   fallback = false;
-  hasStreamed = false;
   finalized = false;
   rebase?: (value: string) => string;
   resolveMedia?: MarkdownMediaResolver;
@@ -305,7 +305,7 @@ class AssistantStreamRenderer {
       this.tail = null;
       this.activeCode = null;
     };
-    const html = renderMarkdown(source, this.resolveMedia);
+    const html = renderMarkdown(source, this.resolveMedia, decorate ? 'chat' : 'streaming');
     if (decorate) {
       this.cancelStatic = prepareContent(
         this.root,
@@ -327,18 +327,11 @@ class AssistantStreamRenderer {
     }
   }
 
-  renderStatic(source: string): void {
-    if (this.finalized && source === this.latestSource) return;
-    this.renderCanonical(source, true);
-    this.latestSource = source;
-    this.finalized = true;
-  }
-
   private appendCommittedMarkdown(source: string): void {
     if (!source || !this.committed) return;
     const piece = document.createElement('div');
     piece.className = 'streaming-stable-piece';
-    piece.innerHTML = renderMarkdown(source, this.resolveMedia);
+    piece.innerHTML = renderMarkdown(source, this.resolveMedia, 'streaming');
     if (this.rebase) rebaseRenderedAssetURLs(piece, this.rebase);
     if (this.tail) preserveAudioMediaCards(this.tail, piece);
     this.committed.append(piece);
@@ -363,7 +356,7 @@ class AssistantStreamRenderer {
       this.tail.replaceChildren(document.createTextNode(text));
     } else {
       const prepared = document.createElement('div');
-      prepared.innerHTML = renderMarkdown(source, this.resolveMedia);
+      prepared.innerHTML = renderMarkdown(source, this.resolveMedia, 'streaming');
       if (this.rebase) rebaseRenderedAssetURLs(prepared, this.rebase);
       addVideoLinkIcons(prepared);
       preserveAudioMediaCards(this.tail, prepared);
@@ -433,8 +426,6 @@ class AssistantStreamRenderer {
       return;
     }
     const analysis = analyzeStreamingMarkdown(source, 1024);
-    this.scanState.latestContent = source;
-    this.scanState.lastBoundaryOperations = analysis.operations;
 
     if (analysis.overBudget) {
       this.fallback = true;
@@ -464,18 +455,16 @@ class AssistantStreamRenderer {
       this.tail?.replaceChildren();
       this.tailSource = '';
     }
-    this.scanState.stableLength = this.committedLength;
     this.renderTail(source.slice(this.committedLength));
   }
 
   update(source: string): void {
-    if (!this.hasStreamed || this.finalized || !this.committed || !this.tail) {
+    if (this.finalized || !this.committed || !this.tail) {
       this.createRegions();
       this.latestSource = '';
       this.unsafe = false;
       this.fallback = false;
     }
-    this.hasStreamed = true;
     if (!source.startsWith(this.latestSource)) this.unsafe = true;
     if (this.unsafe) this.renderCanonical(source, false);
     else if (this.fallback) this.renderPlainFallback(source);
@@ -485,32 +474,32 @@ class AssistantStreamRenderer {
 
   finalize(source: string): void {
     if (this.finalized && source === this.latestSource) return;
-    if (!this.hasStreamed) {
-      this.renderStatic(source);
-      return;
-    }
     if (!source.startsWith(this.latestSource)) this.unsafe = true;
+    if (!this.unsafe && !this.fallback && this.committed && this.tail)
+      this.renderIncremental(source, true);
     if (this.unsafe || this.fallback || !this.committed || !this.tail) {
       this.renderCanonical(source, true);
     } else {
-      this.renderIncremental(source, true);
-      if (this.unsafe || this.fallback || !this.committed || !this.tail) {
-        this.renderCanonical(source, true);
-      } else {
-        const fragment = document.createDocumentFragment();
-        for (const child of Array.from(this.committed.childNodes)) {
-          if (child instanceof HTMLElement && child.classList.contains('streaming-stable-piece'))
-            fragment.append(...Array.from(child.childNodes));
-          else fragment.append(child);
-        }
-        fragment.append(...Array.from(this.tail.childNodes));
-        this.root.replaceChildren(fragment);
-        this.root.classList.remove('streaming-markdown', 'streaming-over-budget');
-        this.root.style.removeProperty('white-space');
-        this.committed = null;
-        this.tail = null;
-        this.decorate(this.root, source, true);
+      const fragment = document.createDocumentFragment();
+      for (const child of Array.from(this.committed.childNodes)) {
+        if (child instanceof HTMLElement && child.classList.contains('streaming-stable-piece'))
+          fragment.append(...Array.from(child.childNodes));
+        else fragment.append(child);
       }
+      fragment.append(...Array.from(this.tail.childNodes));
+      this.root.replaceChildren(fragment);
+      this.root.classList.remove('streaming-markdown', 'streaming-over-budget');
+      this.root.style.removeProperty('white-space');
+      this.committed = null;
+      this.tail = null;
+      // Incremental finalization adopts the streaming nodes. Canonical finalization
+      // instead publishes fresh, enabled launchers from prepareContent.
+      this.root
+        .querySelectorAll<HTMLButtonElement>('.html-media-preview:disabled')
+        .forEach((button) => {
+          button.disabled = false;
+        });
+      this.decorate(this.root, source, true);
     }
     this.latestSource = source;
     this.finalized = true;
@@ -602,6 +591,29 @@ export function Markdown({
       class={className}
       onClick={(event) => {
         const target = event.target as HTMLElement;
+        // Raw Markdown buttons are forbidden. Resolve the app-owned button's
+        // opaque reference again; never take a frame URL from model markup.
+        if (
+          variant === 'chat' &&
+          target instanceof HTMLButtonElement &&
+          target.matches('.html-media-preview[data-demo-reference]')
+        ) {
+          if (target.disabled) return;
+          const media = resolveMedia?.(target.dataset.demoReference || '');
+          if (media?.type !== 'html' || !trustedPublishedMediaURL(media.url, 'html')) return;
+          target.disabled = true;
+          void import('./html-preview')
+            .then(({ openHTMLPreview }) => openHTMLPreview(target, media.url))
+            .catch(() => {
+              target.disabled = false;
+              const label = target.textContent;
+              target.textContent = `${label} — failed to load. Click to retry.`;
+              target.onclick = () => {
+                target.textContent = label;
+              };
+            });
+          return;
+        }
         const copyButton = target.closest<HTMLButtonElement>('.code-copy-btn');
         if (copyButton && event.currentTarget.contains(copyButton)) {
           event.preventDefault();

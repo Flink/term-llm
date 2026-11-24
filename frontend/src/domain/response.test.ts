@@ -1128,45 +1128,50 @@ describe('response projection', () => {
   });
 });
 
-describe('live and recovered audio media', () => {
-  it.each(['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/flac', 'audio/mp4', 'audio/webm'])(
-    'preserves %s metadata through completion and recovery-seeded updates',
-    (type) => {
-      const artifact = {
-        reference: '0123456789abcdef0123456789abcdef',
-        url: '/ui/media/audio.wav',
-        type,
-        name: 'narration.wav',
-        caption: 'Summary',
-      };
-      let projection = reduceResponse(
-        initialProjection(run),
-        event('response.output_item.added', 1, {
-          item: { type: 'function_call', call_id: 'audio', name: 'show_media' },
-        }),
-      );
-      projection = reduceResponse(
-        projection,
-        event('response.tool_exec.end', 2, {
-          call_id: 'audio',
-          media: [artifact, { url: '/not-media', type: 'text/plain' }],
-        }),
-      );
-      expect(projection.messages[0].tools?.[0].media).toEqual([artifact]);
-      const recovered = {
-        ...initialProjection({ ...run, lastSequence: 2 }),
-        messages: projection.messages,
-      };
-      const updated = reduceResponse(
-        recovered,
-        event('response.output_text.delta', 3, {
-          delta: 'Listen above.',
-          assistant_segment_ordinal: 1,
-        }),
-      );
-      expect(updated.messages[0].tools?.[0].media).toEqual([artifact]);
-    },
-  );
+describe('live and recovered published media', () => {
+  it.each([
+    'audio/mpeg',
+    'audio/wav',
+    'audio/ogg',
+    'audio/flac',
+    'audio/mp4',
+    'audio/webm',
+    'text/html',
+  ])('preserves %s metadata through completion and recovery-seeded updates', (type) => {
+    const artifact = {
+      reference: '0123456789abcdef0123456789abcdef',
+      url: type === 'text/html' ? '/ui/media/demo.html' : '/ui/media/audio.wav',
+      type,
+      name: type === 'text/html' ? 'demo.html' : 'narration.wav',
+      caption: 'Summary',
+    };
+    let projection = reduceResponse(
+      initialProjection(run),
+      event('response.output_item.added', 1, {
+        item: { type: 'function_call', call_id: 'audio', name: 'show_media' },
+      }),
+    );
+    projection = reduceResponse(
+      projection,
+      event('response.tool_exec.end', 2, {
+        call_id: 'audio',
+        media: [artifact, { url: '/not-media', type: 'text/plain' }],
+      }),
+    );
+    expect(projection.messages[0].tools?.[0].media).toEqual([artifact]);
+    const recovered = {
+      ...initialProjection({ ...run, lastSequence: 2 }),
+      messages: projection.messages,
+    };
+    const updated = reduceResponse(
+      recovered,
+      event('response.output_text.delta', 3, {
+        delta: 'Listen above.',
+        assistant_segment_ordinal: 1,
+      }),
+    );
+    expect(updated.messages[0].tools?.[0].media).toEqual([artifact]);
+  });
 });
 
 it('preserves nested parent IDs and ordered explicit screenshot parts', () => {

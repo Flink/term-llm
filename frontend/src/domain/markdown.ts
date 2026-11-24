@@ -1,9 +1,10 @@
+import { trustedPublishedMediaURL } from './published-media';
 import DOMPurify from 'dompurify';
 import { marked, Marked, Renderer } from 'marked';
 import { findStableMarkdownBoundary, isInCodeBlockFast } from './markdown-streaming';
 
 import { escapeHTML, externalLink, markdownHooks, scrollableTable } from './markdown-hooks';
-import { audioMediaHTML, trustedPublishedMediaURL } from './audio-media';
+import { audioMediaHTML } from './audio-media';
 
 marked.use({ gfm: true, breaks: true, ...markdownHooks });
 
@@ -147,7 +148,7 @@ export function sanitizeMarkdownHTML(
 
 export interface MarkdownMediaTarget {
   url: string;
-  type: 'image' | 'video' | 'audio';
+  type: 'image' | 'video' | 'audio' | 'html';
   name?: string;
   caption?: string;
 }
@@ -156,7 +157,8 @@ export type MarkdownMediaResolver = (reference: string) => MarkdownMediaTarget |
 
 function mediaRenderer(
   resolveMedia: MarkdownMediaResolver,
-  audioCards: Map<string, string>,
+  mediaSlots: Map<string, string>,
+  streaming: boolean,
 ): Renderer {
   const renderer = new Renderer();
   renderer.link = externalLink;
@@ -167,26 +169,28 @@ function mediaRenderer(
     if (!token.href.startsWith(prefix)) return defaultImage(token);
     const label = token.text.trim() || 'Media';
     const reference = token.href.slice(prefix.length).trim().toLowerCase();
-    if (!/^[a-f0-9]{32}$/.test(reference))
+    const media = /^[a-f0-9]{32}$/.test(reference) ? resolveMedia(reference) : undefined;
+    if (
+      !media ||
+      ((media.type === 'audio' || media.type === 'html') &&
+        !trustedPublishedMediaURL(media.url, media.type))
+    )
       return `<span class="media-reference-missing">[${escapeHTML(label)} unavailable]</span>`;
-    const media = resolveMedia(reference);
-    if (!media)
-      return `<span class="media-reference-missing">[${escapeHTML(label)} unavailable]</span>`;
-    if (media.type === 'audio') {
-      if (!trustedPublishedMediaURL(media.url, true))
-        return `<span class="media-reference-missing">[${escapeHTML(label)} unavailable]</span>`;
+    if (media.type === 'audio' || media.type === 'html') {
       // The namespace is private to this render, never supplied by model HTML.
-      const placeholder = `TERM_LLM_AUDIO_${crypto.getRandomValues(new Uint32Array(4)).join('-')}_TOKEN`;
-      audioCards.set(
+      const placeholder = `TERM_LLM_MEDIA_${crypto.getRandomValues(new Uint32Array(4)).join('-')}_TOKEN`;
+      mediaSlots.set(
         placeholder,
-        audioMediaHTML({
-          url: media.url,
-          name: media.name,
-          caption: media.caption,
-          label: token.text,
-        }),
+        media.type === 'html'
+          ? `<button type="button" class="btn html-media-preview"${streaming ? ' disabled' : ''} data-demo-reference="${reference}">Preview: ${escapeHTML(token.text.trim() || media.caption || media.name || 'HTML demo')}</button>`
+          : audioMediaHTML({
+              url: media.url,
+              name: media.name,
+              caption: media.caption,
+              label: token.text,
+            }),
       );
-      return `<span data-audio-placeholder="${placeholder}"></span>`;
+      return `<span data-media-placeholder="${placeholder}"></span>`;
     }
     if (media.type === 'video') {
       return `<video src="${escapeHTML(media.url)}" controls playsinline preload="metadata" aria-label="${escapeHTML(label)}"></video>`;
@@ -199,27 +203,30 @@ function mediaRenderer(
 export function renderMarkdown(
   source: string,
   resolveMedia?: MarkdownMediaResolver,
-  variant: 'chat' | 'user' = 'chat',
+  variant: 'chat' | 'streaming' | 'user' = 'chat',
 ): string {
   const math = protectMath(source || '');
-  const audioCards = new Map<string, string>();
+  const mediaSlots = new Map<string, string>();
   const options =
-    resolveMedia && variant === 'chat'
-      ? { async: false as const, renderer: mediaRenderer(resolveMedia, audioCards) }
+    resolveMedia && variant !== 'user'
+      ? {
+          async: false as const,
+          renderer: mediaRenderer(resolveMedia, mediaSlots, variant === 'streaming'),
+        }
       : { async: false as const };
   let rendered = (variant === 'user' ? userMarkdown : marked).parse(math.source, options) as string;
   rendered = rendered.replace(/TERM_LLM_MATH_(\d+)_TOKEN/g, (_match, index: string) =>
     escapeHTML(math.values[Number(index)] || ''),
   );
   const sanitized = sanitizeMarkdownHTML(rendered);
-  if (!audioCards.size) return sanitized;
+  if (!mediaSlots.size) return sanitized;
   // Template contents stay inert: ordinary images must not fetch during this pass.
   const root = document.createElement('template');
   root.innerHTML = sanitized;
   const linkedCards = new Map<HTMLAnchorElement, ChildNode>();
-  for (const slot of root.content.querySelectorAll<HTMLElement>('[data-audio-placeholder]')) {
-    const placeholder = slot.dataset.audioPlaceholder || '';
-    const card = audioCards.get(placeholder);
+  for (const slot of root.content.querySelectorAll<HTMLElement>('[data-media-placeholder]')) {
+    const placeholder = slot.dataset.mediaPlaceholder || '';
+    const card = mediaSlots.get(placeholder);
     if (!card || slot.closest('pre,code,textarea')) continue;
     const template = document.createElement('template');
     template.innerHTML = card;
@@ -233,7 +240,7 @@ export function renderMarkdown(
       slot.remove();
     } else slot.replaceWith(template.content);
     // Each generated placeholder can be consumed only once.
-    audioCards.delete(placeholder);
+    mediaSlots.delete(placeholder);
   }
   return root.innerHTML;
 }

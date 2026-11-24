@@ -243,7 +243,9 @@ func renderMediaLink(item core.MediaArtifact, displayLabel string) string {
 		return renderAudioLink(item, name, displayLabel, path)
 	}
 	kind := "Image"
-	if strings.HasPrefix(strings.ToLower(item.MediaType), "video/") {
+	if strings.EqualFold(item.MediaType, "text/html") {
+		kind = "HTML preview (local file)"
+	} else if strings.HasPrefix(strings.ToLower(item.MediaType), "video/") {
 		kind = "Video"
 	}
 	label := fmt.Sprintf("Open %s", name)

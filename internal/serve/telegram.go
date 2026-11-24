@@ -2411,10 +2411,10 @@ func extractToolResultTextWithPlaceholders(result *core.ToolResult) string {
 	}
 	for _, media := range result.Media {
 		kind := "image"
-		if strings.HasPrefix(strings.ToLower(media.MediaType), "video/") {
-			kind = "video"
-		} else if strings.HasPrefix(strings.ToLower(media.MediaType), "audio/") {
-			kind = "audio"
+		if strings.EqualFold(media.MediaType, "text/html") {
+			kind = "html"
+		} else if f, ok := mediatype.Lookup(media.MediaType); ok {
+			kind = string(f.Kind)
 		}
 		parts = append(parts, "["+kind+" uploaded]")
 	}

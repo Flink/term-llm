@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/term-llm/term-llm/internal/app/serve/servepath"
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/mediatype"
 	"github.com/term-llm/term-llm/internal/session"
@@ -29,7 +30,7 @@ func (s *serveServer) toolMediaEntries(media []core.MediaArtifact) []webMediaEnt
 	entries := make([]webMediaEntry, 0, len(media))
 	for _, item := range media {
 		mediaType := strings.ToLower(strings.TrimSpace(item.MediaType))
-		if _, ok := mediatype.Lookup(mediaType); !ok {
+		if storedType, ok := serveMediaTypeForName(item.StoredPath); !ok || storedType != mediaType {
 			continue
 		}
 		mediaURL := s.mediaURL(item.StoredPath)
@@ -57,7 +58,7 @@ func mediaEntriesFromValue(value any) []webMediaEntry {
 		}
 		urlValue := strings.TrimSpace(stringValue(entry["url"]))
 		mediaType := strings.ToLower(strings.TrimSpace(stringValue(entry["type"])))
-		if _, supported := mediatype.Lookup(mediaType); urlValue == "" || !supported {
+		if _, _, supported := serveMediaExtension(mediaType); urlValue == "" || !supported {
 			continue
 		}
 		entries = append(entries, webMediaEntry{
@@ -138,7 +139,11 @@ func (p *serveMediaPublisher) PublishMedia(ctx context.Context, sourcePath, medi
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	format, inspectErr := mediatype.Inspect(tmp, written)
+	inspect := mediatype.Inspect
+	if ext == mediatype.HTMLFormat().Extension {
+		inspect = mediatype.InspectHTML
+	}
+	format, inspectErr := inspect(tmp, written)
 	if errors.Is(inspectErr, mediatype.ErrUnsupported) {
 		return "", fmt.Errorf("published copy failed media verification: %w", inspectErr)
 	}
@@ -187,14 +192,18 @@ func (r *contextReader) Read(p []byte) (int, error) {
 }
 
 func serveMediaExtension(mediaType string) (extension string, limit int64, ok bool) {
+	if f := mediatype.HTMLFormat(); strings.EqualFold(strings.TrimSpace(mediaType), f.MIME) {
+		return f.Extension, f.MaxBytes, true
+	}
 	f, ok := mediatype.Lookup(mediaType)
 	return f.Extension, f.MaxBytes, ok
 }
 
-func serveMediaTypeForName(name string) (string, bool) {
-	f, ok := mediatype.ForExtension(filepath.Ext(name))
-	return f.MIME, ok
-}
+func serveMediaTypeForName(name string) (string, bool) { return servepath.PublishedMediaType(name) }
+
+const passiveFileCSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"
+
+const interactiveHTMLCSP = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; media-src data:; font-src data:; connect-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
 
 func (s *serveServer) handleMedia(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -207,43 +216,41 @@ func (s *serveServer) handleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimPrefix(r.URL.Path, "/media/")
-	if name == "" || name != filepath.Base(name) || strings.ContainsAny(name, `/\\`) {
-		http.NotFound(w, r)
-		return
-	}
 	mediaType, ok := serveMediaTypeForName(name)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	absFile := filepath.Join(s.mediaPublisher.dir, name)
-	info, err := os.Lstat(absFile)
-	if err != nil || !info.Mode().IsRegular() {
+	f, opened, err := servepath.OpenMedia(s.mediaPublisher.dir, name)
+	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", mediaType)
-	w.Header().Set("Content-Disposition", `inline; filename="media`+filepath.Ext(name)+`"`)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Cache-Control", "private, max-age=86400")
-	w.Header().Add("Vary", "Authorization, Cookie")
-	serveResolvedFile(w, r, absFile)
+	defer f.Close()
+	h := w.Header()
+	h.Set("Content-Type", mediaType)
+	h.Set("Content-Disposition", `inline; filename="media`+filepath.Ext(name)+`"`)
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", passiveFileCSP)
+	h.Set("Cache-Control", "private, max-age=86400")
+	h.Add("Vary", "Authorization, Cookie")
+	if mediaType == "text/html" {
+		h.Set("Content-Type", "text/html; charset=utf-8")
+		h.Set("Content-Security-Policy", interactiveHTMLCSP)
+		h.Set("Cache-Control", "private, no-store")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("X-DNS-Prefetch-Control", "off")
+	}
+	http.ServeContent(w, r, name, opened.ModTime(), f)
 }
 
 func (s *serveServer) mediaURL(storedPath string) string {
 	if s == nil || s.mediaPublisher == nil || strings.TrimSpace(storedPath) == "" {
 		return ""
 	}
-	canonicalDir, err := canonicalizeServeDirForWrite(s.mediaPublisher.dir)
-	if err != nil {
+	name := servepath.StoredMediaName(s.mediaPublisher.dir, storedPath)
+	if name == "" {
 		return ""
 	}
-	canonicalPath, err := canonicalizeServeExistingPath(storedPath)
-	if err != nil || !pathWithinDir(canonicalPath, canonicalDir) || filepath.Dir(canonicalPath) != canonicalDir {
-		return ""
-	}
-	if _, ok := serveMediaTypeForName(filepath.Base(canonicalPath)); !ok {
-		return ""
-	}
-	return s.cfg.mediaRoute() + filepath.Base(canonicalPath)
+	return s.cfg.mediaRoute() + name
 }

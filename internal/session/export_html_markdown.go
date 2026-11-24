@@ -60,6 +60,10 @@ func (t *exportMediaTransformer) replace(node *ast.Image, source []byte) {
 		return
 	}
 	kind := normalizedMediaType(item.MediaType)
+	if kind == "text/html" {
+		node.Parent().ReplaceChild(node.Parent(), node, ast.NewString([]byte(omittedHTMLPreview)))
+		return
+	}
 	if strings.HasPrefix(kind, "audio/") {
 		unwrapAudioLink(node)
 		audio := buildHTMLAudio(t.audio, item, label)

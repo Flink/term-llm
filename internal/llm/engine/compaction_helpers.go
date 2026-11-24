@@ -965,12 +965,14 @@ func compactMediaSummary(media []core.MediaArtifact) []string {
 	counts := map[string]int{}
 	for _, item := range media {
 		kind := strings.SplitN(strings.ToLower(item.MediaType), "/", 2)[0]
-		if kind == "image" || kind == "video" || kind == "audio" {
+		if strings.EqualFold(item.MediaType, "text/html") {
+			counts["HTML preview"]++
+		} else if kind == "image" || kind == "video" || kind == "audio" {
 			counts[kind]++
 		}
 	}
 	var details []string
-	for _, kind := range []string{"image", "video", "audio"} {
+	for _, kind := range []string{"image", "video", "audio", "HTML preview"} {
 		if counts[kind] > 0 {
 			details = append(details, fmt.Sprintf("%d %s(s)", counts[kind], kind))
 		}

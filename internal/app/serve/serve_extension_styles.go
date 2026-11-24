@@ -18,6 +18,9 @@ import (
 // until enabled scripts have activated (frontend/src/api/extensions.ts).
 func (s *serveServer) serveIndexHTML(w http.ResponseWriter, r *http.Request) {
 	const contentType, cacheControl = "text/html; charset=utf-8", "no-cache, no-store, must-revalidate"
+	// The parent constrains frame destinations; a preview's own frame-src only
+	// controls its descendants. Keep other shell resources and Hub bootstrap unaffected.
+	w.Header().Set("Content-Security-Policy", "frame-src 'self'")
 	page, links := linkeddevices.PeerIndexHTML(r, s.renderIndexHTML()), ""
 	if s.extensions != nil && r.URL.Query().Get("safe-mode") != "1" && s.requestAuthorized(r) {
 		links = s.extensions.manager.StylesheetLinks() + s.extensions.manager.IconMeta() + s.extensions.manager.ScriptMeta()

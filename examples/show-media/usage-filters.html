@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><title>Usage · interactive study</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      background: #f7f7fa;
+      color: #23242b;
+      font:
+        16px system-ui,
+        sans-serif;
+    }
+    main {
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+    header,
+    footer,
+    .tools,
+    .head,
+    .row,
+    .rp,
+    .tabs,
+    .fields,
+    .buttons {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    header,
+    footer,
+    .head,
+    .rp {
+      justify-content: space-between;
+    }
+    header {
+      margin-bottom: 12px;
+      min-height: 24px;
+      font-size: 13px;
+      color: #605e70;
+    }
+    .badge {
+      letter-spacing: 0.12em;
+      font-size: 11px;
+      font-weight: 750;
+      color: #6956a1;
+    }
+    .card {
+      background: white;
+      border: 1px solid #e3e2e9;
+      border-radius: 16px;
+      padding: 30px;
+      box-shadow: 0 5px 24px #27202d06;
+    }
+    h1 {
+      margin: 4px 0;
+      font-size: clamp(32px, 4vw, 50px);
+      letter-spacing: -0.055em;
+    }
+    .sub,
+    small,
+    footer {
+      color: #696978;
+      font-size: 13px;
+    }
+    .head {
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .tools {
+      position: relative;
+      flex-wrap: wrap;
+    }
+    button,
+    input,
+    select {
+      font: inherit;
+      color: inherit;
+    }
+    button,
+    select {
+      cursor: pointer;
+    }
+    button {
+      background: white;
+      border: 1px solid #dedde6;
+      border-radius: 8px;
+      padding: 8px 12px;
+    }
+    button:hover,
+    button:focus-visible {
+      background: #f2eefc;
+    }
+    button.on,
+    #chip {
+      background: #f0ebff;
+      border-color: #bba8ed;
+      color: #533996;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 30px;
+      margin: 35px 0 26px;
+    }
+    .plot {
+      height: 240px;
+      display: flex;
+      align-items: stretch;
+      gap: 3px;
+      background: repeating-linear-gradient(
+        to top,
+        #e9e9f0 0 1px,
+        transparent 1px 25%
+      );
+      border-bottom: 1px solid #c6c6d1;
+    }
+    .col {
+      display: flex;
+      flex: 1;
+      min-width: 0;
+      flex-direction: column-reverse;
+      justify-content: flex-start;
+    }
+    .seg {
+      width: 100%;
+      display: block;
+      border: 0;
+      border-radius: 0;
+      padding: 0;
+      min-height: 1px;
+    }
+    .seg:last-child {
+      border-radius: 4px 4px 0 0;
+    }
+    .plot .seg:hover,
+    .plot .seg:focus-visible {
+      filter: brightness(0.83);
+    }
+    .dim {
+      opacity: 0.22;
+    }
+    .axis {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #747387;
+      margin-top: 7px;
+    }
+    .rp {
+      margin-bottom: 12px;
+      font-size: 13px;
+      color: #646372;
+    }
+    .row {
+      width: 100%;
+      position: relative;
+      border-color: transparent;
+      border-bottom-color: #efedf4;
+      border-radius: 6px;
+      padding: 10px;
+      text-align: left;
+    }
+    .row b {
+      margin-left: auto;
+      font-size: 14px;
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      flex: none;
+    }
+    .hint {
+      font-size: 11px;
+      color: #6043a2;
+      opacity: 0;
+    }
+    .row:hover .hint,
+    .row:focus-visible .hint,
+    .row.on .hint {
+      opacity: 1;
+    }
+    .row.on {
+      background: #f5f2fe;
+    }
+    .panel {
+      position: absolute;
+      z-index: 2;
+      top: calc(100% + 8px);
+      right: 0;
+      width: min(335px, 85vw);
+      border: 1px solid #dbd9e5;
+      border-radius: 14px;
+      padding: 18px;
+      background: white;
+      box-shadow: 0 12px 36px #24223524;
+    }
+    .panel strong {
+      font-size: 18px;
+    }
+    .tabs {
+      margin: 14px 0;
+    }
+    .tabs button {
+      flex: 1;
+    }
+    .fields label {
+      font-size: 13px;
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+    .fields input,
+    .fields select {
+      width: 100%;
+      padding: 7px;
+      border: 1px solid #ceccd7;
+      border-radius: 6px;
+    }
+    .buttons {
+      justify-content: flex-end;
+      margin-top: 16px;
+    }
+    .buttons button:last-child {
+      background: #6650b6;
+      color: white;
+    }
+    .cap {
+      font-size: 12px;
+      color: #696978;
+      margin: 6px 0;
+    }
+    .tip {
+      border-top: 1px solid #ebeaf0;
+      padding-top: 16px;
+      line-height: 1.5;
+    }
+    #chip {
+      margin-left: 6px;
+      font-size: 12px;
+      padding: 4px 7px;
+    }
+    footer {
+      margin-top: 14px;
+    }
+    [hidden] {
+      display: none !important;
+    }
+    @media (max-width: 740px) {
+      main {
+        padding: 12px;
+      }
+      .card {
+        padding: 16px;
+      }
+      .grid {
+        grid-template-columns: 1fr;
+        margin: 20px 0;
+      }
+      .plot {
+        height: 170px;
+      }
+      .tools {
+        margin-top: 12px;
+      }
+      header,
+      footer {
+        flex-wrap: wrap;
+      }
+      .head {
+        display: block;
+      }
+    }
+  </style>
+  <main>
+    <header>
+      <span class="badge">USAGE LAB &nbsp; / &nbsp; INTERACTION STUDY</span
+      ><span>Sample data · 24 Nov 2026, 15:00 Sydney</span>
+    </header>
+    <section class="card">
+      <div class="head">
+        <div>
+          <span class="sub"
+            >Cost incl. plan estimates · <span id="period"></span></span
+          ><button id="chip" hidden></button>
+          <h1 id="kpi" aria-live="polite"></h1>
+          <small>Plan estimates aren’t charges.</small>
+        </div>
+        <div class="tools">
+          <button data-days="1">Today</button><button data-days="7">7d</button
+          ><button data-days="30">30d</button
+          ><button id="custom" aria-expanded="false">Custom ▾</button>
+          <div class="panel" id="panel" hidden>
+            <strong>Custom window</strong>
+            <div class="tabs">
+              <button id="roll">Last duration</button
+              ><button id="fixed">Date range</button>
+            </div>
+            <form id="form">
+              <div class="fields" id="duration">
+                <label
+                  >Last<input
+                    id="qty"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value="12"
+                    required /></label
+                ><label
+                  >Unit<select id="unit">
+                    <option>hours</option>
+                    <option>days</option>
+                  </select></label
+                >
+              </div>
+              <div class="fields" id="dates" hidden>
+                <label
+                  >From<input
+                    id="from"
+                    type="date"
+                    value="2026-11-18"
+                    required /></label
+                ><label
+                  >Through<input
+                    id="to"
+                    type="date"
+                    value="2026-11-24"
+                    required
+                /></label>
+              </div>
+              <p class="cap">Australia/Sydney · 30 days of sample history</p>
+              <div class="buttons">
+                <button type="button" id="cancel">Cancel</button
+                ><button type="button" id="apply">Apply</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+      <div class="grid">
+        <div>
+          <div class="cap" id="scale"></div>
+          <div class="plot" id="plot"></div>
+          <div class="axis" id="axis"></div>
+        </div>
+        <div>
+          <div class="rp">
+            <strong>By provider</strong><span>Window total</span>
+          </div>
+          <div id="list"></div>
+        </div>
+      </div>
+      <div class="tip" id="tip"></div>
+    </section>
+    <footer>
+      <span>Times in Australia/Sydney</span
+      ><span>Interactive prototype · no live billing data</span>
+    </footer>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id),
+      providers = ["ChatGPT", "Claude", "agy-bin", "opencode-go", "exa"],
+      colors = ["#a88bf6", "#605bd6", "#8190a7", "#13a781", "#4986ee"];
+    // Synthetic hourly estimates in cents; round after aggregation.
+    const today = [
+      [
+        530, 0, 0, 120, 30, 240, 120, 1610, 2760, 2800, 830, 1720, 4130, 4900,
+        4380, 6947,
+      ],
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1050, 1460, 1200, 239],
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159],
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 40, 18.6],
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 40.6],
+    ];
+    const data = Array.from({ length: 30 * 24 }, (_, i) => {
+      let h = i % 24,
+        d = Math.floor(i / 24);
+      return providers.map((_, p) =>
+        d === 29
+          ? today[p][h] || 0
+          : Math.round(
+              (today[p][h] || 0) * (0.44 + ((d * 13 + h * 3) % 17) / 24),
+            ),
+      );
+    });
+    const origin = Date.UTC(2026, 9, 26),
+      H = 3600000,
+      end = 29 * 24 + 16,
+      day = (i) =>
+        new Date(origin + i * H).toLocaleDateString("en-AU", {
+          month: "short",
+          day: "numeric",
+          timeZone: "UTC",
+        }),
+      money = (c) => "US$" + (c / 100).toFixed(2);
+    let a = end - 16,
+      b = end,
+      name = "Today",
+      sel = null,
+      mode = "rolling",
+      customActive = false;
+    function pick(i) {
+      sel = sel === i ? null : i;
+      render();
+    }
+    function render() {
+      const indices = data.slice(a, b),
+        totals = providers.map((_, p) => indices.reduce((s, r) => s + r[p], 0));
+      $("kpi").textContent =
+        "≥ " +
+        money(sel === null ? totals.reduce((s, n) => s + n, 0) : totals[sel]);
+      $("period").textContent = name;
+      $("chip").hidden = sel === null;
+      if (sel !== null) {
+        $("chip").textContent = providers[sel] + " ×";
+        $("chip").ariaLabel = "Clear " + providers[sel] + " filter";
+      }
+      $("custom").textContent = (customActive ? name : "Custom") + " ▾";
+      $("custom").classList.toggle("on", customActive);
+      document
+        .querySelectorAll("[data-days]")
+        .forEach((x) => x.classList.toggle("on", x.textContent === name));
+      const step = b - a <= 36 ? 1 : 24,
+        bins = [];
+      for (let t = a; t < b;) {
+        const next = Math.min(
+          b,
+          step === 1 ? t + 1 : (Math.floor(t / 24) + 1) * 24,
+        );
+        bins.push({
+          t,
+          v: data
+            .slice(t, next)
+            .reduce((s, r) => s.map((n, p) => n + r[p]), [0, 0, 0, 0, 0]),
+        });
+        t = next;
+      }
+      const peak = Math.max(
+        1,
+        ...bins.map(({ v }) =>
+          sel === null ? v.reduce((s, n) => s + n, 0) : v[sel],
+        ),
+      );
+      const mag = 10 ** Math.floor(Math.log10(peak)),
+        max = Math.ceil(peak / mag) * mag;
+      $("scale").textContent =
+        (step === 1 ? "Hourly" : "Daily") + " cost · US$0–" + max / 100;
+      $("plot").replaceChildren();
+      for (const { v, t } of bins) {
+        const col = document.createElement("div");
+        col.className = "col";
+        v.forEach((n, p) => {
+          if (!n || (sel !== null && sel !== p)) return;
+          const s = document.createElement("button");
+          s.className = "seg";
+          s.dataset.p = p;
+          s.style.cssText = `height:${(100 * n) / max}%;background:${colors[p]}`;
+          s.title = `${day(t)}${step === 1 ? ", " + (t % 24) + ":00" : ""} · ${providers[p]} · ${money(n)}`;
+          s.ariaLabel = s.title;
+          s.onclick = () => pick(p);
+          col.append(s);
+        });
+        $("plot").append(col);
+      }
+      const label = (t) =>
+        step === 1 ? String(t % 24).padStart(2, "0") + ":00" : day(t);
+      $("axis").replaceChildren(
+        ...[...new Set([0, Math.floor(bins.length / 2), bins.length - 1])].map(
+          (i) =>
+            Object.assign(document.createElement("span"), {
+              textContent: label(bins[i].t),
+            }),
+        ),
+      );
+      $("list").replaceChildren();
+      providers.forEach((s, i) => {
+        const r = document.createElement("button");
+        r.className = "row" + (sel === i ? " on" : "");
+        r.setAttribute("aria-pressed", sel === i);
+        r.innerHTML = `<span class="dot" style="background:${colors[i]}"></span>${s}<span class="hint">${sel === i ? "✓" : "Only"}</span><b>${money(totals[i])}</b>`;
+        r.onclick = () => {
+          pick(i);
+          $("list").children[i].focus();
+        };
+        const highlight = (on) =>
+          document
+            .querySelectorAll(".seg")
+            .forEach((el) =>
+              el.classList.toggle("dim", on && +el.dataset.p !== i),
+            );
+        r.onmouseenter = r.onfocus = () => highlight(true);
+        r.onmouseleave = r.onblur = () => highlight(false);
+        $("list").append(r);
+      });
+      $("tip").innerHTML =
+        sel === null
+          ? "Try it: <b>click Claude</b> in the breakdown, or click one of its indigo bar segments."
+          : `Showing <b>${providers[sel]}</b> only. Change the time window, or clear the chip to compare all providers.`;
+    }
+    $("chip").onclick = () => pick(sel);
+    function closePanel() {
+      $("panel").hidden = true;
+      $("custom").setAttribute("aria-expanded", "false");
+    }
+    document.querySelectorAll("[data-days]").forEach(
+      (x) =>
+        (x.onclick = () => {
+          b = end;
+          a = (30 - +x.dataset.days) * 24;
+          name = x.textContent;
+          customActive = false;
+          closePanel();
+          render();
+        }),
+    );
+    function tab(m) {
+      mode = m;
+      const r = m === "rolling";
+      $("duration").hidden = !r;
+      $("dates").hidden = r;
+      ["qty", "unit"].forEach((id) => ($(id).disabled = !r));
+      ["from", "to"].forEach((id) => ($(id).disabled = r));
+      $("roll").classList.toggle("on", r);
+      $("fixed").classList.toggle("on", !r);
+    }
+    $("roll").onclick = () => tab("rolling");
+    $("fixed").onclick = () => tab("fixed");
+    $("custom").onclick = () => {
+      const open = $("panel").hidden;
+      $("panel").hidden = !open;
+      $("custom").setAttribute("aria-expanded", open);
+      if (open) $("roll").focus();
+    };
+    $("cancel").onclick = () => {
+      closePanel();
+      $("custom").focus();
+    };
+    document.onkeydown = (e) => {
+      if (e.key === "Escape" && !$("panel").hidden) $("cancel").click();
+    };
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".tools")) closePanel();
+    });
+    $("from").min = $("to").min = "2026-10-26";
+    $("from").max = $("to").max = "2026-11-24";
+    $("from").oninput = () => ($("to").min = $("from").value);
+    function limit() {
+      $("qty").max = $("unit").value === "days" ? 29 : end;
+    }
+    $("unit").onchange = limit;
+    limit();
+    $("apply").onclick = () => {
+      if (!$("form").reportValidity()) return;
+      if (mode === "rolling") {
+        b = end;
+        const q = +$("qty").value;
+        a = b - q * ($("unit").value === "days" ? 24 : 1);
+        name = `Last ${q} ${q === 1 ? $("unit").value.slice(0, -1) : $("unit").value}`;
+      } else {
+        a = (Date.parse($("from").value) - origin) / H;
+        b = Math.min(end, (Date.parse($("to").value) - origin) / H + 24);
+        name = day(a) + (day(a) === day(b - 1) ? "" : " – " + day(b - 1));
+      }
+      customActive = true;
+      closePanel();
+      render();
+      $("custom").focus();
+    };
+    tab("rolling");
+    render();
+    // Report the natural content box, not the iframe's viewport height.
+    if (parent !== window) {
+      const main = document.querySelector("main");
+      new ResizeObserver(() => {
+        parent.postMessage({ type: "term-llm:preview-height", height: main.offsetHeight }, "*");
+      }).observe(main);
+    }
+  </script>
+</html>

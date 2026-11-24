@@ -32,7 +32,7 @@ term-llm exec --tools read_file,write_file,edit_file,shell,grep,glob,view_image
 | `grep` | Search file contents using regex patterns (RE2 syntax). | `search` | true | Allowed when bound | — |
 | `glob` | Find files by glob pattern (supports ** for recursive matching). | `search` | true | Allowed when bound | — |
 | `view_image` | View and analyze an image file. | `read` | true | Allowed when bound | — |
-| `show_media` | Register an existing image, video, or audio so it can be placed in your response. | `image` | true | Allowed when bound | `show_image` |
+| `show_media` | Register an existing image, video, audio, or HTML file so it can be placed in your response. | `image` | true | Allowed when bound | `show_image` |
 | `image_generate` | Generate an image from a text prompt. | `image` | true | Allowed when bound | — |
 | `ask_user` | Present questions to the user and gather their responses. | `interactive` | true | Direct only: `foreground_interaction` | — |
 | `spawn_agent` | Spawn a sub-agent to handle a specific task autonomously. | `agent` | true | Allowed when bound | — |
@@ -103,7 +103,7 @@ When a [classification provider](/guides/classify/) is usable, `grep` accepts an
 
 ### Presenting existing media
 
-Use `show_media` when the user should see or listen to a local artifact, rather
+Use `show_media` when the user should see, hear, or interact with a local artifact, rather
 than when the model only needs to inspect it. It accepts `path` and an optional
 `caption`, subject to the normal read/workspace approval policy. Registration
 returns an opaque URL, not a claim that playback succeeded. Place the exact URL
@@ -118,8 +118,11 @@ on its own line using **Markdown image syntax for every kind**, including audio:
 | Image | PNG, JPEG, GIF, WebP, BMP | 25 MiB |
 | Video | MP4, WebM | 256 MiB |
 | Audio | MP3, PCM/IEEE-float WAV (including valid extensible headers), Ogg Opus/Vorbis, FLAC, M4A/M4B or audio MP4, audio-only WebM | 100 MiB |
+| HTML preview | Self-contained UTF-8 `.html` or `.htm` | 4 MiB |
 
-Types are inspected from bytes, not guessed from filenames. MP4/WebM audio
+For interactive mockups, put the CSS, JavaScript and sample data in **one HTML file**. Register it like any other artifact and use its returned Markdown image reference. In web chat the user clicks to start the sandboxed preview. Inline scripts work; fetching APIs, loading a CDN, and referencing neighboring files do not. Terminal clients show a local file link instead; opening that file outside chat does **not** apply the web preview sandbox. HTML previews are omitted from transcript exports and shares.
+
+Image, video and audio types are inspected from bytes, not guessed from filenames. MP4/WebM audio
 classification uses bounded track metadata inspection. Generic containers without
 complete metadata within the inspection budget—including MP4/WebM files whose
 track metadata lies beyond the bounded inspection window—retain their legacy

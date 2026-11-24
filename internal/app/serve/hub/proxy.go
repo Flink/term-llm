@@ -35,6 +35,19 @@ func StripHopByHopHeaders(h http.Header) {
 	}
 }
 
+// HasSandboxPolicy recognizes an enforced sandbox directive in any CSP policy.
+func HasSandboxPolicy(header http.Header) bool {
+	for _, value := range header.Values("Content-Security-Policy") {
+		for directive := range strings.FieldsFuncSeq(value, func(r rune) bool { return r == ';' || r == ',' }) {
+			fields := strings.Fields(directive)
+			if len(fields) != 0 && strings.EqualFold(fields[0], "sandbox") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ParseNodePath splits a Hub node mount into ID and slash-prefixed remainder.
 func ParseNodePath(p string) (id, rest string, ok bool) {
 	const prefix = "/node/"

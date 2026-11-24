@@ -59,10 +59,15 @@ func rewriteExportMediaText(value string, replace func(string) string) string {
 	return out.String()
 }
 
-func replaceMarkdownAudioReferences(value string, media map[string]core.MediaArtifact) string {
+const omittedHTMLPreview = "Interactive HTML preview (not included in export)"
+
+func replaceMarkdownPresentationReferences(value string, media map[string]core.MediaArtifact) string {
 	return rewriteExportMediaText(value, func(token string) string {
 		match := htmlMediaReferencePattern.FindStringSubmatch(token)
 		item, ok := media[strings.ToLower(match[2])]
+		if ok && normalizedMediaType(item.MediaType) == "text/html" {
+			return omittedHTMLPreview
+		}
 		if !ok || !strings.HasPrefix(normalizedMediaType(item.MediaType), "audio/") {
 			return token
 		}

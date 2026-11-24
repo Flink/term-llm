@@ -311,8 +311,8 @@ func TestAudioMediaSummarizesKinds(t *testing.T) {
 	if !strings.Contains(summary, "1 audio(s)") || strings.Contains(summary, "image(s)") {
 		t.Fatalf("summary=%q", summary)
 	}
-	mixed := compactMediaSummary([]core.MediaArtifact{audio, {MediaType: "image/png"}, {MediaType: "video/mp4"}})
-	if strings.Join(mixed, ",") != "1 image(s),1 video(s),1 audio(s)" {
+	mixed := compactMediaSummary([]core.MediaArtifact{audio, {MediaType: "image/png"}, {MediaType: "video/mp4"}, {MediaType: "text/html"}, {MediaType: "text/plain"}})
+	if strings.Join(mixed, ",") != "1 image(s),1 video(s),1 audio(s),1 HTML preview(s)" {
 		t.Fatalf("mixed=%v", mixed)
 	}
 }

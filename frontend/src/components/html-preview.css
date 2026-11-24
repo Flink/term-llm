@@ -1,0 +1,100 @@
+.html-preview[open] {
+  --preview-header-height: 2rem;
+
+  position: relative;
+  inset: auto;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  aspect-ratio: 16 / 10;
+  height: calc(var(--preview-height) + var(--preview-header-height) + 2px);
+  min-height: min(8rem, 40dvh);
+  max-height: min(72dvh, 38rem);
+  margin: 0.6rem 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.html-preview:modal {
+  position: fixed;
+  inset: 0;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.html-preview iframe {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+}
+
+.html-preview-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: none;
+  box-sizing: border-box;
+  height: var(--preview-header-height);
+  padding-inline: 0.75rem 0.25rem;
+  color: var(--text-muted);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+
+.html-preview-header svg {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+}
+
+.html-preview-header span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.html-preview:modal .html-preview-header {
+  height: calc(var(--preview-header-height) + var(--safe-top));
+  padding: var(--safe-top) calc(0.25rem + var(--safe-right)) 0 calc(0.75rem + var(--safe-left));
+}
+
+.html-preview-toggle {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--preview-header-height);
+  height: 100%;
+  padding: 0;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.html-preview-toggle:hover,
+.html-preview-toggle:focus-visible {
+  background: var(--surface-2);
+}
+
+.html-preview-toggle:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -2px;
+}
+
+@media (pointer: coarse) {
+  .html-preview[open] {
+    --preview-header-height: 44px;
+  }
+}

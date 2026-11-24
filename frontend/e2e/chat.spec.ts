@@ -23,6 +23,7 @@ async function mockAPI(
     authors?: boolean;
     holdStream?: boolean;
     media?: boolean;
+    extraMessages?: unknown[];
     model?: string;
     attention?: boolean;
     shell?: boolean;
@@ -179,6 +180,7 @@ async function mockAPI(
                     : []),
                 ],
               },
+              ...(options.extraMessages || []),
             ],
           },
         },
@@ -233,6 +235,7 @@ async function mockAPI(
               { type: 'text', text: path.includes('/s2/') ? 'Second question' : 'First question' },
             ],
           },
+          ...(options.extraMessages || []),
         ],
       });
     if (path.endsWith('/v1/responses') && request.method() === 'POST') {
@@ -293,6 +296,7 @@ async function open(
     authors?: boolean;
     holdStream?: boolean;
     media?: boolean;
+    extraMessages?: unknown[];
     model?: string;
     attention?: boolean;
     shell?: boolean;
@@ -304,6 +308,140 @@ async function open(
   await expect(page.locator('#startupSplash')).toBeHidden({ timeout: 10_000 });
   return requests;
 }
+
+test('fullscreen HTML preview preserves the iframe document and restores focus', async ({
+  page,
+}) => {
+  const reference = '0123456789abcdef0123456789abcdef';
+  const url = '/ui/media/fedcba9876543210fedcba9876543210.html';
+  await page.route(`**${url}`, (route) =>
+    route.fulfill({ contentType: 'text/html', body: '<label>Draft <input></label>' }),
+  );
+  const tool = { tool_call_id: 'show', tool_name: 'show_media' };
+  await open(page, 'chat/s1', {
+    extraMessages: [
+      { id: 2, sequence: 1, role: 'assistant', parts: [{ type: 'tool_call', ...tool }] },
+      {
+        id: 3,
+        sequence: 2,
+        role: 'tool',
+        parts: [{ type: 'tool_result', ...tool, media: [{ reference, url, type: 'text/html' }] }],
+      },
+      {
+        id: 4,
+        sequence: 3,
+        role: 'assistant',
+        parts: [{ type: 'text', text: `![Demo](term-llm-media://${reference})` }],
+      },
+    ],
+  });
+
+  await page.getByRole('button', { name: 'Preview: Demo', exact: true }).click();
+  const frameSelector = 'iframe[title="Preview: Demo"]';
+  const frame = page.locator(frameSelector);
+  const header = page.locator('.html-preview-header');
+  await expect(page.locator('p > dialog.html-preview')).toHaveCount(0);
+  await expect(header.getByText('Demo', { exact: true })).toBeVisible();
+  await expect(header.getByRole('button', { name: 'Full screen' })).toBeVisible();
+  expect(await header.evaluate((el) => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(
+    await frame.evaluate((el) => el.getBoundingClientRect().top + 1),
+  );
+  const draft = page.frameLocator(frameSelector).getByLabel('Draft');
+  await draft.fill('unsaved edit');
+
+  const inlineHeight = () => frame.evaluate((el) => el.getBoundingClientRect().height);
+  const cap = await page.evaluate(() =>
+    Math.min(
+      innerHeight * 0.72,
+      38 * parseFloat(getComputedStyle(document.documentElement).fontSize),
+    ),
+  );
+  // This document never reports its height on load: it still gets a usable, bounded frame.
+  const fallback = await inlineHeight();
+  expect(fallback).toBeGreaterThan(150);
+  expect(fallback).toBeLessThanOrEqual(cap + 1);
+
+  expect(await draft.evaluate(() => window.origin)).toBe('null');
+  const reportHeight = (height: number) =>
+    draft.evaluate(
+      (_, height) => parent.postMessage({ type: 'term-llm:preview-height', height }, '*'),
+      height,
+    );
+  await reportHeight(200);
+  await expect.poll(inlineHeight).toBeCloseTo(200, 0);
+
+  // Both senders have opaque origins. Only the preview's own window may resize it.
+  await page.evaluate((url) => {
+    const sibling = document.createElement('iframe');
+    sibling.title = 'Unrelated preview';
+    sibling.setAttribute('sandbox', 'allow-scripts');
+    sibling.hidden = true;
+    const onReport = (event: MessageEvent) => {
+      if (event.source !== sibling.contentWindow || event.data?.type !== 'term-llm:preview-height')
+        return;
+      window.removeEventListener('message', onReport);
+      sibling.dataset.reportDelivered = 'true';
+    };
+    window.addEventListener('message', onReport);
+    sibling.src = url;
+    document.body.append(sibling);
+  }, url);
+  await page
+    .frameLocator('iframe[title="Unrelated preview"]')
+    .getByLabel('Draft')
+    .evaluate(() => {
+      parent.postMessage({ type: 'term-llm:preview-height', height: 350 }, '*');
+    });
+  await expect(page.locator('iframe[title="Unrelated preview"]')).toHaveAttribute(
+    'data-report-delivered',
+    'true',
+  );
+  expect(await inlineHeight()).toBeCloseTo(200, 0);
+  await reportHeight(100_000);
+  await expect.poll(inlineHeight).toBeGreaterThan(200);
+  expect(await inlineHeight()).toBeLessThanOrEqual(cap + 1);
+  const original = await draft.evaluateHandle((input) => input.ownerDocument);
+  const assertDocument = async () => {
+    await expect(draft).toHaveValue('unsaved edit');
+    expect(await draft.evaluate((input, doc) => input.ownerDocument === doc, original)).toBe(true);
+  };
+  const enter = page.getByRole('button', { name: 'Full screen', exact: true });
+  const modal = page.locator('dialog:modal');
+  for (const via of ['button', 'Escape']) {
+    await expect(enter.locator('svg[data-icon="expand"]')).toBeVisible();
+    await expect(enter).toHaveText('');
+    await enter.click();
+    await expect(modal.locator(frameSelector)).toBeVisible();
+    const exit = modal.getByRole('button', { name: 'Exit full screen', exact: true });
+    await expect(exit.locator('svg[data-icon="restore"]')).toBeVisible();
+    const edges = await modal.evaluate((dialog) => {
+      const { left, top, right, bottom } = dialog.getBoundingClientRect();
+      return [left, top, innerWidth - right, innerHeight - bottom];
+    });
+    for (const edge of edges) expect(Math.abs(edge)).toBeLessThanOrEqual(1);
+    await assertDocument();
+    if (via === 'button') await exit.click();
+    else {
+      // The sandboxed document owns its key events. Escape on the host toolbar
+      // dismisses the native dialog; its exit button is available at all times.
+      await exit.focus();
+      await page.evaluate(() => {
+        document.addEventListener(
+          'keydown',
+          (event) => {
+            if (event.key === 'Escape') document.body.dataset.chatReceivedEscape = 'yes';
+          },
+          { once: true },
+        );
+      });
+      await page.keyboard.press('Escape');
+      await expect(page.locator('body')).not.toHaveAttribute('data-chat-received-escape', 'yes');
+    }
+    await expect(modal).toHaveCount(0);
+    await expect(enter).toBeFocused();
+    await assertDocument();
+  }
+});
 
 test.describe('companion viewer loading', () => {
   test.use({ serviceWorkers: 'block' });

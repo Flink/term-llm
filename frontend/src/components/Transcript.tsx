@@ -14,7 +14,7 @@ import { Markdown } from './Markdown';
 import { codeModeDisplayTool, isCodeModeTool } from '../domain/code-mode';
 import { AudioMedia } from './AudioMedia';
 import { useAttachmentPreview } from './useAttachmentPreview';
-import { trustedPublishedMediaURL } from '../domain/audio-media';
+import { trustedPublishedMediaURL } from '../domain/published-media';
 import { bindTranscriptMedia } from './transcript-media';
 import { lazyComponent } from './lazyComponent';
 import { Icon, type IconName } from './Icon';
@@ -48,8 +48,17 @@ const CodeModeScript = lazyComponent(() =>
   import('./CodeModeScript').then((module) => module.CodeModeScript),
 );
 
-function publishedMediaURL(store: AppStore, value: string): string {
-  return trustedPublishedMediaURL(rebaseHubAssetURL(store.config, value));
+function publishedMediaURL(store: AppStore, value: string, type: string): string {
+  const url = rebaseHubAssetURL(store.config, value);
+  if (type !== 'html') return trustedPublishedMediaURL(url);
+  // An executable document must be on this chat’s media route, not just any
+  // same-origin mount ending in a plausible asset name.
+  if (!trustedPublishedMediaURL(url, 'html')) return '';
+  const parsed = new URL(url, location.href);
+  const mount = store.config.prefix.replace(/\/$/, '');
+  return parsed.pathname.slice(0, parsed.pathname.lastIndexOf('/')) === `${mount}/media`
+    ? parsed.href
+    : '';
 }
 
 function openMediaGallery(store: AppStore, src: string, type: 'image' | 'video'): void {
@@ -70,61 +79,16 @@ function openMediaGallery(store: AppStore, src: string, type: 'image' | 'video')
   store.lightbox.value = { ...items[index], items, index };
 }
 
-function parseToolArguments(
-  raw: string,
-): { entries: [string, unknown][]; fallback: string } | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
-      return { entries: [], fallback: raw };
-    return { entries: Object.entries(parsed as Record<string, unknown>), fallback: '' };
-  } catch {
-    return { entries: [], fallback: raw };
-  }
-}
-
-function ToolArgumentValue({ value }: { value: unknown }) {
-  if (value == null || typeof value === 'boolean' || typeof value === 'number')
-    return <code class="tool-argument-literal">{value == null ? 'null' : String(value)}</code>;
-  if (typeof value === 'string')
-    return (
-      <span class={`tool-argument-text ${value.includes('\n') ? 'multiline' : ''}`}>{value}</span>
-    );
-  const compact = JSON.stringify(value) || String(value);
-  const formatted = compact.length > 100 ? JSON.stringify(value, null, 2) : compact;
-  return (
-    <code class={`tool-argument-structured ${compact.length > 100 ? 'multiline' : ''}`}>
-      {formatted}
-    </code>
-  );
-}
-
-function ToolArguments({ raw }: { raw: string }) {
-  const parsed = parseToolArguments(raw);
-  if (!parsed || (!parsed.entries.length && !parsed.fallback)) return null;
-  return (
-    <>
-      <div class="tool-details-label">Arguments</div>
-      {parsed.entries.length ? (
-        <dl class="tool-arguments">
-          {parsed.entries.map(([name, value]) => (
-            <div class="tool-argument" key={name}>
-              <dt>{name}</dt>
-              <dd>
-                <ToolArgumentValue value={value} />
-              </dd>
-            </div>
-          ))}
-        </dl>
-      ) : (
-        <pre class="tool-arguments-fallback">
-          <code>{parsed.fallback}</code>
-        </pre>
-      )}
-    </>
-  );
-}
+// Argument layout and formatting are only needed inside expanded tool cards.
+export const ToolArguments = lazyComponent(() =>
+  import('./ToolArguments')
+    .then((module) => module.ToolArguments)
+    .catch(
+      () =>
+        ({ raw }: { raw: string }) =>
+          raw ? <pre>{raw}</pre> : null,
+    ),
+);
 
 interface AskUserQuestion {
   header: string;
@@ -1510,7 +1474,7 @@ export function Transcript() {
       sessionId,
       store,
       resolve: createMessageMediaResolvers(),
-      index: createTranscriptIndexes((url) => publishedMediaURL(store, url)),
+      index: createTranscriptIndexes((url, type) => publishedMediaURL(store, url, type)),
     };
   }
   const resolverForMessage = resolverCache.current.resolve;

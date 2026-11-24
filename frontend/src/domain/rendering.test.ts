@@ -538,7 +538,7 @@ describe('trusted audio Markdown', () => {
     expect(download).toHaveTextContent('Download audio');
     expect(download).toHaveAttribute('href', url);
     expect(download).toHaveAttribute('download', 'summary.ogg');
-    expect(root.innerHTML).not.toContain('TERM_LLM_AUDIO_');
+    expect(root.innerHTML).not.toContain('TERM_LLM_MEDIA_');
   });
 
   it.each([
@@ -646,7 +646,7 @@ describe('trusted audio Markdown', () => {
   });
 
   it('ignores forged placeholder text, attributes, code and raw card wrappers', () => {
-    const forged = 'TERM_LLM_AUDIO_00000000-0000-4000-8000-000000000000_TOKEN';
+    const forged = 'TERM_LLM_MEDIA_00000000-0000-4000-8000-000000000000_TOKEN';
     const root = renderAudio(
       `<span class="audio-media-card" data-audio="0">${forged}</span>\n\n\`${forged}\`\n\n${source}`,
     );
@@ -689,7 +689,7 @@ it('does not restore replayed audio placeholders from a previous render', () => 
   const sanitize = DOMPurify.sanitize.bind(DOMPurify);
   let oldPlaceholder = '';
   const spy = vi.spyOn(DOMPurify, 'sanitize').mockImplementation((source, options) => {
-    oldPlaceholder = String(source).match(/data-audio-placeholder="([^"]+)"/)?.[1] || '';
+    oldPlaceholder = String(source).match(/data-media-placeholder="([^"]+)"/)?.[1] || '';
     return sanitize(source, options) as never;
   });
   const reference = '0123456789abcdef0123456789abcdef';
@@ -700,12 +700,12 @@ it('does not restore replayed audio placeholders from a previous render', () => 
   expect(oldPlaceholder).not.toBe('');
   const root = document.createElement('div');
   root.innerHTML = renderMarkdown(
-    `<span data-audio-placeholder="${oldPlaceholder}"></span>\n\n${audio}`,
+    `<span data-media-placeholder="${oldPlaceholder}"></span>\n\n${audio}`,
     resolve,
   );
   expect(root.querySelectorAll('audio')).toHaveLength(1);
-  expect(root.querySelector('[data-audio-placeholder]')).toHaveAttribute(
-    'data-audio-placeholder',
+  expect(root.querySelector('[data-media-placeholder]')).toHaveAttribute(
+    'data-media-placeholder',
     oldPlaceholder,
   );
   root.innerHTML = renderMarkdown(`<code>${audio}</code>`, resolve);
@@ -733,3 +733,48 @@ it.each(['mp3', 'wav', 'ogg', 'flac', 'm4a', 'weba'])(
     expect(html).toContain(`<audio src="${url}"`);
   },
 );
+
+describe('published HTML demos', () => {
+  const reference = '0123456789abcdef0123456789abcdef';
+  const url = `/ui/media/${reference}.html`;
+  const source = `![](term-llm-media://${reference})`;
+  const resolve = () => ({ type: 'html' as const, url, caption: '<img onerror="boom">' });
+
+  it('inserts only an escaped, inert preview control outside Markdown links', () => {
+    const root = document.createElement('div');
+    root.innerHTML = renderMarkdown(`[${source}](https://example.com)`, resolve);
+    const button = root.querySelector('button')!;
+    expect(button).toHaveTextContent('Preview: <img onerror="boom">');
+    expect(button.closest('a')).toBeNull();
+    expect(root.querySelector('iframe,img,[srcdoc],[onerror]')).toBeNull();
+    expect(root.innerHTML).not.toContain(url);
+  });
+
+  it('never turns raw iframe markup, spoofed buttons, code or user references into previews', () => {
+    const raw = `<iframe sandbox="allow-same-origin allow-scripts" src="${url}" srcdoc="bad"></iframe>\n\n<button class="html-media-preview" data-demo-reference="${reference}">Run</button>`;
+    const root = document.createElement('div');
+    for (const html of [
+      renderMarkdown(`${raw}\n\n\`${source}\``, resolve),
+      renderMarkdown(source, resolve, 'user'),
+      ...markdownDocumentBlocks(raw).map((b) => b.html),
+    ]) {
+      root.innerHTML = html;
+      expect(root.querySelector('iframe,button')).toBeNull();
+    }
+  });
+
+  it.each([
+    `https://example.org${url}`,
+    `data:text/html,hello`,
+    `blob:${location.origin}/demo`,
+    `${url}?token=secret`,
+    `${url}#fragment`,
+    '/ui/media/demo.html',
+    url.replace('.html', '.png'),
+  ])('rejects untrusted HTML target %s', (target) => {
+    const root = document.createElement('div');
+    root.innerHTML = renderMarkdown(source, () => ({ type: 'html', url: target }));
+    expect(root.querySelector('button,iframe')).toBeNull();
+    expect(root).toHaveTextContent('unavailable');
+  });
+});

@@ -88,6 +88,20 @@ func TestRenderMediaLinkIncludesClickableAndVisibleFallback(t *testing.T) {
 	}
 }
 
+func TestHTMLPreviewIsOnlyALocalFileLink(t *testing.T) {
+	const ref = "0123456789abcdef0123456789abcdef"
+	path := t.TempDir() + "/my preview.html"
+	text := RenderMediaMarkdown("![Usage filters](term-llm-media://"+ref+")", map[string]core.MediaArtifact{
+		ref: {MediaType: "text/html", SourcePath: path},
+	}, func(s string) string { return s }, func(string) ImageArtifact {
+		t.Fatal("HTML must not be passed to the image renderer")
+		return ImageArtifact{}
+	})
+	if !strings.Contains(ansi.Strip(text), "HTML preview (local file): Open Usage filters") || !strings.Contains(text, LocalFileURI(path)) {
+		t.Fatalf("unexpected HTML fallback: %q", text)
+	}
+}
+
 func TestRenderMediaMarkdownScreenshotOutputBecomesFileLink(t *testing.T) {
 	const reference = "65305cece88cb09c2a0a8276c31db6ce"
 	const path = "/tmp/glossy red ball.png"

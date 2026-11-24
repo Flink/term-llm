@@ -1,28 +1,5 @@
 import { escapeHTML } from './markdown-hooks';
 
-/** Published assets must stay on the authenticated, content-addressed media route. */
-export function trustedPublishedMediaURL(value: string, audioOnly = false): string {
-  try {
-    const url = new URL(value, location.href);
-    if (
-      !/^https?:$/.test(url.protocol) ||
-      url.origin !== location.origin ||
-      url.username ||
-      url.password ||
-      /[?#]/.test(value)
-    )
-      return '';
-    const extensions = audioOnly
-      ? 'mp3|wav|ogg|flac|m4a|weba'
-      : 'png|jpe?g|gif|webp|bmp|mp4|webm|mp3|wav|ogg|flac|m4a|weba';
-    return new RegExp(`/media/[a-f0-9]{32}\\.(?:${extensions})$`, 'i').test(url.pathname)
-      ? value
-      : '';
-  } catch {
-    return '';
-  }
-}
-
 export interface AudioMediaDescriptor {
   url: string;
   label?: string;

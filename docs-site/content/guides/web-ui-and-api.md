@@ -150,6 +150,8 @@ usage is omitted, and partial or stale activity is called out in the sheet.
 
 ### Showing local media
 
+For an interactive demo, register a self-contained UTF-8 `.html` or `.htm` file (up to **4 MiB**) with `show_media`. The preview becomes available when its message finishes streaming. Clicking it starts a script-enabled sandbox without access to chat cookies, storage or the parent page. A slim header shows the preview title on the left and an expand icon on the right. Expand fills the browser window; its restore icon returns to chat without reloading the demo (**Esc** also works when the icon has focus). Inline previews start at a compact aspect ratio. A document can report its natural content height with `parent.postMessage({type: 'term-llm:preview-height', height: pixels}, '*')`, for example from a `ResizeObserver` on its content wrapper. The host caps inline height; taller documents scroll or can be expanded. Keep scripts and styles inline; the preview blocks external subresources and API requests. The chat page also restricts iframe destinations to its own origin, including frames added by custom extensions. This is a framing restriction, not a general navigation or network firewall. The media response enforces the sandbox even if its URL is opened directly. Exported transcripts omit interactive documents.
+
 Agents with the `show_media` tool can present an existing PNG, JPEG, GIF, WebP,
 BMP, MP4, WebM, MP3, PCM/IEEE-float WAV, Ogg Opus/Vorbis, FLAC, or M4A/audio
 MP4. Bounded track inspection also identifies audio-only WebM. The tool accepts a

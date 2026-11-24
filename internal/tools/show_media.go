@@ -25,7 +25,7 @@ type MediaPublisher interface {
 	PublishMedia(ctx context.Context, sourcePath, mediaType string) (string, error)
 }
 
-// ShowMediaTool presents an existing local image, video, or audio to the user.
+// ShowMediaTool presents an existing local image, video, audio, or HTML file to the user.
 type ShowMediaTool struct {
 	approval    *ApprovalManager
 	config      *ToolConfig
@@ -57,16 +57,16 @@ type ShowMediaArgs struct {
 func (t *ShowMediaTool) Spec() core.ToolSpec {
 	return core.ToolSpec{
 		Name: ShowMediaToolName,
-		Description: "Register an existing image, video, or audio so it can be placed in your response. The result returns an opaque " +
+		Description: "Register an existing image, video, audio, or HTML file so it can be placed in your response. The result returns an opaque " +
 			"term-llm-media URL; embed that exact URL on its own line with Markdown image syntax and choose context-appropriate alt text. " +
-			"Use this when the user should actually see or listen to the media, not merely when you need to inspect or analyze it. " +
-			"Supports PNG, JPEG, GIF, WebP, BMP, MP4, WebM, MP3, WAV, Ogg Opus/Vorbis, FLAC, M4A, and audio-only WebM; images up to 25 MiB, videos up to 256 MiB, audio up to 100 MiB.",
+			"Use this when the user should see, hear, or interact with the artifact, not merely when you need to inspect it. For HTML previews, keep assets and scripts in the same file; external subresources and API requests are blocked. " +
+			"Supports PNG, JPEG, GIF, WebP, BMP, MP4, WebM, MP3, WAV, Ogg Opus/Vorbis, FLAC, M4A, and audio-only WebM; images up to 25 MiB, videos up to 256 MiB, audio up to 100 MiB, and UTF-8 .html/.htm documents up to 4 MiB.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path": map[string]any{
 					"type":        "string",
-					"description": "Path to an existing image, video, or audio to show to the user",
+					"description": "Path to an existing image, video, audio, or HTML file to show to the user",
 				},
 				"caption": map[string]any{
 					"type":        "string",
@@ -131,11 +131,11 @@ func (t *ShowMediaTool) Execute(ctx context.Context, args json.RawMessage) (core
 	if err := ctx.Err(); err != nil {
 		return core.ToolOutput{}, err
 	}
-	format, inspectErr := mediatype.Inspect(f, info.Size())
+	format, inspectErr := inspectShowMedia(f, info.Size(), resolved)
 	if inspectErr != nil {
 		if errors.Is(inspectErr, mediatype.ErrUnsupported) {
 			return toolErrorOutput("", NewToolError(ErrUnsupportedFormat,
-				"unsupported media format (supported: PNG, JPEG, GIF, WebP, BMP, MP4, WebM, MP3, WAV, Ogg Opus/Vorbis, FLAC, M4A, audio-only WebM)")), nil
+				"unsupported media format (supported: PNG, JPEG, GIF, WebP, BMP, MP4, WebM, MP3, WAV, Ogg Opus/Vorbis, FLAC, M4A, audio-only WebM, UTF-8 HTML)")), nil
 		}
 		return toolErrorOutput("", NewToolErrorf(ErrExecutionFailed, "cannot inspect file: %v", inspectErr)), nil
 	}
@@ -168,9 +168,9 @@ func (t *ShowMediaTool) Execute(ctx context.Context, args json.RawMessage) (core
 	uri := "term-llm-media://" + reference
 	var result strings.Builder
 	fmt.Fprintf(&result, "Media ready (%s).\n\n", mediaType)
-	result.WriteString("To embed it in your response, use this exact URL in Markdown image syntax, even for audio:\n\n")
+	result.WriteString("To embed it in your response, use this exact URL in Markdown image syntax, even for audio or HTML:\n\n")
 	fmt.Fprintf(&result, "%s\n\n", uri)
-	result.WriteString("Choose concise, descriptive alt text appropriate to the surrounding response (for example, “Listen to the narrated summary”), and place the Markdown on its own line. Do not substitute a local path or write an HTML audio tag.\n")
+	result.WriteString("Choose concise, descriptive alt text appropriate to the surrounding response (for example, “Listen to the narrated summary”), and place the Markdown on its own line. Do not substitute a local path or write a raw media tag.\n")
 	fmt.Fprintf(&result, "Example: ![descriptive alt text](%s)\n", uri)
 	if caption != "" {
 		fmt.Fprintf(&result, "Suggested alt text: %s\n", caption)
@@ -186,6 +186,19 @@ func (t *ShowMediaTool) Execute(ctx context.Context, args json.RawMessage) (core
 			Caption:    caption,
 		}},
 	}, nil
+}
+
+// HTML is explicitly opted into by filename, never inferred from arbitrary text.
+func inspectShowMedia(f *os.File, size int64, path string) (mediatype.Format, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext != ".html" && ext != ".htm" {
+		return mediatype.Inspect(f, size)
+	}
+	if format := mediatype.HTMLFormat(); size > format.MaxBytes {
+		// Execute reports the format-specific limit without reading oversized files.
+		return format, nil
+	}
+	return mediatype.InspectHTML(f, size)
 }
 
 func newMediaReference() (string, error) {

@@ -7,7 +7,7 @@ import { AppStore } from '../stores/app-store';
 import { APIError } from '../api/client';
 import type { SessionShareResponse } from '../api/endpoints';
 import type { Attachment, ToolCall } from '../domain/types';
-import { NewChatControls, Transcript } from './Transcript';
+import { NewChatControls, ToolArguments, Transcript } from './Transcript';
 import { bindTranscriptMedia } from './transcript-media';
 import { Composer } from './Composer';
 import { DelegationContext, returnToParent } from './DelegationContext';
@@ -125,6 +125,7 @@ beforeAll(async () => {
   await Promise.all([
     import('../domain/rich-highlight'),
     import('../domain/rich-katex'),
+    ToolArguments.preload(),
     preloadDeferredModals(),
     preloadCompanionPanels(),
   ]);
@@ -12276,3 +12277,56 @@ it('resolves a final assistant Markdown image from a persisted spawn_script resu
   expect(image.closest('.message.assistant .markdown-body')).toBeInTheDocument();
   store.dispose();
 });
+
+it.each([
+  [{ prefix: '/custom/chat' }, '/custom/chat', true],
+  [{ prefix: '/node/test', hub: { nodeBasePath: '/ui' } }, '/ui', true],
+  [{ prefix: '/ui' }, '/other', false],
+] as const)(
+  'only previews published HTML on the configured media route: %s %s',
+  async (config, mount, allowed) => {
+    const store = createStore(config);
+    const reference = '0123456789abcdef0123456789abcdef';
+    const file = 'fedcba9876543210fedcba9876543210.html';
+    store.sessions.value[0].messages = [
+      {
+        id: 'tool',
+        role: 'tool-group',
+        created: 1,
+        content: '',
+        tools: [
+          {
+            id: 'show',
+            name: 'show_media',
+            status: 'done',
+            media: [{ reference, type: 'text/html', url: `${mount}/media/${file}` }],
+          },
+        ],
+      },
+      {
+        id: 'answer',
+        role: 'assistant',
+        created: 2,
+        content: `![Counter](term-llm-media://${reference})`,
+      },
+    ];
+    const { container } = render(
+      <StoreContext.Provider value={store}>
+        <Transcript />
+      </StoreContext.Provider>,
+    );
+    expect(container.querySelector('iframe')).toBeNull();
+    const button = screen.queryByRole('button', { name: 'Preview: Counter' });
+    if (allowed) {
+      fireEvent.click(button!);
+      expect(await screen.findByRole('button', { name: 'Full screen' })).toHaveFocus();
+      const frame = container.querySelector('iframe')!;
+      expect(frame.src).toBe(`${location.origin}${config.prefix}/media/${file}`);
+      expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
+      expect(frame).toHaveAttribute('referrerpolicy', 'no-referrer');
+      expect(frame).toHaveAttribute('title', 'Preview: Counter');
+      expect(frame).not.toHaveAttribute('srcdoc');
+    } else expect(button).toBeNull();
+    store.dispose();
+  },
+);

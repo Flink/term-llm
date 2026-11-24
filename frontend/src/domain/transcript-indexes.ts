@@ -1,3 +1,4 @@
+import { publishedMediaKind } from './published-media';
 import { bylineFor } from './authors';
 import { indexTranscriptTurns, type TranscriptRowContext } from './transcript';
 import type { Author, MediaArtifact, Message } from './types';
@@ -8,7 +9,7 @@ import type { MarkdownMediaTarget } from './markdown';
  * URL-validated, or concatenated on each foreground streaming update.
  */
 export function createTranscriptIndexes(
-  mediaURL: (url: string) => string,
+  mediaURL: (url: string, type: string) => string,
   text = (message: Message) => message.content,
 ) {
   let previous: Message[] = [];
@@ -60,15 +61,9 @@ export function createTranscriptIndexes(
               .trim()
               .toLowerCase();
             if (!reference) continue;
-            const type = item.type.startsWith('image/')
-              ? 'image'
-              : item.type.startsWith('video/')
-                ? 'video'
-                : item.type.startsWith('audio/')
-                  ? 'audio'
-                  : undefined;
+            const type = publishedMediaKind(item.type);
             if (!type) continue;
-            const url = mediaURL(item.url);
+            const url = mediaURL(item.url, type);
             if (url)
               entries.push([
                 reference,

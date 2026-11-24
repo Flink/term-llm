@@ -340,7 +340,8 @@ func hubRebaseProxyResponse(resp *http.Response) error {
 
 	hubRewriteLocationHeader(resp, t)
 
-	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
+	// Never inject Hub UI bootstrap into generated artifacts or downloads.
+	if resp.Header.Get("Content-Disposition") != "" || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") || apphub.HasSandboxPolicy(resp.Header) {
 		return nil
 	}
 	// Bodyless responses retain the node's representation metadata. Ranges

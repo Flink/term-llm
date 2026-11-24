@@ -238,9 +238,6 @@ func htmlMediaReferences(messages []Message, extra []core.MediaArtifact) map[str
 func replaceHTMLMediaReferences(value string, media map[string]core.MediaArtifact, images *exportImages) string {
 	return rewriteExportMediaText(value, func(token string) string {
 		match := htmlMediaReferencePattern.FindStringSubmatch(token)
-		if len(match) != 3 {
-			return token
-		}
 		item, ok := media[strings.ToLower(match[2])]
 		if !ok {
 			label := strings.Join(strings.Fields(match[1]), " ")
@@ -249,6 +246,9 @@ func replaceHTMLMediaReferences(value string, media map[string]core.MediaArtifac
 			}
 			return "Media unavailable in exported transcript"
 		}
+		if normalizedMediaType(item.MediaType) == "text/html" {
+			return omittedHTMLPreview
+		}
 		kind := "Image"
 		if strings.HasPrefix(strings.ToLower(item.MediaType), "audio/") {
 			return markdownAudioPlaceholder(item)
@@ -256,11 +256,7 @@ func replaceHTMLMediaReferences(value string, media map[string]core.MediaArtifac
 		if strings.HasPrefix(strings.ToLower(item.MediaType), "video/") {
 			kind = "Video"
 		}
-		label := strings.TrimSpace(match[1])
-		if label == "" {
-			label = strings.TrimSpace(item.Name)
-		}
-		label = strings.Join(strings.Fields(label), " ")
+		label := strings.Join(strings.Fields(cmp.Or(strings.TrimSpace(match[1]), item.Name)), " ")
 		if kind == "Image" && images != nil {
 			resolved := images.resolve(exportImageSource{Path: item.Path(), MediaType: item.MediaType, Alt: label})
 			if !resolved.Omitted {
