@@ -128,6 +128,11 @@ func (p *serveRunPersistence) persistInitial(ctx context.Context, replacingExist
 		p.appendInitialLocked(ctx)
 		return
 	}
+	// Rush must commit the claimed inputs atomically with the handoff. A
+	// snapshot would write the messages without authorizing provider dispatch.
+	if rushFromContext(ctx) != nil {
+		return
+	}
 	initial := make([]core.Message, 0, len(p.baseHistory)+len(p.inputMessages)+1)
 	if p.systemPromptInjected {
 		initial = append(initial, core.SystemText(p.rt.systemPrompt))

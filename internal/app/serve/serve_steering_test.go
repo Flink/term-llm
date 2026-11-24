@@ -67,12 +67,16 @@ func (s *rushHTTPSettlementStream) Close() error {
 }
 
 func TestRushHTTPSettlesThenStartsExactlyOneOrderedReplacement(t *testing.T) {
-	for _, wrapped := range []bool{false, true} {
-		name := "direct"
-		if wrapped {
-			name = "provider-without-special-rush-interface"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		wrapped bool
+		partial bool
+	}{
+		{name: "direct", partial: true},
+		{name: "provider-without-special-rush-interface", wrapped: true, partial: true},
+		{name: "before-first-token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			var calls atomic.Int32
 			entered := make(chan struct{})
 			sourceStopped := make(chan struct{})
@@ -86,7 +90,11 @@ func TestRushHTTPSettlesThenStartsExactlyOneOrderedReplacement(t *testing.T) {
 				}
 				w.Header().Set("Content-Type", "text/event-stream")
 				if calls.Add(1) == 1 {
-					_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
+					// Cover cancellation before the first token as well as after a
+					// partial response. Flushing headers alone opens a live stream.
+					if tc.partial {
+						_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
+					}
 					w.(http.Flusher).Flush()
 					close(entered)
 					<-r.Context().Done()
@@ -113,7 +121,7 @@ func TestRushHTTPSettlesThenStartsExactlyOneOrderedReplacement(t *testing.T) {
 				t:        t,
 			}
 			var provider core.Provider = settlement
-			if wrapped {
+			if tc.wrapped {
 				provider = rushContinuationProvider{provider}
 			}
 			registry := engine.NewToolRegistry()
@@ -131,7 +139,17 @@ func TestRushHTTPSettlesThenStartsExactlyOneOrderedReplacement(t *testing.T) {
 					srv.responseLifecycleWG.Wait()
 				}
 			}()
-			run, err := srv.startResponseRun(rt, true, false, []core.Message{core.UserText("source")}, core.Request{SessionID: sess.ID, Tools: []core.ToolSpec{responseTimeoutDelayTool{}.Spec()}}, sess.ID, startResponseRunOptions{uiSession: true})
+			const sourceText = "original user prompt"
+			partialSeen := make(chan struct{}, 1)
+			run, err := srv.startResponseRun(rt, true, false, []core.Message{core.UserText(sourceText)}, core.Request{SessionID: sess.ID, Tools: []core.ToolSpec{responseTimeoutDelayTool{}.Spec()}}, sess.ID, startResponseRunOptions{
+				uiSession: true,
+				onEvent: func(ev core.Event) error {
+					if ev.Type == core.EventTextDelta && ev.Text == "partial" {
+						partialSeen <- struct{}{}
+					}
+					return nil
+				},
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -144,6 +162,13 @@ func TestRushHTTPSettlesThenStartsExactlyOneOrderedReplacement(t *testing.T) {
 			case <-settlement.opened:
 			case <-time.After(3 * time.Second):
 				t.Fatal("source stream not opened")
+			}
+			if tc.partial {
+				select {
+				case <-partialSeen:
+				case <-time.After(3 * time.Second):
+					t.Fatal("source text not received")
+				}
 			}
 			for _, id := range []string{"z", "a"} {
 				_, _, err := rt.InterruptMessage(context.Background(), core.UserText("guidance "+id), "guidance "+id, id, nil, interruptDeliverySteer)
@@ -160,8 +185,12 @@ func TestRushHTTPSettlesThenStartsExactlyOneOrderedReplacement(t *testing.T) {
 			}
 			var op *session.RushOperation
 			waitForServeCondition(t, 3*time.Second, func() bool {
-				op, _ = store.GetRush(context.Background(), sess.ID, "rush-once")
-				return op != nil && !op.Status.Active()
+				var err error
+				op, err = store.GetRush(t.Context(), sess.ID, "rush-once")
+				if err != nil {
+					t.Fatalf("read admitted rush: %v", err)
+				}
+				return !op.Status.Active()
 			}, "rush to start")
 			if op.Status != session.RushStarted {
 				t.Fatalf("rush = %+v", op)
@@ -170,8 +199,9 @@ func TestRushHTTPSettlesThenStartsExactlyOneOrderedReplacement(t *testing.T) {
 			case messages := <-replacementInput:
 				raw, _ := json.Marshal(messages)
 				text := string(raw)
-				if !strings.Contains(text, "guidance z") || !strings.Contains(text, "guidance a") || strings.Index(text, "guidance z") > strings.Index(text, "guidance a") {
-					t.Fatalf("FIFO lost: %s", text)
+				source, z, a := strings.Index(text, sourceText), strings.Index(text, "guidance z"), strings.Index(text, "guidance a")
+				if source < 0 || z <= source || a <= z {
+					t.Fatalf("replacement lost the original prompt or FIFO steering order: %s", text)
 				}
 			case <-time.After(3 * time.Second):
 				t.Fatal("replacement not started")
@@ -196,11 +226,15 @@ func TestRushHTTPSettlesThenStartsExactlyOneOrderedReplacement(t *testing.T) {
 				t.Fatal(err)
 			}
 			ids := map[string]int{}
+			sourceCount := 0
 			for _, row := range rows {
 				ids[row.ClientMessageID]++
+				if row.Role == core.RoleUser && row.TextContent == sourceText {
+					sourceCount++
+				}
 			}
-			if ids["z"] != 1 || ids["a"] != 1 {
-				t.Fatalf("durable identities: %+v", ids)
+			if sourceCount != 1 || ids["z"] != 1 || ids["a"] != 1 {
+				t.Fatalf("durable identities: source=%d, steering=%+v", sourceCount, ids)
 			}
 		})
 	}

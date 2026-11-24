@@ -1780,7 +1780,7 @@ func (rt *serveRuntime) runOnce(ctx context.Context, stateful bool, replaceHisto
 		if err := rt.prepareDurableRetryActivity(ctx, req.SessionID, inputMessages, collaborationBinding, activityController); err != nil {
 			return serveRunResult{}, err
 		}
-		rt.dropTrailingUserHistory(inputMessages)
+		rt.dropTrailingUserHistory(ctx, inputMessages)
 	}
 
 	rushInitial := rushFromContext(ctx)
@@ -2126,8 +2126,9 @@ func collaborativeShellDurableRetryActivity(history, incoming []core.Message, ex
 	return activity, true
 }
 
-func (rt *serveRuntime) dropTrailingUserHistory(incoming []core.Message) {
-	if rt == nil || len(rt.history) == 0 {
+func (rt *serveRuntime) dropTrailingUserHistory(ctx context.Context, incoming []core.Message) {
+	// Rush continues the original turn even if it has no assistant output yet.
+	if rt == nil || len(rt.history) == 0 || rushFromContext(ctx) != nil {
 		return
 	}
 	incomingIDs := make(map[string]struct{}, len(incoming))
