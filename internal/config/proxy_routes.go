@@ -109,7 +109,10 @@ func (c *Config) seedDiscoveredProxyProviders(inference map[string]discoveredPro
 		}
 	}
 	for _, p := range proxyprofile.All() {
-		if _, builtin := BuiltinProvider(p.ID); !proxyprofile.InferenceCapable(p) || direct[p.ID] || !(selected.profiles[p.ID] || selected.all && builtin) {
+		_, builtin := BuiltinProvider(p.ID)
+		// Mistral has a canonical inference profile but no built-in provider type.
+		canonical := builtin || p.Provider == ""
+		if !proxyprofile.InferenceCapable(p) || direct[p.ID] || !(selected.profiles[p.ID] || selected.all && canonical) {
 			continue
 		}
 		if _, ok := c.Providers[p.ID]; !ok {
