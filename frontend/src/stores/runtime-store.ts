@@ -23,6 +23,9 @@ export class RuntimeStore {
   private modelRequest: Promise<void> = Promise.resolve();
   private modelRequestProvider = '';
   private modelRequestPending = false;
+  private modelRequestFingerprint = '';
+  private catalogRequest = 0;
+  private readonly catalogPublished = new Map<string, number>();
   /** When each displayed catalog was fetched from the server (cached or live). */
   private readonly catalogFetchedAt = new Map<string, number>();
   private providersVerified = false;
@@ -49,7 +52,10 @@ export class RuntimeStore {
    */
   readonly draftApprovalActions: ReadonlySignal<boolean | undefined>;
 
-  private readonly mentionRequests = new Map<string, Promise<void>>();
+  private readonly mentionRequests = new Map<
+    string,
+    { fingerprint: string; request: Promise<void> }
+  >();
   private modelAbort: AbortController | null = null;
   private modelEpoch = 0;
 
@@ -228,11 +234,17 @@ export class RuntimeStore {
 
   /** Concurrent loads of the same provider share one request. */
   loadModels(provider = this.selectedProvider.value): Promise<void> {
-    if (this.modelRequestPending && this.modelRequestProvider === provider)
+    const fingerprint = this.catalogFingerprint(provider);
+    if (
+      this.modelRequestPending &&
+      this.modelRequestProvider === provider &&
+      this.modelRequestFingerprint === fingerprint
+    )
       return this.modelRequest;
     this.modelRequestProvider = provider;
+    this.modelRequestFingerprint = fingerprint;
     this.modelRequestPending = true;
-    const request = this.fetchModels(provider).finally(() => {
+    const request = this.fetchModels(provider, fingerprint).finally(() => {
       if (this.modelRequest === request) this.modelRequestPending = false;
     });
     this.modelRequest = request;
@@ -254,7 +266,8 @@ export class RuntimeStore {
     );
   }
 
-  private async fetchModels(provider: string): Promise<void> {
+  private async fetchModels(provider: string, fingerprint: string): Promise<void> {
+    const request = ++this.catalogRequest;
     const epoch = ++this.modelEpoch;
     this.modelAbort?.abort();
     const controller = new AbortController();
@@ -272,23 +285,15 @@ export class RuntimeStore {
     }
     this.services.recordDiscovery({}, performance.now() - started);
     if (controller.signal.aborted || epoch !== this.modelEpoch) return;
-    const models = parseModelList(data, provider);
     batch(() => {
-      this.modelCatalogs.value = { ...this.modelCatalogs.peek(), [provider]: models };
-      // Settings previews intentionally load a non-selected provider into this
-      // list. Runtime labels must use the provider-scoped modelFor lookup.
-      this.models.value = models;
       this.modelsLoadingProvider.value = null;
+      if (this.catalogFingerprint(provider) !== fingerprint) return;
+      this.publishCatalog(provider, fingerprint, request, data);
+      // Settings previews can display a non-selected provider's catalog.
+      this.models.value = this.modelCatalogs.peek()[provider];
     });
-    this.catalogFetchedAt.set(provider, Date.now());
-    // Persist against the verified provider entry only; a catalog fetched
-    // while providers are still last-known would carry an unverified fingerprint.
-    if (this.providersVerified)
-      this.services.workspaceCache.saveModels(
-        provider,
-        providerFingerprint(this.providers.peek().find((entry) => entry.id === provider)),
-        models,
-      );
+    const models = this.modelCatalogs.peek()[provider];
+    if (!models || this.catalogFingerprint(provider) !== fingerprint) return;
     if (provider !== this.selectedProvider.peek()) return;
     if (
       this.selectedModel.value &&
@@ -330,26 +335,47 @@ export class RuntimeStore {
       Date.now() - fetchedAt < MODEL_CATALOG_FRESH_MS
     )
       return Promise.resolve();
+    const fingerprint = this.catalogFingerprint(provider);
     const pending = this.mentionRequests.get(provider);
-    if (pending) return pending;
-    const request = this.fetchMentionCatalog(provider)
+    if (pending?.fingerprint === fingerprint) return pending.request;
+    const order = ++this.catalogRequest;
+    const request = this.services.endpoints
+      .models(provider)
+      .then((data) => {
+        if (this.mentionRequests.get(provider)?.request === request)
+          this.publishCatalog(provider, fingerprint, order, data);
+      })
       .catch(() => undefined)
-      .finally(() => this.mentionRequests.delete(provider));
-    this.mentionRequests.set(provider, request);
+      .finally(() => {
+        if (this.mentionRequests.get(provider)?.request === request)
+          this.mentionRequests.delete(provider);
+      });
+    this.mentionRequests.set(provider, { fingerprint, request });
     return request;
   }
 
-  private async fetchMentionCatalog(provider: string): Promise<void> {
-    const fingerprint = () =>
-      providerFingerprint(this.providers.peek().find((entry) => entry.id === provider));
-    const before = fingerprint();
-    const data = await this.services.endpoints.models(provider);
-    // A provider reconfigured mid-request must not inherit the old catalog.
-    if (fingerprint() !== before) return;
+  private catalogFingerprint(provider: string): string {
+    return providerFingerprint(this.providers.peek().find((entry) => entry.id === provider));
+  }
+
+  // Either loader may publish first, but neither may replace a newer result.
+  private publishCatalog(
+    provider: string,
+    fingerprint: string,
+    order: number,
+    data: Record<string, unknown>,
+  ): void {
+    if (
+      this.catalogFingerprint(provider) !== fingerprint ||
+      order < (this.catalogPublished.get(provider) ?? 0)
+    )
+      return;
     const models = parseModelList(data, provider);
-    this.modelCatalogs.value = { ...this.modelCatalogs.peek(), [provider]: models };
+    this.catalogPublished.set(provider, order);
     this.catalogFetchedAt.set(provider, Date.now());
-    if (this.providersVerified) this.services.workspaceCache.saveModels(provider, before, models);
+    this.modelCatalogs.value = { ...this.modelCatalogs.peek(), [provider]: models };
+    if (this.providersVerified)
+      this.services.workspaceCache.saveModels(provider, fingerprint, models);
   }
 
   setFast(value: boolean): void {
@@ -421,6 +447,7 @@ export class RuntimeStore {
     this.modelAbort?.abort();
     this.modelAbort = null;
     this.modelEpoch += 1;
+    this.mentionRequests.clear();
   }
 }
 

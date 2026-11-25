@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { expect, it, vi } from 'vitest';
 import { StoreContext } from '../app/context';
 import { AppStore } from '../stores/app-store';
-import { testConfig, testSession } from '../stores/store-test-fixtures';
+import { deferred, testConfig, testSession } from '../stores/store-test-fixtures';
 import { Composer } from './Composer';
 
 const efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -90,4 +90,25 @@ it('loads catalogs for providers that arrive after the mention opens', async () 
     store.providers.value = providers;
   });
   await waitFor(() => expect(menu).toHaveTextContent('chatgpt:gpt-6.2-sol'));
+});
+
+it('reloads an open mention when an offered provider changes without changing IDs', async () => {
+  const store = modelStore();
+  const applyProviders = (model: string) =>
+    store.runtime.applyProviders({ data: [{ id: 'claude-bin', default_model: model }] });
+  applyProviders('sonnet');
+  const stale = deferred<{ data: { id: string }[] }>();
+  store.endpoints.models = vi
+    .fn(async () => ({ data: [{ id: 'opus' }] }))
+    .mockImplementationOnce(() => stale.promise);
+  renderComposer(store);
+  await userEvent.click(screen.getByRole('textbox', { name: 'Message' }));
+  await userEvent.keyboard('@model:');
+  const menu = await screen.findByRole('listbox', { name: 'Composer completions' });
+  await waitFor(() => expect(store.endpoints.models).toHaveBeenCalledOnce());
+
+  await act(() => applyProviders('opus'));
+  await waitFor(() => expect(menu).toHaveTextContent('claude-bin:opus'));
+  await act(async () => stale.resolve({ data: [{ id: 'sonnet' }] }));
+  expect(menu).not.toHaveTextContent('claude-bin:sonnet');
 });

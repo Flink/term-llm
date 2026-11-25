@@ -227,7 +227,9 @@ func TestProductionBundleSizeBudgets(t *testing.T) {
 		// Composer model mentions (@model:) and their per-provider catalog
 		// loading add +4.08/+1.45 kB over a 539.97/159.76 kB build, measuring
 		// 544.05/161.22 kB. Raise both caps by that growth; keep narrow headroom.
-		"dist/app.js":           {raw: 544_100, gzip: 161_300},
+		// Ordering catalog writes and reloading on provider changes bring the
+		// entry to 544.49/161.54 kB raw/Go level-6 gzip.
+		"dist/app.js":           {raw: 544_550, gzip: 161_650},
 		"dist/chunks/Panels.js": {raw: 32_000, gzip: 11_000},
 		// Panel splitting adds a shared-import edge to Lightbox: measured 8.03/3.21 kB.
 		// Pausing transcript media while a video is open brings it to 8.16/3.27 kB.

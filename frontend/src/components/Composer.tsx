@@ -21,6 +21,7 @@ import {
   modelMentionCompletions,
   modelMentionOwnsToken,
 } from '../domain/model-mentions';
+import { providerFingerprint } from '../stores/workspace-cache';
 import type { Attachment } from '../domain/types';
 import { overlayManager } from '../platform/overlay-manager';
 import { VoiceOperation, type VoiceSnapshot } from '../platform/voice';
@@ -493,8 +494,8 @@ function ConversationComposer() {
   );
   const modelOwnsMention = modelMentionOwnsToken(modelMention);
   const modelMentionActive = Boolean(modelMention);
-  // Providers can arrive after the mention opens on a cold start.
-  const mentionProviderKey = store.providers.value.map((entry) => entry.id).join('\u0000');
+  // Discovery can replace a cached provider without changing its ID.
+  const mentionProviderKey = store.providers.value.map(providerFingerprint).join('\u0000');
   useEffect(() => {
     if (!modelMentionActive) return;
     let current = true;
