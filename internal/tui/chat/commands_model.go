@@ -550,6 +550,7 @@ func (m *Model) switchEffortStateOnly(resolved effortSwitchResolution, deferMark
 
 	m.providerKey = resolved.provider
 	m.modelName = resolved.targetModel
+	m.invalidateModelMentionCatalog()
 	_ = m.admitModelSelection(resolved.provider, resolved.targetModel, true)
 	m.refreshEffectiveFastMode()
 

@@ -250,9 +250,9 @@ and applies persistence and character limits independently of the browser displa
 
 ## Model mentions
 
-Type `@model:` (or the short `@m:`) anywhere in the composer to search the
-models this server can run, then insert the exact reference a sub-agent model
-override expects. For example, `ask a subagent in @m:opus` lists matching
+Type `@model:` (or the short `@m:`) anywhere in the web or terminal composer to
+search available models and insert a plain model reference. The web composer
+uses the server catalog; the terminal uses its local configured and cached models. For example, `ask a subagent in @m:opus` lists matching
 models from every enabled provider. Choosing one that supports reasoning
 effort keeps the menu open for its efforts; choosing an effort replaces the
 mention with plain text such as `claude-bin:opus-medium`. The **default** row

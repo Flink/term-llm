@@ -265,3 +265,20 @@ func TestParseSubmittedQuotedEscapesAndInvalidRanges(t *testing.T) {
 		t.Fatalf("fragment parsing = %#v, want %#v", fragments, wantFragments)
 	}
 }
+
+func TestModelMentionNamespacesAreNotFileAttachments(t *testing.T) {
+	input := `@model:claude-bin:opus# @m:opus @MODEL:any @"m:quoted" @./model:relative @claude-bin:ordinary`
+	got := ParseSubmitted(input)
+	want := []string{"m:quoted", "./model:relative", "claude-bin:ordinary"}
+	if len(got) != len(want) {
+		t.Fatalf("ParseSubmitted(%q) = %+v", input, got)
+	}
+	for i, path := range want {
+		if got[i].Path != path {
+			t.Errorf("path %d = %q, want %q", i, got[i].Path, path)
+		}
+	}
+	if got := InsertText("m:literal", false); got != "@./m:literal" {
+		t.Errorf("InsertText = %q, want @./m:literal", got)
+	}
+}

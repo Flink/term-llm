@@ -265,6 +265,21 @@ export function mentionCompletions(
   });
 }
 
+export function modelMentionCompletions(payload: MentionSearchResponse | null): Completion[] {
+  const token = payload?.model_token;
+  if (!token) return [];
+  const replacement = { start: token.start_utf16, end: token.end_utf16 };
+  return (payload.model_items || []).map((item) => ({
+    value: item.insert_text,
+    label: item.label,
+    description: item.description,
+    badge: item.badge,
+    kind: 'model',
+    continues: item.continues,
+    replacement,
+  }));
+}
+
 export function applyCompletion(value: string, completion: string | Completion): string {
   const item = typeof completion === 'string' ? null : completion;
   const replacement = item?.replacement;

@@ -38,11 +38,13 @@ export type ServeContextUsage = { "used_tokens": number; "input_limit"?: number;
 
 export type ServeEvent = { "v": number; "sequence": number; "instance_id": string; "type": string; "occurred_at": number; "session_id"?: string; "response_id"?: string; "project_id"?: string; "parent_session_id"?: string; "transcript_rev"?: number; "run_epoch"?: number; "operation_id"?: string; "reason"?: string; };
 
+export type ServeMentionModelItem = { "label": string; "description": string; "badge": string; "insert_text": string; "continues": boolean; };
+
 export type ServeMentionSearchItem = { "path": string; "kind": string; "insert_text": string; "segments": (ServeMentionSegment)[] | null; };
 
 export type ServeMentionSearchRequest = { "text": string; "cursor_utf16": number; "limit"?: number; "project_id"?: string; "no_project"?: boolean; "worktree_dir"?: string; };
 
-export type ServeMentionSearchResponse = { "active": boolean; "token"?: ServeMentionToken; "items": (ServeMentionSearchItem)[] | null; "index_truncated"?: boolean; };
+export type ServeMentionSearchResponse = { "active": boolean; "token"?: ServeMentionToken; "items": (ServeMentionSearchItem)[] | null; "index_truncated"?: boolean; "model_token"?: ServeMentionToken; "model_items"?: (ServeMentionModelItem)[]; "model_only"?: boolean; "models_pending"?: boolean; };
 
 export type ServeMentionSegment = { "text": string; "matched": boolean; };
 

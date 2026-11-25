@@ -539,26 +539,6 @@ describe('discovery cache reconciliation', () => {
     await Promise.all([first, second]);
     expect(store.models.value[0]?.id).toBe('m');
   });
-
-  it('does not let a late mention fetch replace or persist over the picker catalog', async () => {
-    const store = createStore(new PersistentCache(new MemoryBackend()));
-    store.runtime.applyProviders(providers);
-    const save = vi.spyOn(store.services.workspaceCache, 'saveModels');
-    const stale = deferred<Payload>();
-    store.endpoints.models = vi.fn((_provider, signal) =>
-      signal ? Promise.resolve(models) : stale.promise,
-    );
-    const mention = store.runtime.loadMentionCatalogs();
-    await store.loadModels('p');
-    stale.resolve({ data: [{ id: 'fallback' }] });
-    await mention;
-
-    expect(store.runtime.modelCatalogs.value.p.map((model) => model.id)).toEqual(['m']);
-    expect(save).toHaveBeenCalledOnce();
-    expect(save).toHaveBeenCalledWith('p', expect.any(String), [
-      expect.objectContaining({ id: 'm' }),
-    ]);
-  });
 });
 
 describe('late event-feed preparation', () => {

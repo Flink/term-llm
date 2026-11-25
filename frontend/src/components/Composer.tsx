@@ -12,16 +12,11 @@ import {
   completedCursor,
   composerCompletions,
   mentionCompletions,
+  modelMentionCompletions,
   type Completion,
   type MentionSearchResponse,
 } from '../domain/completions';
 import { attachmentIconName, validateAttachmentFile } from '../domain/attachments';
-import {
-  activeModelMentionAtCursor,
-  modelMentionCompletions,
-  modelMentionOwnsToken,
-} from '../domain/model-mentions';
-import { providerFingerprint } from '../stores/workspace-cache';
 import type { Attachment } from '../domain/types';
 import { overlayManager } from '../platform/overlay-manager';
 import { VoiceOperation, type VoiceSnapshot } from '../platform/voice';
@@ -33,6 +28,10 @@ import { lazyComponent } from './lazyComponent';
 
 // Typical OS double-click interval.
 const STOP_CLICK_GUARD_MS = 500;
+
+const MENTION_MODEL_REVALIDATIONS = 10;
+
+const completionId = ({ kind, value }: Completion) => `${kind}:${value}`;
 
 function resizePrompt(element: HTMLTextAreaElement | null): void {
   if (!element) return;
@@ -360,16 +359,13 @@ function ConversationComposer() {
   const voiceSnapshot = useMemo(() => signal(voice.snapshot), [voice]);
   const [voiceState, setVoiceState] = useState<VoiceControls>(voice.snapshot);
   const appliedVoiceGeneration = useRef(0);
-  const [completionIndex, setCompletionIndex] = useState(-1);
+  const [highlight, setHighlight] = useState<{ id: string; index: number; query: string } | null>(
+    null,
+  );
   const [cursor, setCursor] = useState(store.prompt.value.length);
   const [dismissed, setDismissed] = useState('');
   const [dragging, setDragging] = useState(false);
   const [dragError, setDragError] = useState('');
-  const [projectMentions, setProjectMentions] = useState<{
-    context: string;
-    payload: MentionSearchResponse;
-  } | null>(null);
-  const [modelCatalogsLoading, setModelCatalogsLoading] = useState(false);
   const addMenu = useMenuKeyboard(menu, () => setMenu(false), attach);
   useEffect(
     () =>
@@ -485,80 +481,77 @@ function ConversationComposer() {
     );
     return () => clearTimeout(timer);
   }, [voice, voiceState.phase, voiceState.generation]);
-  const mention = activeMentionAtCursor(store.prompt.value, cursor);
-  const inlineSlash = activeInlineSlashAtCursor(store.prompt.value, cursor);
-  const modelMention = activeModelMentionAtCursor(
-    store.prompt.value,
-    cursor,
-    store.providers.value,
+  const prompt = store.prompt.value;
+  const mention = activeMentionAtCursor(prompt, cursor);
+  const inlineSlash = activeInlineSlashAtCursor(prompt, cursor);
+  const completionKey = `${composerOwner}\u0000${prompt}\u0000${cursor}`;
+  const completionsDismissed = dismissed === completionKey;
+  const mentionActive = Boolean(mention) && !completionsDismissed;
+  const noProject = store.projectsEnabled.value && !projectId;
+  const sessionId = session?.id || '';
+  const mentionContext = `${composerOwner}\u0000${projectId}\u0000${worktreeDir}\u0000${sessionId}\u0000${noProject}`;
+  const mentionRequest = useMemo(
+    () =>
+      mentionActive
+        ? {
+            context: mentionContext,
+            sessionId,
+            body: {
+              text: prompt,
+              cursor_utf16: cursor,
+              limit: 10,
+              project_id: projectId,
+              no_project: noProject,
+              worktree_dir: worktreeDir,
+            },
+          }
+        : null,
+    [mentionActive, mentionContext, sessionId, prompt, cursor, projectId, noProject, worktreeDir],
   );
-  const modelOwnsMention = modelMentionOwnsToken(modelMention);
-  const modelMentionActive = Boolean(modelMention);
-  // Discovery can replace a cached provider without changing its ID.
-  const mentionProviderKey = store.providers.value.map(providerFingerprint).join('\u0000');
-  useEffect(() => {
-    if (!modelMentionActive) return;
-    let current = true;
-    setModelCatalogsLoading(true);
-    void store.runtime.loadMentionCatalogs().finally(() => {
-      if (current) setModelCatalogsLoading(false);
-    });
-    return () => {
-      current = false;
-    };
-  }, [store, modelMentionActive, mentionProviderKey]);
-
-  // Mention results are revalidated in place: keep showing the previous
-  // payload while the next search is pending so the menu does not flash.
-  // Results are tagged with their search context so a project, worktree, or
-  // session switch never offers paths from the previous one.
-  // A model mention is not a project path, so it never triggers file search.
-  const mentionActive = Boolean(mention) && !modelOwnsMention;
-  const mentionContext = `${projectId}\u0000${worktreeDir}\u0000${session?.id || ''}`;
-  useEffect(() => {
-    if (!mentionActive) {
-      setProjectMentions(null);
+  const [mentionResults, setMentionResults] = useState<{
+    request: NonNullable<typeof mentionRequest>;
+    payload: MentionSearchResponse | null;
+    modelsPending: boolean;
+  } | null>(null);
+  // Preserve the path menu during the next search for the same token. Model
+  // rows, in contrast, are bound to the exact text and caret that were searched.
+  useLayoutEffect(() => {
+    if (!mentionRequest) {
+      setMentionResults(null);
       return;
     }
     const controller = new AbortController();
-    const source = store.prompt.value;
-    const sourceCursor = cursor;
-    const timer = window.setTimeout(() => {
-      void store.endpoints
-        .mentionSearch(
-          {
-            text: source,
-            cursor_utf16: sourceCursor,
-            limit: 10,
-            project_id: projectId,
-            no_project: Boolean(store.projectsEnabled.peek() && !projectId),
-            worktree_dir: worktreeDir,
-          },
-          session?.id || '',
-          controller.signal,
-        )
-        .then((payload) => {
-          if (!controller.signal.aborted && store.prompt.peek() === source)
-            setProjectMentions({ context: mentionContext, payload });
-        })
-        .catch((error: unknown) => {
-          if ((error as { name?: string })?.name !== 'AbortError') setProjectMentions(null);
-        });
-    }, 50);
+    let payload: MentionSearchResponse | null = null;
+    let timer: number;
+    const { body, sessionId } = mentionRequest;
+    const current = () => !controller.signal.aborted && store.prompt.peek() === body.text;
+    const search = async (attempt: number) => {
+      if (!current()) return;
+      let modelsPending = false;
+      try {
+        payload = await store.endpoints.mentionSearch(body, sessionId, controller.signal);
+        modelsPending = Boolean(payload.models_pending) && attempt < MENTION_MODEL_REVALIDATIONS;
+      } catch {
+        // A failed refresh does not discard already available rows.
+      }
+      if (!current()) return;
+      setMentionResults({
+        request: mentionRequest,
+        payload,
+        modelsPending,
+      });
+      if (modelsPending)
+        timer = window.setTimeout(
+          () => void search(attempt + 1),
+          Math.min(250 * 2 ** attempt, 2_000),
+        );
+    };
+    timer = window.setTimeout(() => void search(0), 50);
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [
-    store,
-    store.prompt.value,
-    cursor,
-    projectId,
-    worktreeDir,
-    session?.id,
-    mentionActive,
-    mentionContext,
-  ]);
+  }, [store, mentionRequest]);
 
   const linkedDevicesMode = store.linkedDevicesMode.value;
   const canAttach = store.composer.attachmentsAllowed.value;
@@ -595,50 +588,66 @@ function ConversationComposer() {
     store.thinking.display.value,
     store.thinking.serverPolicy.value.raw,
   ).filter((entry) => commandAllowed(entry.value));
-  const currentMentions =
-    projectMentions?.context === mentionContext ? projectMentions.payload : null;
-  const modelCompletions = modelMention
-    ? modelMentionCompletions(
-        modelMention,
-        store.providers.value,
-        store.runtime.modelCatalogs.value,
-      )
-    : [];
-  if (modelOwnsMention && !modelCompletions.length)
-    modelCompletions.push({
-      value: '',
-      label: modelCatalogsLoading ? 'Loading models…' : 'No matching models',
-      description: modelCatalogsLoading
-        ? ''
-        : 'Only enabled providers and allowed models are listed',
-      kind: 'model',
-      unavailable: true,
-    });
-  const combined = modelOwnsMention
-    ? modelCompletions
+  const visibleMentions =
+    mentionResults?.request.context === mentionContext ? mentionResults : null;
+  const currentMentions = visibleMentions?.request === mentionRequest ? visibleMentions : null;
+  // Until the server classifies a new query, don't show stale file rows
+  // for an explicit model namespace or a qualified query for a known provider.
+  const unquotedQuery = mention && prompt[mention.start + 1] !== '"' ? mention.query : '';
+  const qualifiedProvider = unquotedQuery.match(/^([^:/#\\]+):/)?.[1].toLowerCase();
+  const previousModel = visibleMentions?.payload?.model_token;
+  const previousProvider = previousModel?.query.split(':', 1)[0].toLowerCase();
+  const pendingModel =
+    !currentMentions &&
+    (/^(?:model|m):/i.test(unquotedQuery) ||
+      (qualifiedProvider &&
+        (store.providers.value.some(({ id }) => id.toLowerCase() === qualifiedProvider) ||
+          (previousModel?.start_utf16 === mention?.start &&
+            previousProvider &&
+            qualifiedProvider === previousProvider))));
+  const modelOnly =
+    (currentMentions?.payload?.active && currentMentions.payload.model_only) || pendingModel;
+  const modelRows = modelMentionCompletions(currentMentions?.payload ?? null);
+  const modelsPending = Boolean(currentMentions?.modelsPending);
+  const files = mentionCompletions(visibleMentions?.payload ?? null, mention);
+  const combined = modelOnly
+    ? modelRows.length
+      ? modelRows
+      : [
+          {
+            value: '',
+            label: !currentMentions || modelsPending ? 'Loading models…' : 'No matching models',
+            description: '',
+            kind: 'model' as const,
+            unavailable: true,
+          },
+        ]
     : mention
-      ? [...local, ...modelCompletions, ...mentionCompletions(currentMentions, mention)]
+      ? qualifiedProvider
+        ? [...local, ...modelRows, ...files]
+        : [...local, ...files, ...modelRows]
       : local;
-  const completions =
-    dismissed === `${store.prompt.value}\u0000${cursor}`
-      ? []
-      : [...new Map(combined.map((entry) => [`${entry.kind}:${entry.value}`, entry])).values()];
-  // Clamp at render time so a shrunken list never highlights or applies an
-  // entry that is not displayed.
-  const activeIndex = completions.length
-    ? Math.min(
-        completionIndex < 0
-          ? Math.max(
-              0,
-              completions.findIndex(
-                (entry) =>
-                  entry.thinking && entry.value === cycleThinking(store.thinking.display.value),
-              ),
-            )
-          : completionIndex,
-        completions.length - 1,
-      )
-    : 0;
+  const completions = completionsDismissed
+    ? []
+    : [...new Map(combined.map((entry) => [completionId(entry), entry])).values()];
+  // Async discovery may insert rows before the one the user chose to
+  // highlight. Keep its identity; clamp only when that row disappears.
+  const highlightedIndex = highlight
+    ? completions.findIndex((entry) => completionId(entry) === highlight.id)
+    : -1;
+  // A new query may shrink the list; preserve its existing clamp behavior.
+  // For the same query, leave the highlight empty if the chosen row disappears
+  // rather than silently letting Enter/Tab pick a different row.
+  const activeIndex = highlight
+    ? highlightedIndex >= 0 || highlight.query === completionKey
+      ? highlightedIndex
+      : Math.min(highlight.index, completions.length - 1)
+    : Math.max(
+        0,
+        completions.findIndex(
+          (entry) => entry.thinking && entry.value === cycleThinking(store.thinking.display.value),
+        ),
+      );
   const project = store.projects.value.find((entry) => entry.id === store.activeProjectId.value);
   const bindingBlocked = store.draftActive.value && Boolean(project && project.available === false);
   // False is the server saying no approval-governed action exists; unknown
@@ -655,10 +664,17 @@ function ConversationComposer() {
   );
 
   const choose = (completion: Completion) => {
-    if (completion.kind === 'model' && completion.unavailable) return;
+    if (
+      completion.kind === 'model' &&
+      (completion.unavailable ||
+        store.prompt.peek() !== prompt ||
+        store.composerOwnerKey() !== composerOwner ||
+        textarea.current?.selectionStart !== cursor)
+    )
+      return;
     const nextCursor = completedCursor(store.prompt.value, completion);
     store.prompt.value = applyCompletion(store.prompt.value, completion);
-    setCompletionIndex(-1);
+    setHighlight(null);
     setDismissed('');
     setCursor(nextCursor);
     requestAnimationFrame(() => {
@@ -1251,7 +1267,7 @@ function ConversationComposer() {
                   aria-selected={activeIndex === index}
                   aria-disabled={entry.unavailable || undefined}
                   class={`slash-command-option${entry.badge ? ' with-badge' : ''}${activeIndex === index ? ' selected' : ''}`}
-                  key={`${entry.kind}:${entry.value}`}
+                  key={completionId(entry)}
                   onMouseDown={(event) => {
                     event.preventDefault();
                   }}
@@ -1279,6 +1295,11 @@ function ConversationComposer() {
                   ) : null}
                 </button>
               ))}
+              {modelsPending && (!modelOnly || modelRows.length > 0) && (
+                <div class="slash-command-footer" role="status">
+                  Loading more models…
+                </div>
+              )}
               {completions[0]?.thinking && (
                 <div class="slash-command-footer">
                   <span>
@@ -1305,7 +1326,9 @@ function ConversationComposer() {
             aria-autocomplete="list"
             aria-controls="slashCommandMenu"
             aria-activedescendant={
-              completions.length ? `composer-completion-${activeIndex}` : undefined
+              activeIndex >= 0 && completions.length
+                ? `composer-completion-${activeIndex}`
+                : undefined
             }
             aria-expanded={completions.length > 0}
             value={store.prompt.value}
@@ -1328,7 +1351,7 @@ function ConversationComposer() {
               setCursor(nextCursor);
               setDismissed('');
               resizePrompt(event.currentTarget);
-              setCompletionIndex(-1);
+              setHighlight(null);
             }}
             onKeyUp={(event) => {
               if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
@@ -1342,13 +1365,12 @@ function ConversationComposer() {
               if (event.isComposing || event.keyCode === 229) return;
               if (completions.length && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
                 event.preventDefault();
-                setCompletionIndex(
-                  (index) =>
-                    (Math.min(index < 0 ? activeIndex : index, completions.length - 1) +
-                      (event.key === 'ArrowDown' ? 1 : -1) +
-                      completions.length) %
-                    completions.length,
-                );
+                const step = event.key === 'ArrowDown' ? 1 : -1;
+                const start = activeIndex < 0 && step < 0 ? 0 : activeIndex;
+                const index = (start + step + completions.length) % completions.length;
+                const entry = completions[index];
+                if (!(entry.kind === 'model' && entry.unavailable))
+                  setHighlight({ id: completionId(entry), index, query: completionKey });
                 return;
               }
               const selected = completions[activeIndex];
@@ -1358,7 +1380,7 @@ function ConversationComposer() {
               // A typed /thinking command runs as typed unless the user moved the
               // highlight, in which case return picks the highlighted mode.
               const thinkingTyped =
-                completionIndex < 0 &&
+                !highlight &&
                 /^\/(thinking|reasoning)(?:\s+(off|status|collapsed|expanded|raw|auto))?$/i.test(
                   store.prompt.value.trim(),
                 );
@@ -1369,17 +1391,18 @@ function ConversationComposer() {
                     ? `/${inlineSlash.query}`
                     : store.prompt.value.trim()
                   ).toLowerCase() === selected.value.toLowerCase());
-              if (
-                selected &&
-                (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey && !exactSlash))
-              ) {
+              const accept =
+                event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey && !exactSlash);
+              const highlightDisappeared = highlight && activeIndex < 0 && completions.length;
+              if (accept && (selected || highlightDisappeared)) {
                 event.preventDefault();
-                choose(selected);
+                if (selected) choose(selected);
                 return;
               }
               if (event.key === 'Escape' && completions.length) {
                 event.preventDefault();
-                setDismissed(`${store.prompt.value}\u0000${cursor}`);
+                setDismissed(completionKey);
+                setHighlight(null);
                 return;
               }
               if (event.key === 'Escape' && (accepted || transitioning)) {

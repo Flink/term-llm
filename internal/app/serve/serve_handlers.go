@@ -41,7 +41,6 @@ import (
 	"github.com/term-llm/term-llm/internal/llm"
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/llm/engine"
-	"github.com/term-llm/term-llm/internal/llm/providers/opencompat"
 	"github.com/term-llm/term-llm/internal/serveui"
 	"github.com/term-llm/term-llm/internal/session"
 	"github.com/term-llm/term-llm/internal/sessiontitle"
@@ -2740,13 +2739,6 @@ func (s *serveServer) handleProviders(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-const serveModelsCacheTTL = 15 * time.Minute
-
-type serveModelsCacheEntry struct {
-	models    []core.ModelInfo
-	expiresAt time.Time
-}
-
 func (s *serveServer) handleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
@@ -2755,89 +2747,16 @@ func (s *serveServer) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	queryProvider := strings.TrimSpace(r.URL.Query().Get("provider"))
-	provider, effectiveName, err := s.getModelsProvider(queryProvider)
+	models, effectiveName, err := s.listModels(r.Context(), queryProvider, true)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
+	models = llm.DiscoveryModelCatalog(s.cfgRef, effectiveName, models)
 
-	models := make([]core.ModelInfo, 0)
-	// OpenRouter ships hundreds of models and maintains a provider-side warm
-	// cache; use it first when available. For other providers, preserve the
-	// OpenAI-compatible /v1/models behavior: prefer a fresh/cache upstream
-	// ListModels result, and use local curated/configured lists only as a
-	// fallback when upstream listing is unavailable or fails.
-	pc, hasCfg := s.cfgRef.Providers[effectiveName]
-	isOpenRouter := effectiveName == "openrouter" || (hasCfg && string(pc.Type) == "openrouter")
-	if isOpenRouter && (!hasCfg || strings.TrimSpace(pc.BaseURL) == "") {
-		apiKey := ""
-		if hasCfg {
-			apiKey = pc.ResolvedAPIKey
-		}
-		models = append(models, opencompat.GetCachedOpenRouterModelInfos(apiKey)...)
-	}
-	if len(models) == 0 {
-		models = s.getCachedModelsForProvider(effectiveName)
-	}
-	if len(models) == 0 {
-		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-		defer cancel()
-		if lister, ok := provider.(interface {
-			ListModels(context.Context) ([]core.ModelInfo, error)
-		}); ok {
-			listed, err := lister.ListModels(ctx)
-			if err == nil {
-				s.setCachedModelsForProvider(effectiveName, listed)
-				models = listed
-			} else if !errors.Is(err, llm.ErrListModelsUnsupported) {
-				s.verboseLog("ListModels(%q) failed: %v", effectiveName, err)
-			}
-		}
-	}
-	if len(models) == 0 {
-		models = s.getLocalModelsForProvider(effectiveName, queryProvider)
-	}
-	models = llm.ProviderModelsForDiscovery(s.cfgRef, effectiveName, models)
-
-	ids := make([]string, 0, len(models))
-	byID := make(map[string]core.ModelInfo, len(models))
+	items := make([]map[string]any, 0, len(models))
 	for _, m := range models {
-		if m.ID == "" {
-			continue
-		}
-		if modelConfig, ok := config.ModelConfigForProviderModel(s.cfgRef, effectiveName, m.ID); ok {
-			if len(m.ReasoningEfforts) == 0 {
-				m.ReasoningEfforts = append([]string(nil), modelConfig.ReasoningEfforts...)
-			}
-			if m.DefaultReasoningEffort == "" {
-				m.DefaultReasoningEffort = strings.TrimSpace(modelConfig.DefaultReasoningEffort)
-			}
-		}
-		if _, ok := byID[m.ID]; ok {
-			continue
-		}
-		byID[m.ID] = m
-		ids = append(ids, m.ID)
-	}
-	// The web UI has a dedicated reasoning-effort selector, so drop
-	// "<base>-<effort>" aliases when the base model is also present.
-	ids = llm.DedupeEffortVariantsForProvider(effectiveName, ids)
-
-	// Order: configured default first, then curated models in their authored
-	// (popular-first) order, then anything else alpha-sorted. Pure alpha sort
-	// buries the most-used models behind less-used variants.
-	defaultModel := ""
-	if pc, ok := s.cfgRef.Providers[effectiveName]; ok {
-		defaultModel, _ = normalizeProviderModelEffort(effectiveName, pc.Model, "")
-	}
-	ids = llm.SortModelIDsByPopularity(effectiveName, defaultModel, ids)
-
-	items := make([]map[string]any, 0, len(ids))
-	for _, id := range ids {
-		m, ok := byID[id]
-		if !ok {
-			continue
-		}
+		id := m.ID
 		item := map[string]any{
 			"id":      m.ID,
 			"object":  "model",
@@ -2861,16 +2780,11 @@ func (s *serveServer) handleModels(w http.ResponseWriter, r *http.Request) {
 			item["input_price"] = m.InputPrice
 			item["output_price"] = m.OutputPrice
 		}
-		efforts := m.ReasoningEfforts
-		if len(efforts) == 0 {
-			efforts = llm.ReasoningEffortsForProviderModel(effectiveName, id)
+		if len(m.ReasoningEfforts) > 0 {
+			item["reasoning_efforts"] = m.ReasoningEfforts
 		}
-		efforts = llm.ProviderReasoningEffortsForDiscovery(s.cfgRef, effectiveName, id, efforts)
-		if len(efforts) > 0 {
-			item["reasoning_efforts"] = append([]string(nil), efforts...)
-		}
-		if defaultEffort := strings.TrimSpace(m.DefaultReasoningEffort); defaultEffort != "" && len(llm.ProviderReasoningEffortsForDiscovery(s.cfgRef, effectiveName, id, []string{defaultEffort})) > 0 {
-			item["default_reasoning_effort"] = defaultEffort
+		if m.DefaultReasoningEffort != "" {
+			item["default_reasoning_effort"] = m.DefaultReasoningEffort
 		}
 		item["alias"] = llm.IsMovingModelAlias(s.cfgRef, effectiveName, id)
 		if len(m.ServiceTiers) > 0 {
@@ -2893,115 +2807,6 @@ func (s *serveServer) handleModels(w http.ResponseWriter, r *http.Request) {
 		"object": "list",
 		"data":   items,
 	})
-}
-
-func appendModelIDs(dst []core.ModelInfo, ids []string) []core.ModelInfo {
-	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
-		}
-		dst = append(dst, core.ModelInfo{ID: id})
-	}
-	return dst
-}
-
-func cloneModelInfos(models []core.ModelInfo) []core.ModelInfo {
-	if len(models) == 0 {
-		return nil
-	}
-	cloned := make([]core.ModelInfo, len(models))
-	copy(cloned, models)
-	return cloned
-}
-
-func (s *serveServer) getLocalModelsForProvider(effectiveName, queryProvider string) []core.ModelInfo {
-	models := make([]core.ModelInfo, 0)
-	if pc, ok := s.cfgRef.Providers[effectiveName]; ok {
-		models = appendModelIDs(models, pc.Models)
-		if id := strings.TrimSpace(pc.Model); id != "" {
-			models = append(models, core.ModelInfo{ID: id})
-		}
-	} else if queryProvider == "" {
-		if providerCfg := s.cfgRef.GetActiveProviderConfig(); providerCfg != nil {
-			models = appendModelIDs(models, providerCfg.Models)
-			if id := strings.TrimSpace(providerCfg.Model); id != "" {
-				models = append(models, core.ModelInfo{ID: id})
-			}
-		}
-	}
-	return appendLocalModelCatalog(models, s.cfgRef, effectiveName)
-}
-
-func (s *serveServer) getCachedModelsForProvider(name string) []core.ModelInfo {
-	s.modelsMu.Lock()
-	defer s.modelsMu.Unlock()
-
-	if entry, ok := s.modelsCache[name]; ok {
-		if time.Now().Before(entry.expiresAt) {
-			return cloneModelInfos(entry.models)
-		}
-		delete(s.modelsCache, name)
-	}
-	return nil
-}
-
-func (s *serveServer) setCachedModelsForProvider(name string, models []core.ModelInfo) {
-	if len(models) == 0 {
-		return
-	}
-
-	s.modelsMu.Lock()
-	defer s.modelsMu.Unlock()
-
-	if s.modelsCache == nil {
-		s.modelsCache = make(map[string]serveModelsCacheEntry)
-	}
-	s.modelsCache[name] = serveModelsCacheEntry{
-		models:    cloneModelInfos(models),
-		expiresAt: time.Now().Add(serveModelsCacheTTL),
-	}
-}
-
-func (s *serveServer) getModelsProvider(name string) (core.Provider, string, error) {
-	s.modelsMu.Lock()
-	defer s.modelsMu.Unlock()
-
-	if s.modelsProviders == nil {
-		s.modelsProviders = make(map[string]core.Provider)
-	}
-
-	cacheKey := name
-	if cacheKey == "" {
-		cacheKey = s.cfgRef.DefaultProvider
-	}
-
-	if p, ok := s.modelsProviders[cacheKey]; ok {
-		return p, cacheKey, nil
-	}
-
-	// Listing models is discovery, not inference: when the configured default
-	// is outside the allowlist, build the listing provider with a permitted
-	// model so a fresh account catalog can still be inspected and filtered.
-	effectiveName := name
-	if effectiveName == "" {
-		effectiveName = s.cfgRef.DefaultProvider
-	}
-	listingModel := ""
-	if err := llm.CheckProviderModelAllowed(s.cfgRef, effectiveName, ""); err != nil {
-		if allowed := llm.ProviderAllowedModelIDs(s.cfgRef, effectiveName); len(allowed) > 0 {
-			listingModel = allowed[0]
-		}
-	}
-
-	var provider core.Provider
-	var err error
-	provider, err = llm.NewProviderByName(s.cfgRef, effectiveName, listingModel)
-	if err != nil {
-		return nil, "", err
-	}
-	s.modelsProviders[cacheKey] = provider
-	return provider, cacheKey, nil
 }
 
 // registerResponseID stores a response ID on the runtime and server-wide map,

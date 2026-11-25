@@ -58,7 +58,7 @@ func ActiveTokenAt(text string, cursor int) (ActiveToken, bool) {
 			}
 			return ActiveToken{Start: start, End: cursor, Query: query, Agent: true}, true
 		}
-		if strings.ContainsAny(tail, " \t\r\n\"") {
+		if strings.ContainsFunc(tail, func(r rune) bool { return unicode.IsSpace(r) || r == '"' }) {
 			continue
 		}
 		return ActiveToken{Start: start, End: cursor, Query: tail}, true
@@ -97,9 +97,9 @@ func isMentionBoundary(r rune) bool {
 // InsertText returns a visible mention token. Paths needing spaces or quoting
 // are escaped using the @"..." form.
 func InsertText(path string, directory bool) string {
-	// The unforced @agent: namespace is reserved for delegation. Prefix a real
+	// Unquoted agent and model namespaces are reserved. Prefix a real
 	// colliding project path so submit-time parsing still treats it as a file.
-	if isReservedAgentFilePayload(path) {
+	if isReservedAgentFilePayload(path) || IsScopedModelQuery(path) {
 		path = "./" + path
 	}
 	if directory && !strings.HasSuffix(path, "/") {
@@ -172,7 +172,7 @@ func parseSubmittedAt(text string, at int) (submittedMatch, bool) {
 	if start >= len(text) {
 		return submittedMatch{}, false
 	}
-	if isReservedAgentFilePayload(text[start:]) {
+	if isReservedAgentFilePayload(text[start:]) || IsScopedModelQuery(text[start:]) {
 		return submittedMatch{}, false
 	}
 	if text[start] != '"' {
