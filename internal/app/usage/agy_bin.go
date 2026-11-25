@@ -59,9 +59,10 @@ type agyBinUsageBucket struct {
 }
 
 var (
-	agyUsageLookPath = exec.LookPath
-	agyUsageCommand  = runAgyUsageCommand
-	agyUsageExec     = runAgyUsageExec
+	agyUsageLookPath     = exec.LookPath
+	agyUsageCommand      = runAgyUsageCommand
+	agyProxyUsageCommand = clibin.ReadAgyProxyUsage
+	agyUsageExec         = runAgyUsageExec
 )
 
 func validateAgyBinUsageFlags(cmd interface{ Flags() *pflag.FlagSet }) error {
@@ -78,7 +79,23 @@ func validateAgyBinUsageFlags(cmd interface{ Flags() *pflag.FlagSet }) error {
 	return nil
 }
 
-func runAgyBinUsage(parent context.Context, out io.Writer, jsonOutput bool) (retErr error) {
+func runAgyBinUsage(parent context.Context, out io.Writer, jsonOutput bool) error {
+	return withAgyBinUsage(parent, func(raw json.RawMessage, report agyBinUsageReport, source string) error {
+		if jsonOutput {
+			var pretty bytes.Buffer
+			if err := json.Indent(&pretty, raw, "", "  "); err != nil {
+				return fmt.Errorf("format agy usage response: %w", err)
+			}
+			_, err := fmt.Fprintln(out, pretty.String())
+			return err
+		}
+		return writeAgyBinUsageWithSource(out, report, time.Now(), providerUsageFormatOptions(out), source)
+	})
+}
+
+// withAgyBinUsage fetches agy's quota data and passes it to handle. One
+// redaction scope keeps the proxy token out of every error, including handle's.
+func withAgyBinUsage(parent context.Context, handle func(raw json.RawMessage, report agyBinUsageReport, source string) error) (retErr error) {
 	binding, err := configuredAgyUsageProxy()
 	if err != nil {
 		return err
@@ -98,7 +115,7 @@ func runAgyBinUsage(parent context.Context, out io.Writer, jsonOutput bool) (ret
 
 	var output []byte
 	if binding != nil {
-		output, err = clibin.ReadAgyProxyUsage(ctx, binary, binding.Root)
+		output, err = agyProxyUsageCommand(ctx, binary, binding.Root)
 	} else {
 		output, err = agyUsageCommand(ctx, binary)
 	}
@@ -109,19 +126,11 @@ func runAgyBinUsage(parent context.Context, out io.Writer, jsonOutput bool) (ret
 	if err != nil {
 		return err
 	}
-	if jsonOutput {
-		var pretty bytes.Buffer
-		if err := json.Indent(&pretty, raw, "", "  "); err != nil {
-			return fmt.Errorf("format agy usage response: %w", err)
-		}
-		_, err := fmt.Fprintln(out, pretty.String())
-		return err
-	}
 	source := "Live from agy"
 	if binding != nil {
 		source = "Live through credential proxy"
 	}
-	return writeAgyBinUsageWithSource(out, report, time.Now(), providerUsageFormatOptions(out), source)
+	return handle(raw, report, source)
 }
 
 func runAgyUsageCommand(ctx context.Context, binary string) ([]byte, error) {

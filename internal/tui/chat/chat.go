@@ -29,6 +29,7 @@ import (
 	"github.com/term-llm/term-llm/internal/llm/core/stream"
 	"github.com/term-llm/term-llm/internal/llm/engine"
 	"github.com/term-llm/term-llm/internal/llm/providers/responsesproviders"
+	"github.com/term-llm/term-llm/internal/llm/providerusage"
 	"github.com/term-llm/term-llm/internal/mcp"
 	"github.com/term-llm/term-llm/internal/mentions"
 	"github.com/term-llm/term-llm/internal/modelpolicy"
@@ -326,6 +327,7 @@ type Model struct {
 	modelPolicy                modelpolicy.Policy
 	modelSwitchHook            func(providerKey, model string)
 	fastProviderResolver       func(providerKey, model string) (core.Provider, error)
+	providerUsageFetcher       func(ctx context.Context, provider string) (*providerusage.Report, error)
 
 	platformDeveloperMessage string
 	currentOrigin            session.SessionOrigin

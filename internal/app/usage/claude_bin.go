@@ -90,23 +90,13 @@ func validateClaudeBinUsageFlags(cmd interface{ Flags() *pflag.FlagSet }) error 
 	return nil
 }
 
+var (
+	errClaudeBinUsageUnavailable = errors.New("Claude plan usage is unavailable: Claude Code needs claude.ai subscription OAuth with the user:profile scope; API-key and third-party-provider sessions do not expose plan limits")
+	errClaudeBinNoUsageWindows   = errors.New("Claude returned no active usage windows")
+)
+
 func runClaudeBinUsage(parent context.Context, cmdOut io.Writer, jsonOutput bool) error {
-	connection, proxied, err := configuredClaudeUsageProxy()
-	if err != nil {
-		return err
-	}
-	binary, err := exec.LookPath("claude")
-	if err != nil {
-		return errors.New("claude-bin usage requires the Claude Code CLI in PATH")
-	}
-	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
-	defer cancel()
-	var raw json.RawMessage
-	if proxied {
-		raw, err = fetchClaudeBinProxiedUsage(ctx, binary, connection)
-	} else {
-		raw, err = fetchClaudeBinUsage(ctx, binary)
-	}
+	raw, source, err := loadClaudeBinUsage(parent)
 	if err != nil {
 		return err
 	}
@@ -119,15 +109,39 @@ func runClaudeBinUsage(parent context.Context, cmdOut io.Writer, jsonOutput bool
 		return err
 	}
 
-	var report claudeBinUsageReport
-	if err := json.Unmarshal(raw, &report); err != nil {
-		return fmt.Errorf("decode Claude Code usage response: %w", err)
-	}
-	source := "Live from Claude Code"
-	if proxied {
-		source = "Live through credential proxy"
+	report, err := decodeClaudeBinUsage(raw)
+	if err != nil {
+		return err
 	}
 	return writeClaudeBinUsageWithSource(cmdOut, report, time.Now(), providerUsageFormatOptions(cmdOut), source)
+}
+
+// loadClaudeBinUsage returns Claude Code's raw get_usage response and the route used.
+func loadClaudeBinUsage(parent context.Context) (json.RawMessage, string, error) {
+	connection, proxied, err := configuredClaudeUsageProxy()
+	if err != nil {
+		return nil, "", err
+	}
+	binary, err := exec.LookPath("claude")
+	if err != nil {
+		return nil, "", errors.New("claude-bin usage requires the Claude Code CLI in PATH")
+	}
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
+	defer cancel()
+	if proxied {
+		raw, err := fetchClaudeBinProxiedUsage(ctx, binary, connection)
+		return raw, "Live through credential proxy", err
+	}
+	raw, err := fetchClaudeBinUsage(ctx, binary)
+	return raw, "Live from Claude Code", err
+}
+
+func decodeClaudeBinUsage(raw json.RawMessage) (claudeBinUsageReport, error) {
+	var report claudeBinUsageReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return claudeBinUsageReport{}, fmt.Errorf("decode Claude Code usage response: %w", err)
+	}
+	return report, nil
 }
 
 // fetchClaudeBinUsage is the direct, unproxied native runner seam. It keeps
@@ -228,7 +242,9 @@ func writeClaudeBinUsageWithOptions(out io.Writer, report claudeBinUsageReport, 
 }
 
 func writeClaudeBinUsageWithSource(out io.Writer, report claudeBinUsageReport, now time.Time, opts providerusage.FormatOptions, source string) error {
-	if !report.RateLimitsAvailable || report.RateLimits == nil {
+	providerReport, err := claudeBinProviderReport(report, source)
+	switch {
+	case errors.Is(err, errClaudeBinUsageUnavailable):
 		fmt.Fprintln(out, "Claude")
 		if report.SubscriptionType != nil && strings.TrimSpace(*report.SubscriptionType) != "" {
 			fmt.Fprintf(out, "%s plan · %s\n", titleCaseASCII(*report.SubscriptionType), source)
@@ -241,17 +257,28 @@ func writeClaudeBinUsageWithSource(out io.Writer, report claudeBinUsageReport, n
 		fmt.Fprintln(out, "Claude Code needs claude.ai subscription OAuth with the user:profile scope;")
 		fmt.Fprintln(out, "API-key and third-party-provider sessions do not expose plan limits.")
 		return nil
-	}
-
-	rows := claudeBinUsageRows(*report.RateLimits)
-	if len(rows) == 0 {
+	case errors.Is(err, errClaudeBinNoUsageWindows):
 		fmt.Fprintln(out, "Claude")
 		fmt.Fprintln(out, source)
 		fmt.Fprintln(out)
 		fmt.Fprintln(out, "No active usage windows were returned.")
 		return nil
+	case err != nil:
+		return err
 	}
+	_, err = fmt.Fprintln(out, providerusage.FormatWithOptions(providerReport, now, opts))
+	return err
+}
 
+// claudeBinProviderReport returns a sentinel error when Claude reports no plan limits.
+func claudeBinProviderReport(report claudeBinUsageReport, source string) (*providerusage.Report, error) {
+	if !report.RateLimitsAvailable || report.RateLimits == nil {
+		return nil, errClaudeBinUsageUnavailable
+	}
+	rows := claudeBinUsageRows(*report.RateLimits)
+	if len(rows) == 0 {
+		return nil, errClaudeBinNoUsageWindows
+	}
 	providerReport := &providerusage.Report{Provider: "claude", Source: source}
 	if report.SubscriptionType != nil {
 		providerReport.Plan = strings.TrimSpace(*report.SubscriptionType)
@@ -260,8 +287,7 @@ func writeClaudeBinUsageWithSource(out io.Writer, report claudeBinUsageReport, n
 	for _, row := range rows {
 		providerReport.Limits = append(providerReport.Limits, claudeBinProviderUsageLimit(row))
 	}
-	_, err := fmt.Fprintln(out, providerusage.FormatWithOptions(providerReport, now, opts))
-	return err
+	return providerReport, nil
 }
 
 func claudeBinProviderUsageLimit(row claudeBinUsageRow) providerusage.Limit {

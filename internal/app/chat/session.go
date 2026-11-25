@@ -15,6 +15,7 @@ import (
 	runtimeguardian "github.com/term-llm/term-llm/internal/app/runtime/guardian"
 	"github.com/term-llm/term-llm/internal/app/runtime/mcpstart"
 	appserve "github.com/term-llm/term-llm/internal/app/serve"
+	appusage "github.com/term-llm/term-llm/internal/app/usage"
 	"github.com/term-llm/term-llm/internal/config"
 	"github.com/term-llm/term-llm/internal/llm"
 	"github.com/term-llm/term-llm/internal/llm/core"
@@ -499,6 +500,7 @@ func (r *chatInvocation) buildChatSessionRuntime(ctx context.Context, launch cha
 	model.SetFastProviderResolver(func(key, name string) (core.Provider, error) {
 		return runtime.AuxProviderForPolicy(cfg, effectivePolicy, runtime.ModelSelection{Provider: key, Model: name}, key, cfg.DefaultProvider)
 	})
+	model.SetProviderUsageFetcher(appusage.LiveReport)
 	model.SetAgentMentionCapability(RuntimeAgentMentionCapability{Engine: model.CurrentAgentMentionEngine, Manager: toolMgr})
 	if sess != nil {
 		model.SetConversationBranch(sessionIsConversationBranch(context.Background(), store, sess.ID))

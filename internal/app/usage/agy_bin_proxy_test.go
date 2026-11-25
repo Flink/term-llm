@@ -17,13 +17,18 @@ import (
 	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
+func stubUsageConfig(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	old := loadProviderUsageConfig
+	t.Cleanup(func() { loadProviderUsageConfig = old })
+	loadProviderUsageConfig = func() (*config.Config, error) { return cfg, nil }
+}
+
 func stubAgyUsageConfig(t *testing.T, cfg *config.Config) {
 	t.Helper()
-	oldLoad, oldLook, oldDirect := loadProviderUsageConfig, agyUsageLookPath, agyUsageCommand
-	t.Cleanup(func() {
-		loadProviderUsageConfig, agyUsageLookPath, agyUsageCommand = oldLoad, oldLook, oldDirect
-	})
-	loadProviderUsageConfig = func() (*config.Config, error) { return cfg, nil }
+	oldLook, oldDirect := agyUsageLookPath, agyUsageCommand
+	t.Cleanup(func() { agyUsageLookPath, agyUsageCommand = oldLook, oldDirect })
+	stubUsageConfig(t, cfg)
 }
 
 func TestAgyBinUsageUsesConfiguredProxyBinding(t *testing.T) {
@@ -154,5 +159,60 @@ func TestRedactAgyProxyToken(t *testing.T) {
 	err := redactAgyProxyToken(errors.New("agy usage request failed: proxy http://r:"+usageProxyTestToken+"@h"), usageProxyTestToken)
 	if strings.Contains(err.Error(), usageProxyTestToken) || !strings.Contains(err.Error(), "[redacted]") {
 		t.Fatalf("token not redacted: %v", err)
+	}
+}
+
+type tokenEchoWriter struct{ token string }
+
+func (w tokenEchoWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write rejected by " + w.token)
+}
+
+// stubAgyProxyUsage registers a scoped agy-bin binding whose usage command is replaced.
+func stubAgyProxyUsage(t *testing.T, command func(context.Context, string, string) ([]byte, error)) {
+	t.Helper()
+	root := "https://proxy.example.test/agy"
+	if err := proxyclient.Register([]proxyclient.Binding{{Root: root, Kind: proxyclient.AgyNativeKind, Token: usageProxyTestToken}}); err != nil {
+		t.Fatal(err)
+	}
+	stubAgyUsageConfig(t, &config.Config{Providers: map[string]config.ProviderConfig{"agy-bin": {ProxyBinding: root}}})
+	original := agyProxyUsageCommand
+	t.Cleanup(func() { agyProxyUsageCommand = original })
+	agyUsageLookPath = func(string) (string, error) { return "/bin/agy", nil }
+	agyProxyUsageCommand = command
+}
+
+func assertAgyProxyTokenRedacted(t *testing.T, err error) {
+	t.Helper()
+	if err == nil || strings.Contains(err.Error(), usageProxyTestToken) || !strings.Contains(err.Error(), "[redacted]") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestAgyBinUsageRedactsProxyTokenFromWriteErrors(t *testing.T) {
+	stubAgyProxyUsage(t, func(context.Context, string, string) ([]byte, error) { return []byte(agyUsageFixture), nil })
+	for _, jsonOutput := range []bool{false, true} {
+		assertAgyProxyTokenRedacted(t, runAgyBinUsage(context.Background(), tokenEchoWriter{usageProxyTestToken}, jsonOutput))
+	}
+}
+
+func TestLiveReportAgyBinRedactsProxyToken(t *testing.T) {
+	for name, command := range map[string]func(context.Context, string, string) ([]byte, error){
+		"worker error": func(context.Context, string, string) ([]byte, error) {
+			return nil, errors.New("proxy worker failed for " + usageProxyTestToken)
+		},
+		// Normalization quotes the malformed reset time in its error.
+		"normalization error": func(context.Context, string, string) ([]byte, error) {
+			return []byte(strings.Replace(agyUsageFixture, "2026-09-01T00:00:00Z", usageProxyTestToken, 2)), nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stubAgyProxyUsage(t, command)
+			report, err := LiveReport(context.Background(), "agy-bin")
+			if report != nil {
+				t.Fatalf("report = %+v", report)
+			}
+			assertAgyProxyTokenRedacted(t, err)
+		})
 	}
 }
