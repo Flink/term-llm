@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	apphub "github.com/term-llm/term-llm/internal/app/serve/hub"
 	"io"
 	"log"
 	"mime"
@@ -18,6 +17,8 @@ import (
 	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
+	apphub "github.com/term-llm/term-llm/internal/app/serve/hub"
+	"github.com/term-llm/term-llm/internal/app/serve/mcpweb"
 	"github.com/term-llm/term-llm/internal/passkeyauth"
 )
 
@@ -438,6 +439,9 @@ func (s *browserPasskeyHandler) handleLoginBegin(w http.ResponseWriter, r *http.
 		return
 	}
 	returnPath := s.passkey.endpoint.SafeReturnPath(in.ReturnPath)
+	if !s.web {
+		returnPath = mcpweb.HubCallbackReturnPath(s.basePath, returnPath, in.ReturnPath)
+	}
 	ceremony, err := s.passkey.ceremonies.Create(kind, s.passkey.peerResolver.peer(r), "", sessionID, returnPath, s.passkey.store.User().WebAuthnID(), data)
 	if err != nil {
 		writeOpenAIError(w, http.StatusServiceUnavailable, "auth_capacity", err.Error())
@@ -446,6 +450,7 @@ func (s *browserPasskeyHandler) handleLoginBegin(w http.ResponseWriter, r *http.
 	s.setShortCookie(w, cookieName, ceremony.CookieToken)
 	writeHubAuthJSON(w, http.StatusOK, options)
 }
+
 func (s *browserPasskeyHandler) handlePasskeyLoginFinish(w http.ResponseWriter, r *http.Request) {
 	s.handleLoginFinish(w, r, passkeyauth.CeremonyLogin, hubLoginCeremonyCookieName, false)
 }
