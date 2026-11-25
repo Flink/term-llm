@@ -53,6 +53,7 @@ func (m *Model) handlePromptHistoryKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 
 	if up {
 		if m.tryMoveTextareaUp() {
+			m.updateEmojiPopup()
 			m.resetPromptHistoryIfEdited()
 			m.updateTextareaHeight()
 			return true, nil
@@ -64,6 +65,7 @@ func (m *Model) handlePromptHistoryKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 
 	if m.tryMoveTextareaDown() {
+		m.updateEmojiPopup()
 		m.resetPromptHistoryIfEdited()
 		m.updateTextareaHeight()
 		return true, nil

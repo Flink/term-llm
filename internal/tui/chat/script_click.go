@@ -65,6 +65,7 @@ func (m *Model) scriptClickBlocked() bool {
 		m.approvalModel != nil || m.askUserModel != nil || m.handoverPreview != nil ||
 		m.dialog.IsOpen() || m.commit != nil ||
 		(m.completions != nil && m.completions.IsVisible()) ||
+		m.emojiPopupActive() ||
 		m.mentionPopup.IsVisible() ||
 		m.sideQuestion.Visible
 }

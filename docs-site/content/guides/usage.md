@@ -134,6 +134,10 @@ Type `!` as the first composer character to enter shell mode, for example `! git
 
 `/shell` remains available when you want an interactive terminal handoff rather than a captured command turn.
 
+### Emoji completion
+
+In terminal chat, type `:` at the start of the draft, after whitespace, or immediately after another emoji. Enter at least two characters of a shortcode, English name, or keyword. For example, complete `Ready :rocke` with 🚀, then type `:sweat_sm` and select `:sweat_smile:` to get `Ready 🚀😅`. Use `↑` and `↓` to choose, `Tab` or `Enter` to insert the emoji, and `Esc` to dismiss the list without changing your text. While the list is open, `Enter` **does not send or queue the message**. No closing colon is needed.
+
 ### Steering a running conversation
 
 While a resumable conversation is running, **Enter queues steering** for the next safe boundary instead of starting a separate turn. Ordinary steering does not cancel model generation or tools, and the composer label changes from **Type a message…** to **Steer conversation…** without touching your draft.

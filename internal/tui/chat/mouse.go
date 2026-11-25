@@ -95,6 +95,7 @@ func (m *Model) handleTextareaMouse(msg tea.MouseMsg) bool {
 	if m.mentionPopup.IsVisible() {
 		m.hideMentionPopup()
 	}
+	m.updateEmojiPopup()
 
 	return true
 }

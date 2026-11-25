@@ -65,3 +65,25 @@ func TestOptions(t *testing.T) {
 		})
 	})
 }
+
+func TestWithWideEmoji(t *testing.T) {
+	for _, configured := range []bool{true, false} {
+		var output bytes.Buffer
+		opts := []ProgramOption{WithInput(nil), WithOutput(&output), WithoutSignalHandler()}
+		if configured {
+			opts = append(opts, WithWideEmoji(func(s string) bool { return s == "☀️" }))
+		}
+		p := NewProgram(kittyNoInputModel{}, opts...)
+		if _, err := p.Run(); err != nil {
+			t.Fatal(err)
+		}
+		got := p.renderer.(*cursedRenderer).cellbuf.WideEmoji
+		if !configured {
+			if got != nil {
+				t.Fatal("default renderer unexpectedly has a wide emoji predicate")
+			}
+		} else if got == nil || !got("☀️") || got("A") {
+			t.Fatal("screen buffer did not receive the configured wide emoji predicate")
+		}
+	}
+}

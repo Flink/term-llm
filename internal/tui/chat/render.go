@@ -23,6 +23,7 @@ import (
 	"github.com/term-llm/term-llm/internal/session"
 	"github.com/term-llm/term-llm/internal/terminaltext"
 	"github.com/term-llm/term-llm/internal/tools"
+	"github.com/term-llm/term-llm/internal/tui/chat/composer"
 	"github.com/term-llm/term-llm/internal/ui"
 )
 
@@ -170,23 +171,9 @@ func (m *Model) View() (view tea.View) {
 		renderedLines += 2
 	}
 
-	// Project mention popup (if visible)
-	if m.mentionPopup.IsVisible() {
-		popup := m.renderMentionPopup()
-		b.WriteString(popup)
-		renderedLines += lipgloss.Height(popup)
-		b.WriteString("\n")
-		renderedLines++
-	}
-
-	// Completions popup (if visible)
-	if m.completions.IsVisible() {
-		completions := m.completions.View()
-		b.WriteString(completions)
-		renderedLines += lipgloss.Height(completions)
-		b.WriteString("\n")
-		renderedLines++
-	}
+	popups := composer.InlinePopups(m.renderMentionPopup(), m.composerCompletionView())
+	b.WriteString(popups)
+	renderedLines += strings.Count(popups, "\n")
 
 	// Dialog (if open)
 	if m.commit != nil {
@@ -671,7 +658,8 @@ func (m *Model) overlayAltScreenPanels(base string, footer footerLayout) string 
 	// In alt-screen mode Bubble Tea v2 clips anything that extends beyond the
 	// fixed terminal height, so popups must be composited into the existing frame
 	// instead of being appended below it.
-	if !m.completions.IsVisible() && !m.mentionPopup.IsVisible() && !m.dialog.IsOpen() && m.commit == nil {
+	completion, mention := m.composerCompletionView(), m.renderMentionPopup()
+	if completion == "" && mention == "" && !m.dialog.IsOpen() && m.commit == nil {
 		return base
 	}
 
@@ -736,30 +724,18 @@ func (m *Model) overlayAltScreenPanels(base string, footer footerLayout) string 
 		}
 	}
 
-	stackPanel := func(panel string) {
+	stackPanel := func(panel string, wholeRows bool) {
 		if panel == "" {
 			return
 		}
 		panelLines := strings.Split(panel, "\n")
-		y := bottomY - len(panelLines)
-		if y < 0 {
-			y = 0
-		}
-		for i, panelLine := range panelLines {
-			row := y + i
-			if row < 0 || row >= len(lines) {
-				continue
-			}
-			overlayWidth := lipgloss.Width(panelLine)
-			if overlayWidth <= 0 {
-				continue
-			}
-			overlay := ansi.Cut(panelLine, 0, screenWidth)
-			if overlayWidth > screenWidth {
-				overlayWidth = screenWidth
-			}
-			remainder := ansi.Cut(lines[row], overlayWidth, screenWidth)
-			lines[row] = overlay + remainder
+		y := max(0, bottomY-len(panelLines))
+		if wholeRows {
+			// The emoji panel already fits each catalog glyph to two cells;
+			// do not re-cut it with wcwidth.
+			copy(lines[y:], panelLines)
+		} else {
+			placePanel(panel, 0, y)
 		}
 		bottomY = y
 	}
@@ -781,15 +757,11 @@ func (m *Model) overlayAltScreenPanels(base string, footer footerLayout) string 
 			y := (targetHeight - len(panelLines)) / 2
 			placePanel(panel, x, y)
 		} else {
-			stackPanel(panel)
+			stackPanel(panel, false)
 		}
 	}
-	if m.completions.IsVisible() {
-		stackPanel(m.completions.View())
-	}
-	if m.mentionPopup.IsVisible() {
-		stackPanel(m.renderMentionPopup())
-	}
+	stackPanel(completion, m.emojiPopupActive())
+	stackPanel(mention, false)
 
 	return strings.Join(lines, "\n")
 }
@@ -1173,6 +1145,7 @@ func (m *Model) updateTextareaHeight() {
 
 // setTextareaValue sets the textarea value and updates its height for proper wrapping
 func (m *Model) setTextareaValue(s string) {
+	m.emojiPopup.Hide()
 	m.textarea.SetValue(s)
 	m.directShellEligible = false
 	m.updateTextareaHeight()

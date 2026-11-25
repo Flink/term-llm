@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -549,15 +550,8 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleDialogKey(msg)
 	}
 
-	if handled, cmd := m.handleMentionPopupKey(msg); handled {
-		return m, cmd
-	}
-
-	// Handle completions if visible
-	if m.completions.IsVisible() {
-		if updated, cmd, handled := m.handleCompletionKey(msg); handled {
-			return updated, cmd
-		}
+	if updated, cmd, handled := m.handleComposerPopupKey(msg); handled {
+		return updated, cmd
 	}
 
 	// Shell-style prompt history: Up/Down first move within the composer, then
@@ -741,7 +735,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.Matches(msg, m.keyMap.Newline) || key.Matches(msg, m.keyMap.NewlineAlt) {
 		m.textarea.InsertString("\n")
 		m.updateTextareaHeight()
-		return m, m.updateMentionQuery()
+		return m, m.updateComposerPopups()
 	}
 
 	// Streaming-local shortcuts that affect the steering composer or queue
@@ -872,7 +866,7 @@ func (m *Model) handlePasteMsg(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.updateTextareaHeight()
-	return m, m.updateMentionQuery()
+	return m, m.updateComposerPopups()
 }
 
 func shouldCollapsePaste(text string) bool {
@@ -948,51 +942,33 @@ func textareaCursorByteOffset(value string, line, column int) int {
 	if line < 0 {
 		return 0
 	}
-	lines := strings.Split(value, "\n")
-	if line >= len(lines) {
-		return len(value)
-	}
 	offset := 0
-	for i := 0; i < line; i++ {
-		offset += len(lines[i]) + 1
-	}
-	return offset + byteOffsetForRuneColumn(lines[line], column)
-}
-
-func byteOffsetForRuneColumn(s string, column int) int {
-	if column <= 0 {
-		return 0
-	}
-	seen := 0
-	for i := range s {
-		if seen == column {
-			return i
+	for part := range strings.SplitSeq(value, "\n") {
+		if line <= 0 {
+			for i := range part {
+				if column <= 0 {
+					return offset + i
+				}
+				column--
+			}
+			return offset + len(part)
 		}
-		seen++
+		line--
+		offset += len(part) + 1
 	}
-	return len(s)
+	return len(value)
 }
 
 func (m *Model) moveTextareaCursorToByteOffset(offset int) {
-	if offset < 0 {
-		offset = 0
-	}
 	value := m.textarea.Value()
-	if offset > len(value) {
-		offset = len(value)
-	}
-	before := value[:offset]
+	before := value[:max(0, min(offset, len(value)))]
 	line := strings.Count(before, "\n")
-	lastNewline := strings.LastIndex(before, "\n")
-	lineStart := 0
-	if lastNewline >= 0 {
-		lineStart = lastNewline + 1
-	}
-	column := len([]rune(before[lineStart:]))
-
-	m.textarea.MoveToBegin()
-	for i := 0; i < line; i++ {
-		m.textarea.CursorDown()
+	column := utf8.RuneCountInString(before[strings.LastIndexByte(before, '\n')+1:])
+	m.textarea.MoveToEnd()
+	for current := m.textarea.Line(); current > line; current-- {
+		// From column zero, Up crosses a logical line even when it wraps.
+		m.textarea.CursorStart()
+		m.textarea.CursorUp()
 	}
 	m.textarea.SetCursorColumn(column)
 }

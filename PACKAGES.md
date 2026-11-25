@@ -110,6 +110,7 @@ One line per root-module package, generated from package doc comments by `make d
 - `internal/doctor` — implements offline health checks for a term-llm install.
 - `internal/edit` — provides editing functionality for the term-llm.
 - `internal/embedding` — implements the text embedding providers behind `term-llm embed` and memory search.
+- `internal/emoji` — searches the English Unicode emoji catalog for composer completions.
 - `internal/exitcode` — defines term-llm's process exit codes and the error type carrying them.
 - `internal/extensions` — discovers trusted local CSS/JavaScript web extensions.
 - `internal/filelock` — takes cross-process advisory file locks on shared state files.
@@ -238,6 +239,7 @@ One line per root-module package, generated from package doc comments by `make d
 - `internal/tsgen` — generates the explicitly registered serve JSON contracts for the web UI.
 - `internal/tui/chat` — implements the interactive terminal chat TUI and its run lifecycle.
 - `internal/tui/chat/agentbarrier` — owns persisted TUI lifecycle delivery settlement.
+- `internal/tui/chat/composer` — provides interactive emoji completion for the terminal chat editor.
 - `internal/tui/chat/streamview` — renders the chat streaming tail and tracks the script disclosures shared by the live and historical transcript.
 - `internal/tui/inspector` — implements the read-only conversation inspector overlay.
 - `internal/tui/mcp` — implements the interactive MCP server browser TUI.

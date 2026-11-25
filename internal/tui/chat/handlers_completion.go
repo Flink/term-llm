@@ -7,6 +7,39 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+func (m *Model) handleComposerPopupKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	if handled, cmd := m.handleMentionPopupKey(msg); handled {
+		return m, cmd, true
+	}
+	if m.emojiPopupActive() {
+		handled, offset, err := m.emojiPopup.HandleKey(&m.textarea, msg.String(), pickerStep(msg))
+		if err != nil {
+			updated, cmd := m.showFooterWarning(err.Error())
+			return updated, cmd, true
+		}
+		if offset >= 0 {
+			m.moveTextareaCursorToByteOffset(offset)
+			m.updateTextareaHeight()
+			m.resetPromptHistoryIfEdited()
+			m.selection = Selection{}
+		}
+		if handled {
+			return m, nil, true
+		}
+	}
+	if m.completions.IsVisible() {
+		return m.handleCompletionKey(msg)
+	}
+	return m, nil, false
+}
+
+func (m *Model) composerCompletionView() string {
+	if m.emojiPopupActive() {
+		return m.emojiPopup.View(m.styles.Theme(), m.width)
+	}
+	return m.completions.View()
+}
+
 func (m *Model) handleCompletionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	if step := pickerStep(msg); step != 0 {
 		m.completions.moveCursor(step)

@@ -1,6 +1,7 @@
 package uv
 
 import (
+	"fmt"
 	"image/color"
 	"strings"
 	"testing"
@@ -453,4 +454,59 @@ func newWcCell(s string, style *Style, link *Link) Cell {
 		c.Link = *link
 	}
 	return *c
+}
+
+func TestStyledStringWideEmoji(t *testing.T) {
+	for _, method := range []ansi.Method{ansi.WcWidth, ansi.GraphemeWidth} {
+		for _, glyph := range []string{"☺️", "👩🏽‍💻", "🇺🇳", "👍🏿", "1️⃣", "e\u0301", "A"} {
+			t.Run(fmt.Sprintf("%v/%s", method, glyph), func(t *testing.T) {
+				buf := NewScreenBuffer(5, 1)
+				buf.Method = method
+				buf.WideEmoji = func(g string) bool { return g == glyph }
+				text := NewStyledString("x\x1b[31m" + glyph + "\x1b[0my")
+				for _, draw := range []func(Screen, Rectangle){text.DrawOver, text.Draw, text.DrawOver} {
+					draw(buf, buf.Bounds())
+					lead := buf.CellAt(1, 0)
+					if lead.Content != glyph || lead.Width != 2 || lead.Style.Fg != ansi.Red || !buf.CellAt(2, 0).IsZero() || !buf.CellAt(3, 0).Equal(&Cell{Content: "y", Width: 1}) {
+						t.Fatalf("unexpected cells: %#v", buf.Lines[0])
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestStyledStringWideEmojiEdge(t *testing.T) {
+	const glyph = "1️⃣"
+	text := NewStyledString("x" + glyph + "!")
+	text.Wrap = true
+	buf := NewScreenBuffer(3, 2)
+	buf.WideEmoji = func(s string) bool { return s == glyph }
+	text.DrawOver(buf, Rect(0, 0, 2, 2))
+	if !buf.CellAt(0, 1).Equal(&Cell{Content: glyph, Width: 2}) || !buf.CellAt(1, 1).IsZero() {
+		t.Fatalf("did not wrap wide glyph intact: %#v", buf.Lines)
+	}
+}
+
+func TestStyledStringWideEmojiRejectsPartialCluster(t *testing.T) {
+	buf := NewScreenBuffer(4, 1)
+	buf.WideEmoji = func(g string) bool {
+		switch g {
+		case "1", "\ufe0f\u20e3":
+			t.Fatalf("predicate received partial keycap %q", g)
+		}
+		return false
+	}
+	NewStyledString("1️⃣!").Draw(buf, buf.Bounds())
+	if buf.CellAt(0, 0).Content != "1" || buf.CellAt(1, 0).Content != "!" {
+		t.Fatalf("changed layout for rejected keycap: %#v", buf.Lines[0])
+	}
+}
+
+func TestStyledStringDefaultKeycap(t *testing.T) {
+	buf := NewScreenBuffer(4, 1)
+	NewStyledString("1️⃣!").Draw(buf, buf.Bounds())
+	if buf.CellAt(0, 0).Content != "1" || buf.CellAt(1, 0).Content != "!" {
+		t.Fatalf("changed default keycap layout: %#v", buf.Lines[0])
+	}
 }
