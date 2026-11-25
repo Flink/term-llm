@@ -237,11 +237,11 @@ func styledDecoder[T string | []byte](s Screen, m WidthMethod) func(T, byte, *an
 	if m == ansi.GraphemeWidth {
 		decode = ansi.DecodeSequence[T]
 	}
-	provider, ok := s.(interface{ wideEmojiPredicate() func(string) bool })
-	if !ok || provider.wideEmojiPredicate() == nil {
+	provider, ok := s.(interface{ emojiWidthFunc() func(string) int })
+	if !ok || provider.emojiWidthFunc() == nil {
 		return decode
 	}
-	wide := provider.wideEmojiPredicate()
+	emojiWidth := provider.emojiWidthFunc()
 	var remaining int // bytes of a rejected ASCII-start cluster still to decode normally
 	return func(str T, state byte, p *ansi.Parser) (T, int, int, byte) {
 		seq, width, n, next := decode(str, state, p)
@@ -258,8 +258,8 @@ func styledDecoder[T string | []byte](s Screen, m WidthMethod) func(T, byte, *an
 		if str[0] < utf8.RuneSelf && len(str) > 1 && str[1] >= utf8.RuneSelf {
 			cluster, _ = ansi.FirstGraphemeCluster(str, ansi.GraphemeWidth)
 		}
-		if wide(string(cluster)) {
-			return cluster, 2, len(cluster), next
+		if cells := emojiWidth(string(cluster)); cells > 0 && cells <= 4 {
+			return cluster, cells, len(cluster), next
 		}
 		remaining = len(cluster) - n
 		return seq, width, n, next

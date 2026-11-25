@@ -6,6 +6,9 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/term-llm/term-llm/internal/emoji"
 	"github.com/term-llm/term-llm/internal/ui"
 )
 
@@ -137,6 +140,17 @@ func TestEmojiPopupNavigationAndEscape(t *testing.T) {
 	if m.textarea.Value() != ":rocket" || len(selectedEmojiRow(m)) != 0 {
 		t.Fatal("Escape did not dismiss completion without changing the draft")
 	}
+	m = typeComposerKeys(newTestChatModel(false), ":rocket")
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if len(selectedEmojiRow(m)) != 0 {
+		t.Fatal("editing the dismissed shortcode reopened the picker")
+	}
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
+	m = typeComposerKeys(m, " :rocke")
+	if row := selectedEmojiRow(m); len(row) == 0 || row[0] != "🚀" {
+		t.Fatalf("a new shortcode should open the picker: %q", row)
+	}
 }
 
 func TestEmojiPopupFollowsCursorInExistingShortcode(t *testing.T) {
@@ -217,5 +231,91 @@ func TestEmojiPopupBlocksScriptClicks(t *testing.T) {
 	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.scriptClickBlocked() {
 		t.Fatal("dismissed emoji popup should unblock script clicks")
+	}
+}
+
+func TestEmojiPopupFitsAboveAltScreenFooter(t *testing.T) {
+	m := newTestChatModel(true)
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+	m = typeComposerKeys(m, ":sm")
+	// Move beyond the initial window of results; the selected row must still be drawn.
+	for range 5 {
+		_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	view := m.View()
+	footer := m.buildFooterLayout()
+	lines := strings.Split(ui.StripANSI(view.Content), "\n")
+	if len(lines) != m.height || strings.Join(lines[len(lines)-footer.height:], "\n") != ui.StripANSI(footer.view) {
+		t.Fatalf("picker did not preserve the footer:\n%s", ui.StripANSI(view.Content))
+	}
+	row := selectedEmojiRow(m)
+	if len(row) < 2 || row[1] != ":heart_eyes:" {
+		t.Fatalf("scrolled selection is not visible: %q", row)
+	}
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := m.textarea.Value(); got != row[0] || m.streaming {
+		t.Fatalf("Enter should insert the visible selection without sending; draft = %q", got)
+	}
+}
+
+func TestHiddenEmojiPopupDoesNotCaptureKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		width, height int
+	}{
+		{"short", 80, 6},
+		{"narrow", 8, 24},
+	} {
+		for _, alt := range []bool{true, false} {
+			name := tc.name + " inline"
+			if alt {
+				name = tc.name + " alt screen"
+			}
+			t.Run(name, func(t *testing.T) {
+				m := typeComposerKeys(newTestChatModel(alt), ":rocket")
+				_, _ = m.Update(tea.WindowSizeMsg{Width: tc.width, Height: tc.height})
+				if got := selectedEmojiRow(m); len(got) != 0 {
+					t.Fatalf("picker should be hidden: %q", got)
+				}
+				_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+				if m.textarea.Value() == "🚀" {
+					t.Fatal("hidden picker intercepted Tab")
+				}
+				// Observe ordinary Enter routing without starting a provider run.
+				m.inlineCompletionPending = true
+				_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+				if m.inlineCompletionPendingKey == nil {
+					t.Fatal("hidden picker intercepted Enter")
+				}
+			})
+		}
+	}
+}
+
+func TestEmojiComposerCaretMatchesRenderedCells(t *testing.T) {
+	for _, query := range []string{":one", ":thumbsup", ":polar_bear"} {
+		t.Run(query, func(t *testing.T) {
+			m := typeComposerKeys(newTestChatModel(true), query)
+			_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+			glyph := m.textarea.Value()
+			if emoji.CellWidth(glyph) == 0 {
+				t.Fatalf("expected a completed glyph, got %q", glyph)
+			}
+			m = typeComposerKeys(m, "X")
+			view := m.View()
+			if view.Cursor == nil || view.Cursor.Position.X == 0 {
+				t.Fatalf("no caret after %q", m.textarea.Value())
+			}
+			for _, method := range []ansi.Method{ansi.WcWidth, ansi.GraphemeWidth} {
+				screen := uv.NewScreenBuffer(m.width, m.height)
+				screen.Method = method
+				screen.EmojiWidth = emoji.CellWidth
+				uv.NewStyledString(view.Content).Draw(screen, screen.Bounds())
+				x, y := view.Cursor.Position.X, view.Cursor.Position.Y
+				if c := screen.CellAt(x-1, y); c == nil || c.Content != "X" {
+					t.Fatalf("method %v: caret at (%d,%d) is not after X in draft %q; preceding cell = %+v", method, x, y, m.textarea.Value(), c)
+				}
+			}
+		})
 	}
 }

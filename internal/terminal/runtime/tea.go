@@ -512,7 +512,7 @@ type Program struct {
 	ttyOutput           term.File
 	previousOutputState *term.State
 	renderer            renderer
-	wideEmoji           func(string) bool
+	emojiWidth          func(string) int
 
 	// the environment variables for the program, defaults to os.Environ().
 	environ uv.Environ
@@ -1023,7 +1023,7 @@ func (p *Program) Run() (returnModel Model, returnErr error) {
 
 	if p.renderer == nil {
 		r := newCursedRenderer(p.output, p.environ, p.width, p.height)
-		r.cellbuf.WideEmoji = p.wideEmoji
+		r.cellbuf.EmojiWidth = p.emojiWidth
 		r.setLogger(p.logger)
 		r.setNoInput(p.disableInput)
 		mapNl := runtime.GOOS != "windows" && p.ttyInput == nil

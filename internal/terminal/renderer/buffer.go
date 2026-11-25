@@ -605,8 +605,8 @@ func (b *Buffer) DeleteCellArea(x, y, n int, c *Cell, area Rectangle) {
 type ScreenBuffer struct {
 	*RenderBuffer
 	Method ansi.Method
-	// WideEmoji optionally selects graphemes to draw as two-cell units.
-	WideEmoji func(string) bool
+	// EmojiWidth optionally overrides known graphemes; zero keeps the default.
+	EmojiWidth func(string) int
 }
 
 var (
@@ -622,7 +622,7 @@ func NewScreenBuffer(width, height int) ScreenBuffer {
 	}
 }
 
-func (s ScreenBuffer) wideEmojiPredicate() func(string) bool { return s.WideEmoji }
+func (s ScreenBuffer) emojiWidthFunc() func(string) int { return s.EmojiWidth }
 
 // WidthMethod returns the width method used by the screen.
 // It defaults to [ansi.WcWidth].

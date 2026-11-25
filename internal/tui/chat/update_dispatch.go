@@ -36,7 +36,7 @@ func (m *Model) dispatchTerminalUpdate(message tea.Msg, cmds *[]tea.Cmd) (tea.Mo
 				return m, nil, true
 			}
 			// Enter belongs to the emoji picker while it has a selection, not to the send queue.
-			if key.Matches(msg, m.keyMap.Send) && !m.emojiPopupActive() {
+			if key.Matches(msg, m.keyMap.Send) && !m.emojiPopupVisible() {
 				pendingKey := msg
 				m.inlineCompletionPendingKey = &pendingKey
 				return m, nil, true

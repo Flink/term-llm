@@ -171,7 +171,8 @@ func (m *Model) View() (view tea.View) {
 		renderedLines += 2
 	}
 
-	popups := composer.InlinePopups(m.renderMentionPopup(), m.composerCompletionView())
+	footer := m.buildFooterLayout()
+	popups := composer.InlinePopups(m.renderMentionPopup(), m.completions.View(), m.emojiCompletionView(footer))
 	b.WriteString(popups)
 	renderedLines += strings.Count(popups, "\n")
 
@@ -189,7 +190,6 @@ func (m *Model) View() (view tea.View) {
 		renderedLines++
 	}
 
-	footer := m.buildFooterLayout()
 	m.applyFooterLayout(renderedLines, footer)
 	b.WriteString(footer.view)
 
@@ -658,8 +658,8 @@ func (m *Model) overlayAltScreenPanels(base string, footer footerLayout) string 
 	// In alt-screen mode Bubble Tea v2 clips anything that extends beyond the
 	// fixed terminal height, so popups must be composited into the existing frame
 	// instead of being appended below it.
-	completion, mention := m.composerCompletionView(), m.renderMentionPopup()
-	if completion == "" && mention == "" && !m.dialog.IsOpen() && m.commit == nil {
+	completion, mention, emojiPanel := m.completions.View(), m.renderMentionPopup(), m.emojiCompletionView(footer)
+	if completion == "" && mention == "" && emojiPanel == "" && !m.dialog.IsOpen() && m.commit == nil {
 		return base
 	}
 
@@ -724,19 +724,13 @@ func (m *Model) overlayAltScreenPanels(base string, footer footerLayout) string 
 		}
 	}
 
-	stackPanel := func(panel string, wholeRows bool) {
+	stackPanel := func(panel string) {
 		if panel == "" {
 			return
 		}
 		panelLines := strings.Split(panel, "\n")
 		y := max(0, bottomY-len(panelLines))
-		if wholeRows {
-			// The emoji panel already fits each catalog glyph to two cells;
-			// do not re-cut it with wcwidth.
-			copy(lines[y:], panelLines)
-		} else {
-			placePanel(panel, 0, y)
-		}
+		placePanel(panel, 0, y)
 		bottomY = y
 	}
 
@@ -757,11 +751,19 @@ func (m *Model) overlayAltScreenPanels(base string, footer footerLayout) string 
 			y := (targetHeight - len(panelLines)) / 2
 			placePanel(panel, x, y)
 		} else {
-			stackPanel(panel, false)
+			stackPanel(panel)
 		}
 	}
-	stackPanel(completion, m.emojiPopupActive())
-	stackPanel(mention, false)
+	if emojiPanel != "" {
+		// The emoji panel already fits its row and column budgets. Don't
+		// re-cut composed glyphs using a different width calculation.
+		panelLines := strings.Split(emojiPanel, "\n")
+		y := max(0, bottomY-len(panelLines))
+		copy(lines[y:bottomY], panelLines)
+		bottomY = y
+	}
+	stackPanel(completion)
+	stackPanel(mention)
 
 	return strings.Join(lines, "\n")
 }

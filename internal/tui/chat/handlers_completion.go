@@ -11,15 +11,19 @@ func (m *Model) handleComposerPopupKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd,
 	if handled, cmd := m.handleMentionPopupKey(msg); handled {
 		return m, cmd, true
 	}
-	if m.emojiPopupActive() {
-		handled, offset, err := m.emojiPopup.HandleKey(&m.textarea, msg.String(), pickerStep(msg))
+	if m.emojiPopupVisible() {
+		action := msg.String()
+		if key.Matches(msg, m.keyMap.Send) {
+			action = "enter"
+		}
+		handled, offset, err := m.emojiPopup.HandleKey(&m.textarea, action, pickerStep(msg))
 		if err != nil {
 			updated, cmd := m.showFooterWarning(err.Error())
 			return updated, cmd, true
 		}
 		if offset >= 0 {
-			m.moveTextareaCursorToByteOffset(offset)
 			m.updateTextareaHeight()
+			m.moveTextareaCursorToByteOffset(offset)
 			m.resetPromptHistoryIfEdited()
 			m.selection = Selection{}
 		}
@@ -31,13 +35,6 @@ func (m *Model) handleComposerPopupKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd,
 		return m.handleCompletionKey(msg)
 	}
 	return m, nil, false
-}
-
-func (m *Model) composerCompletionView() string {
-	if m.emojiPopupActive() {
-		return m.emojiPopup.View(m.styles.Theme(), m.width)
-	}
-	return m.completions.View()
 }
 
 func (m *Model) handleCompletionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {

@@ -14,7 +14,10 @@ import (
 	"github.com/term-llm/term-llm/internal/ui"
 )
 
-const emojiMatchLimit = 8
+const (
+	emojiMatchLimit = 8
+	emojiFrameRows  = 3 // top border, help, bottom border
+)
 
 type emojiToken struct {
 	start, end int // Byte offsets in the draft.
@@ -23,9 +26,10 @@ type emojiToken struct {
 
 // EmojiPopup tracks matches and the currently highlighted emoji.
 type EmojiPopup struct {
-	token    emojiToken
-	matches  []emoji.Entry
-	selected int
+	token     emojiToken
+	matches   []emoji.Entry
+	selected  int
+	dismissed bool
 }
 
 func emojiShortcodeChar(b byte) bool {
@@ -68,6 +72,8 @@ func (p *EmojiPopup) Refresh(draft string, cursor int) {
 	token, ok := emojiTokenAt(draft, cursor)
 	if !ok {
 		p.Hide()
+	} else if p.dismissed && p.token.start == token.start {
+		return
 	} else if p.token != token {
 		*p = EmojiPopup{token: token, matches: emoji.Search(token.query, emojiMatchLimit)}
 	}
@@ -101,7 +107,8 @@ func (p *EmojiPopup) HandleKey(input *textarea.Model, key string, step int) (boo
 	}
 	switch key {
 	case "esc":
-		p.Hide()
+		p.matches = nil
+		p.dismissed = true
 		return true, -1, nil
 	case "tab", "enter":
 		offset, err := p.accept(input)
@@ -129,10 +136,15 @@ func (p *EmojiPopup) accept(input *textarea.Model) (int, error) {
 	return token.start + len(glyph), nil
 }
 
-// View lays out each complete catalog glyph as one wide preview. Never remeasure
-// a composed glyph as part of the styled row: a legacy wcwidth can sum its runes.
-func (p *EmojiPopup) View(theme *ui.Theme, width int) string {
-	if width < 5 || !p.HasMatches() {
+// Fits reports whether there is room for a framed result with a readable label.
+func (p *EmojiPopup) Fits(width, rows int) bool {
+	return width >= 10 && rows > emojiFrameRows && p.HasMatches()
+}
+
+// View reserves two cells per preview and pads narrower glyphs so labels align.
+// Measure catalog glyphs with the same policy used by the renderer.
+func (p *EmojiPopup) View(theme *ui.Theme, width, maxRows int) string {
+	if !p.Fits(width, maxRows) {
 		return ""
 	}
 	const help = "↑↓ navigate  enter/tab insert  esc close"
@@ -152,7 +164,9 @@ func (p *EmojiPopup) View(theme *ui.Theme, width int) string {
 	}
 	rule := strings.Repeat("─", inner+2)
 	rows := []string{edge.Render("╭" + rule + "╮")}
-	for i, entry := range p.matches {
+	start, end := ui.VisibleRange(len(p.matches), p.selected, maxRows-emojiFrameRows)
+	for i := start; i < end; i++ {
+		entry := p.matches[i]
 		prefix, style := strings.Repeat(" ", markerWidth), normal
 		if i == p.selected {
 			prefix = "› "
@@ -161,7 +175,7 @@ func (p *EmojiPopup) View(theme *ui.Theme, width int) string {
 		prefix = ansi.Truncate(prefix, inner, "")
 		used := ansi.StringWidth(prefix)
 		if inner >= markerWidth+previewWidth+5 {
-			prefix += entry.Glyph + "  "
+			prefix += entry.Glyph + strings.Repeat(" ", previewWidth+2-emoji.CellWidth(entry.Glyph))
 			used += previewWidth + 2
 		}
 		label := ansi.Truncate(":"+entry.Shortcode+":", inner-used, "…")

@@ -86,10 +86,10 @@ func WithWindowSize(width, height int) ProgramOption {
 	}
 }
 
-// WithWideEmoji sets the predicate that identifies graphemes to render as two
-// cells wide. A nil predicate leaves the default width calculation unchanged.
-func WithWideEmoji(predicate func(string) bool) ProgramOption {
+// WithEmojiWidth overrides the cell width of selected graphemes. A nil function
+// or a return value of zero leaves the default width calculation unchanged.
+func WithEmojiWidth(width func(string) int) ProgramOption {
 	return func(p *Program) {
-		p.wideEmoji = predicate
+		p.emojiWidth = width
 	}
 }

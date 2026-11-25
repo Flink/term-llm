@@ -87,7 +87,7 @@ func (r *chatInvocation) runChatOnce(ctx context.Context, initialText, cliAgent 
 	defer programInput.cleanup()
 
 	var opts []tea.ProgramOption
-	opts = append(opts, tea.WithoutSignalHandler(), tea.WithWideEmoji(emoji.IsGlyph))
+	opts = append(opts, tea.WithoutSignalHandler(), tea.WithEmojiWidth(emoji.CellWidth))
 	if programInput.disableInput {
 		opts = append(opts, tea.WithInput(nil))
 	} else if programInput.reader != nil {

@@ -456,13 +456,18 @@ func newWcCell(s string, style *Style, link *Link) Cell {
 	return *c
 }
 
-func TestStyledStringWideEmoji(t *testing.T) {
+func TestStyledStringEmojiWidth(t *testing.T) {
 	for _, method := range []ansi.Method{ansi.WcWidth, ansi.GraphemeWidth} {
 		for _, glyph := range []string{"☺️", "👩🏽‍💻", "🇺🇳", "👍🏿", "1️⃣", "e\u0301", "A"} {
 			t.Run(fmt.Sprintf("%v/%s", method, glyph), func(t *testing.T) {
 				buf := NewScreenBuffer(5, 1)
 				buf.Method = method
-				buf.WideEmoji = func(g string) bool { return g == glyph }
+				buf.EmojiWidth = func(g string) int {
+					if g == glyph {
+						return 2
+					}
+					return 0
+				}
 				text := NewStyledString("x\x1b[31m" + glyph + "\x1b[0my")
 				for _, draw := range []func(Screen, Rectangle){text.DrawOver, text.Draw, text.DrawOver} {
 					draw(buf, buf.Bounds())
@@ -476,26 +481,31 @@ func TestStyledStringWideEmoji(t *testing.T) {
 	}
 }
 
-func TestStyledStringWideEmojiEdge(t *testing.T) {
+func TestStyledStringEmojiWidthEdge(t *testing.T) {
 	const glyph = "1️⃣"
 	text := NewStyledString("x" + glyph + "!")
 	text.Wrap = true
 	buf := NewScreenBuffer(3, 2)
-	buf.WideEmoji = func(s string) bool { return s == glyph }
+	buf.EmojiWidth = func(s string) int {
+		if s == glyph {
+			return 2
+		}
+		return 0
+	}
 	text.DrawOver(buf, Rect(0, 0, 2, 2))
 	if !buf.CellAt(0, 1).Equal(&Cell{Content: glyph, Width: 2}) || !buf.CellAt(1, 1).IsZero() {
 		t.Fatalf("did not wrap wide glyph intact: %#v", buf.Lines)
 	}
 }
 
-func TestStyledStringWideEmojiRejectsPartialCluster(t *testing.T) {
+func TestStyledStringEmojiWidthRejectsPartialCluster(t *testing.T) {
 	buf := NewScreenBuffer(4, 1)
-	buf.WideEmoji = func(g string) bool {
+	buf.EmojiWidth = func(g string) int {
 		switch g {
 		case "1", "\ufe0f\u20e3":
 			t.Fatalf("predicate received partial keycap %q", g)
 		}
-		return false
+		return 0
 	}
 	NewStyledString("1️⃣!").Draw(buf, buf.Bounds())
 	if buf.CellAt(0, 0).Content != "1" || buf.CellAt(1, 0).Content != "!" {

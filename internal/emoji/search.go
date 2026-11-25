@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	"github.com/rivo/uniseg"
 )
 
 //go:generate python3 generate.py
@@ -29,7 +31,7 @@ var index = sync.OnceValue(func() catalogIndex {
 	if err := json.Unmarshal(catalog, &rows); err != nil {
 		panic(err) // Invalid build-time asset, not user input.
 	}
-	idx := catalogIndex{entries: make([]indexedEntry, 0, len(rows)), glyphs: make(map[string]struct{}, len(rows))}
+	idx := catalogIndex{entries: make([]indexedEntry, 0, len(rows)), glyphs: make(map[string]int, len(rows))}
 	for _, row := range rows {
 		words := strings.FieldsFunc(strings.ToLower(row[1]), func(r rune) bool {
 			return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
@@ -41,7 +43,7 @@ var index = sync.OnceValue(func() catalogIndex {
 			code = aliases[0]
 		}
 		idx.entries = append(idx.entries, indexedEntry{Entry{row[1], row[0], code}, name, row[2], aliases})
-		idx.glyphs[row[0]] = struct{}{}
+		idx.glyphs[row[0]] = uniseg.StringWidth(row[0])
 		idx.maxBytes = max(idx.maxBytes, len(row[0]))
 	}
 	return idx
@@ -49,17 +51,17 @@ var index = sync.OnceValue(func() catalogIndex {
 
 type catalogIndex struct {
 	entries  []indexedEntry
-	glyphs   map[string]struct{}
+	glyphs   map[string]int
 	maxBytes int
 }
 
-// IsGlyph reports whether the entire string is one fully qualified catalog emoji.
-func IsGlyph(cluster string) bool {
+// CellWidth returns the width of a catalog glyph, or zero for unknown clusters.
+// Match the grapheme widths Bubbles uses for wrapping and cursor placement.
+func CellWidth(cluster string) int {
 	if len(cluster) < 2 {
-		return false
+		return 0
 	}
-	_, ok := index().glyphs[cluster]
-	return ok
+	return index().glyphs[cluster]
 }
 
 // EndsWithGlyph recognizes a complete Unicode emoji immediately before a colon.
