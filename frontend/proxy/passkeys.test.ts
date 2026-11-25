@@ -114,6 +114,29 @@ describe('proxy passkey access', () => {
     expect(root.querySelector('[role=status]')?.textContent).toBe('');
     expect(root.querySelector('[role=status]')?.closest('.proxy-signin')).not.toBeNull();
   });
+  it('sends a pre-auth CSRF token when signing in after arriving signed out', async () => {
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      if (path.endsWith('/auth/status'))
+        return new Response(JSON.stringify({ ...status, csrf: 'pre-auth' }));
+      if (path.endsWith('/state')) return new Response(null, { status: 401 });
+      if (path.endsWith('/auth/login/begin')) {
+        const token = new Headers(init?.headers).get('X-CSRF-Token');
+        return token === 'pre-auth'
+          ? new Response(JSON.stringify(assertion))
+          : new Response(null, { status: 403 });
+      }
+      return new Response(null, { status: 500 });
+    });
+    const api = new ProxyClient(fetcher);
+    const get = vi.fn().mockRejectedValue(new DOMException('cancelled', 'NotAllowedError'));
+    const root = document.createElement('div');
+    document.body.append(root);
+    disposals.push(mountProxy(root, api, { available: () => true, create: vi.fn(), get }));
+    await click(root, 'Sign in with passkey');
+    await waitFor(() => expect(get).toHaveBeenCalledWith(assertion));
+    expect(root.textContent).not.toContain('Not authorized');
+  });
   it('fetches status first and uses passkey login without offering a token fallback', async () => {
     const { api, root, platform } = setup();
     const tokenLogin = vi.spyOn(api, 'login');

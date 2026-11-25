@@ -438,6 +438,14 @@ export function mountProxy(
     } catch (error) {
       // Being signed out on arrival is expected; show sign-in without an error.
       if (!(error instanceof ProxyAPIError && error.status === 401)) throw error;
+      // The 401 cleared the pre-auth CSRF token; fetch a fresh one before sign-in.
+      try {
+        authStatus = await api.authStatus();
+      } catch (statusError) {
+        authStatus = undefined;
+        login();
+        throw statusError;
+      }
       login();
     }
   }
