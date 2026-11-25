@@ -26,6 +26,7 @@ import { timelineQueryKeys } from './timeline-prefs';
 import { debugView } from './debug';
 import { usageView } from './usage';
 import { toastRegion } from './toast';
+import { signInShell } from './signin';
 
 type Tab =
   'Home' | 'Routes' | 'Secrets' | 'Clients' | 'Requests' | 'Usage' | 'Debug' | 'Passkeys' | 'Admin';
@@ -266,13 +267,17 @@ export function mountProxy(
       (row?.hasAttribute('tabindex') ? row : content.querySelector('h2'))
     )?.focus();
   }
+  function showSignIn(view: HTMLElement) {
+    root.dataset.view = 'signin';
+    content.replaceChildren(signInShell(view, status));
+  }
   function login() {
     if (disposed) return;
     notifications.clear();
     closeView();
     tools.replaceChildren();
     if (authStatus?.auth === 'passkey') {
-      content.replaceChildren(
+      showSignIn(
         passkeyLogin(
           authStatus,
           api,
@@ -292,7 +297,7 @@ export function mountProxy(
       return;
     }
     if (authStatus?.auth !== 'token') {
-      content.replaceChildren(
+      showSignIn(
         card(
           'Sign in unavailable',
           button('Retry', () => {
@@ -324,13 +329,15 @@ export function mountProxy(
       },
       'Sign in',
     );
-    content.replaceChildren(card('Sign in', form));
+    showSignIn(card('Sign in', form));
     token.focus();
   }
   function render() {
     if (!state || disposed) return;
     notifications.clear();
     closeView();
+    delete root.dataset.view;
+    if (status.parentNode !== root) root.insertBefore(status, content);
     const snapshot = state;
     const nav = el('nav');
     nav.setAttribute('aria-label', 'Proxy administration');
@@ -425,7 +432,14 @@ export function mountProxy(
       login();
       throw error;
     }
-    if (!disposed) await context.refresh();
+    if (disposed) return;
+    try {
+      await context.refresh();
+    } catch (error) {
+      // Being signed out on arrival is expected; show sign-in without an error.
+      if (!(error instanceof ProxyAPIError && error.status === 401)) throw error;
+      login();
+    }
   }
   void context.run(start);
   return () => {

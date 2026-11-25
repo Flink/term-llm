@@ -102,6 +102,18 @@ describe('proxy passkey access', () => {
     expect(root.textContent).toContain('remote deployment');
     expect(queryByRole(root, 'button', { name: 'Create first passkey' })).toBeNull();
   });
+  it('shows a branded sign-in page without an error when signed out on arrival', async () => {
+    const { root } = setup();
+    await waitFor(() => getByRole(root, 'button', { name: 'Sign in with passkey' }));
+    expect(getByRole(root, 'heading', { name: 'Sign in' })).toBeVisible();
+    expect(root.textContent).toContain('Proxy administration for proxy.example');
+    expect(getByRole(root, 'link', { name: 'term-llm website' })).toHaveAttribute(
+      'href',
+      'https://term-llm.com/',
+    );
+    expect(root.querySelector('[role=status]')?.textContent).toBe('');
+    expect(root.querySelector('[role=status]')?.closest('.proxy-signin')).not.toBeNull();
+  });
   it('fetches status first and uses passkey login without offering a token fallback', async () => {
     const { api, root, platform } = setup();
     const tokenLogin = vi.spyOn(api, 'login');
