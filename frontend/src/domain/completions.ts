@@ -21,7 +21,7 @@ export interface Completion {
   value: string;
   label: string;
   description: string;
-  kind: 'slash' | 'agent' | 'mention';
+  kind: 'slash' | 'agent' | 'mention' | 'emoji';
   streamingSafe?: boolean;
   replacement?: { start: number; end: number };
   segments?: Array<{ text: string; matched?: boolean }>;
@@ -262,30 +262,25 @@ export function mentionCompletions(
 }
 
 export function applyCompletion(value: string, completion: string | Completion): string {
-  const item = typeof completion === 'string' ? null : completion;
-  const replacement = item?.replacement;
   const inserted = typeof completion === 'string' ? completion : completion.value;
-  if (replacement) {
-    const after = value.slice(replacement.end);
-    const separator = !after || !/^\s/u.test(after) ? ' ' : '';
+  if (typeof completion !== 'string' && completion.replacement) {
+    const { start, end } = completion.replacement;
     return (
-      value.slice(0, replacement.start) +
-      (item?.thinking && !/\s$/.test(value.slice(0, replacement.start)) ? ' ' : '') +
-      inserted +
-      separator +
-      after
+      value.slice(0, start) + replacementText(value, completion, start, end) + value.slice(end)
     );
   }
   return value.replace(/(?:\/[\w-]*|@[\w-]*)$/, `${inserted} `);
 }
 
+function replacementText(value: string, item: Completion, start: number, end: number): string {
+  if (item.kind === 'emoji') return item.value;
+  const prefix = item.thinking && !/\s$/.test(value.slice(0, start)) ? ' ' : '';
+  const separator = /^\s/u.test(value.slice(end)) ? '' : ' ';
+  return prefix + item.value + separator;
+}
+
 export function completedCursor(value: string, completion: Completion): number {
   if (!completion.replacement) return applyCompletion(value, completion).length;
-  const after = value.slice(completion.replacement.end);
-  return (
-    completion.replacement.start +
-    (completion.thinking && !/\s$/.test(value.slice(0, completion.replacement.start)) ? 1 : 0) +
-    completion.value.length +
-    (!after || !/^\s/u.test(after) ? 1 : 0)
-  );
+  const { start, end } = completion.replacement;
+  return start + replacementText(value, completion, start, end).length;
 }

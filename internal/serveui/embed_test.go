@@ -224,8 +224,11 @@ func TestProductionBundleSizeBudgets(t *testing.T) {
 		// 158.93 kB build, measuring 540.24/159.77 kB. Allow that and no more.
 		// Restored-page reveal, JS-only extension hints and cache invalidation
 		// bring the entry to 541.11/160.06 kB. Keep narrow headroom.
-		"dist/app.js":           {raw: 541_200, gzip: 160_100},
-		"dist/chunks/Panels.js": {raw: 32_000, gzip: 11_000},
+		// Emoji suggestions reuse the composer completion menu: 542.56/160.91 kB.
+		// Unicode and gemoji data remain in a separately bounded lazy chunk.
+		"dist/app.js":            {raw: 542_700, gzip: 161_050},
+		"dist/chunks/catalog.js": {raw: 344_200, gzip: 53_000},
+		"dist/chunks/Panels.js":  {raw: 32_000, gzip: 11_000},
 		// Panel splitting adds a shared-import edge to Lightbox: measured 8.03/3.21 kB.
 		// Pausing transcript media while a video is open brings it to 8.16/3.27 kB.
 		// Sprite icons for its arrow, zoom and download marks: 8.35/3.29 kB.

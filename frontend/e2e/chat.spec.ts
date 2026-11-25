@@ -839,6 +839,28 @@ test('collapses file-change counts to an icon at narrow widths', async ({ page }
   await expect(toggle.locator('.diff-toggle-file-count')).not.toHaveAttribute('data-file-count');
 });
 
+test('Enter inserts an emoji into the draft without sending a response', async ({ page }) => {
+  const requests = await open(page);
+  const input = page.getByRole('textbox', { name: 'Message', exact: true });
+  await input.fill('All set 👍, captain.');
+  await input.press('End');
+  for (let i = 0; i < ', captain.'.length; i++) await input.press('ArrowLeft');
+  await input.pressSequentially(' :rocke');
+  await expect(page.getByRole('option', { name: /rocket/i }).first()).toBeVisible();
+  await input.press('Enter');
+  await expect(input).toHaveValue('All set 👍 🚀, captain.');
+  await expect(input).toBeFocused();
+  await input.pressSequentially(':sweat_sm');
+  await expect(page.getByRole('option', { name: /:sweat_smile:/ })).toBeVisible();
+  await input.press('Tab');
+  await expect(input).toHaveValue('All set 👍 🚀😅, captain.');
+  await input.press('!');
+  await expect(input).toHaveValue('All set 👍 🚀😅!, captain.');
+  expect(requests.filter((r) => r.method === 'POST' && r.url.endsWith('/v1/responses'))).toEqual(
+    [],
+  );
+});
+
 test('sends through public composer UI and reduces a streamed response', async ({ page }) => {
   const requests = await open(page);
   await page.getByRole('textbox', { name: 'Message' }).fill('Hello');

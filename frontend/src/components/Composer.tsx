@@ -24,6 +24,7 @@ import { Icon, type IconName } from './Icon';
 import { useMenuKeyboard } from './Menu';
 import { requestTranscriptScrollToTail } from './transcript-scroll';
 import { lazyComponent } from './lazyComponent';
+import { useEmojiCompletion } from './useEmojiCompletion';
 
 // Typical OS double-click interval.
 const STOP_CLICK_GUARD_MS = 500;
@@ -443,6 +444,20 @@ function ConversationComposer() {
     if (draftActive) void store.loadSkills().catch(() => undefined);
   }, [store, draftActive, projectId, worktreeDir]);
   const composerOwner = store.composerOwnerKey();
+  const emoji = useEmojiCompletion(store.prompt.value, composerOwner);
+  const interceptedEnter = useRef(false);
+  const syncSelection = (input: HTMLTextAreaElement) => {
+    setCursor(input.selectionStart);
+    if (emoji.sync(input)) {
+      setDismissed('');
+      // Keep the highlight while refining the same mention; reset it for a new token.
+      if (
+        !mention ||
+        activeMentionAtCursor(input.value, input.selectionStart)?.start !== mention.start
+      )
+        setCompletionIndex(-1);
+    }
+  };
   useEffect(() => {
     if (
       voice.snapshot.owner &&
@@ -569,9 +584,14 @@ function ConversationComposer() {
   ).filter((entry) => commandAllowed(entry.value));
   const currentMentions =
     projectMentions?.context === mentionContext ? projectMentions.payload : null;
-  const combined = mention ? [...local, ...mentionCompletions(currentMentions, mention)] : local;
+  const combined = emoji.items.length
+    ? emoji.items
+    : mention
+      ? [...local, ...mentionCompletions(currentMentions, mention)]
+      : local;
+  const completionKey = `${composerOwner}\u0000${store.prompt.value}\u0000${cursor}`;
   const completions =
-    dismissed === `${store.prompt.value}\u0000${cursor}`
+    dismissed === completionKey
       ? []
       : [...new Map(combined.map((entry) => [`${entry.kind}:${entry.value}`, entry])).values()];
   // Clamp at render time so a shrunken list never highlights or applies an
@@ -590,6 +610,16 @@ function ConversationComposer() {
         completions.length - 1,
       )
     : 0;
+  const selectedOption = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    const option = selectedOption.current;
+    const panel = option?.parentElement;
+    if (!option || !panel) return;
+    // Keep the highlight visible without scrolling the focused composer or page.
+    if (option.offsetTop < panel.scrollTop) panel.scrollTop = option.offsetTop;
+    else if (option.offsetTop + option.offsetHeight > panel.scrollTop + panel.clientHeight)
+      panel.scrollTop = option.offsetTop + option.offsetHeight - panel.clientHeight;
+  }, [activeIndex, completions.length, completionKey]);
   const project = store.projects.value.find((entry) => entry.id === store.activeProjectId.value);
   const bindingBlocked = store.draftActive.value && Boolean(project && project.available === false);
   // False is the server saying no approval-governed action exists; unknown
@@ -606,15 +636,24 @@ function ConversationComposer() {
   );
 
   const choose = (completion: Completion) => {
-    const nextCursor = completedCursor(store.prompt.value, completion);
-    store.prompt.value = applyCompletion(store.prompt.value, completion);
+    const input = textarea.current;
+    const value = store.prompt.value;
+    if (
+      !input ||
+      (completion.kind === 'emoji' &&
+        (input.value !== value ||
+          input.selectionStart !== emoji.caret ||
+          input.selectionEnd !== emoji.caret))
+    )
+      return;
+    const nextCursor = completedCursor(value, completion);
+    input.value = applyCompletion(value, completion);
+    store.prompt.value = input.value;
+    input.focus();
+    input.setSelectionRange(nextCursor, nextCursor);
+    syncSelection(input);
     setCompletionIndex(-1);
     setDismissed('');
-    setCursor(nextCursor);
-    requestAnimationFrame(() => {
-      textarea.current?.focus();
-      textarea.current?.setSelectionRange(nextCursor, nextCursor);
-    });
   };
   const liveSkill = (value: string) => {
     const match = value.match(/^\/([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)(?:\s+([\s\S]*))?$/);
@@ -1195,9 +1234,11 @@ function ConversationComposer() {
             >
               {completions.map((entry, index) => (
                 <button
+                  ref={activeIndex === index ? selectedOption : undefined}
                   id={`composer-completion-${index}`}
                   type="button"
                   role="option"
+                  tabIndex={-1}
                   aria-selected={activeIndex === index}
                   aria-disabled={entry.unavailable || undefined}
                   class={`slash-command-option ${activeIndex === index ? 'selected' : ''}`}
@@ -1265,29 +1306,44 @@ function ConversationComposer() {
                 .filter((item): item is File => Boolean(item));
               if (files.length) store.addAttachments(files);
             }}
-            onClick={(event) => {
-              setCursor(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
-              setDismissed('');
+            onFocus={(event) => syncSelection(event.currentTarget)}
+            onBlur={() => {
+              emoji.close();
+              if (emoji.items.length) setCompletionIndex(-1);
             }}
+            onSelect={(event) => syncSelection(event.currentTarget)}
+            onCompositionStart={() => emoji.setComposing(true)}
+            onCompositionEnd={(event) => {
+              emoji.setComposing(false);
+              syncSelection(event.currentTarget);
+            }}
+            onClick={(event) => syncSelection(event.currentTarget)}
             onInput={(event) => {
+              syncSelection(event.currentTarget);
               store.prompt.value = event.currentTarget.value;
-              const nextCursor =
-                event.currentTarget.selectionStart ?? event.currentTarget.value.length;
-              setCursor(nextCursor);
               setDismissed('');
               resizePrompt(event.currentTarget);
               setCompletionIndex(-1);
             }}
-            onKeyUp={(event) => {
-              if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
-                setCursor(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
-                setDismissed('');
-              }
-            }}
+            onKeyUp={(event) => syncSelection(event.currentTarget)}
             onKeyDown={(event) => {
               // Safari can end composition before the confirming keydown, while
               // still reporting legacy IME keyCode 229. Guard every action first.
               if (event.isComposing || event.keyCode === 229) return;
+              const pendingEmoji = emoji.pending && dismissed !== completionKey;
+              if (event.key === 'Enter') {
+                // A held Enter must not send immediately after completing (or waiting for the catalog).
+                if (event.repeat && interceptedEnter.current) {
+                  event.preventDefault();
+                  return;
+                }
+                interceptedEnter.current = false;
+                if (pendingEmoji && !event.shiftKey) {
+                  event.preventDefault();
+                  interceptedEnter.current = true;
+                  return;
+                }
+              }
               if (completions.length && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
                 event.preventDefault();
                 setCompletionIndex(
@@ -1319,15 +1375,17 @@ function ConversationComposer() {
                   ).toLowerCase() === selected.value.toLowerCase());
               if (
                 selected &&
-                (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey && !exactSlash))
+                !event.shiftKey &&
+                (event.key === 'Tab' || (event.key === 'Enter' && !exactSlash))
               ) {
                 event.preventDefault();
+                interceptedEnter.current = event.key === 'Enter' && selected.kind === 'emoji';
                 choose(selected);
                 return;
               }
-              if (event.key === 'Escape' && completions.length) {
+              if (event.key === 'Escape' && (completions.length || pendingEmoji)) {
                 event.preventDefault();
-                setDismissed(`${store.prompt.value}\u0000${cursor}`);
+                setDismissed(completionKey);
                 return;
               }
               if (event.key === 'Escape' && (accepted || transitioning)) {

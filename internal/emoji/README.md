@@ -1,6 +1,6 @@
 # Emoji completion data
 
-`catalog.json` is used by the Go chat composer. Each row
+`catalog.json` is shared by the Go chat composer and the web composer. Each row
 contains a fully qualified glyph (possibly multiple code points), its English
 CLDR short name, additional English keyword words, and (when different from
 the normalized CLDR name) space-separated GitHub/gemoji shortcodes, preferred
