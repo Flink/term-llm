@@ -1,36 +1,35 @@
 package mcpweb
 
 import (
+	"errors"
 	"net/url"
-	"strings"
-
-	apphub "github.com/term-llm/term-llm/internal/app/serve/hub"
-	"github.com/term-llm/term-llm/internal/hub"
 )
 
 const OAuthCallbackPath = "/v1/mcp/oauth/callback"
 
-// HubCallbackReturnPath restores OAuth parameters on a validated login return path.
-func HubCallbackReturnPath(basePath, safePath, raw string) string {
-	id, nodePath, ok := apphub.ParseNodePath(strings.TrimPrefix(safePath, basePath))
-	if !ok || nodePath != OAuthCallbackPath || hub.ValidateID(id) != nil {
-		return safePath
-	}
-
-	// Cross-site callbacks can arrive without the Hub's strict session cookie.
-	_, rawQuery, _ := strings.Cut(raw, "?")
-	query, err := url.ParseQuery(rawQuery)
+// ParseOAuthCallbackQuery validates a raw OAuth callback query and returns only
+// the code, state, iss, and error parameters that were present.
+func ParseOAuthCallbackQuery(raw string) (url.Values, error) {
+	query, err := url.ParseQuery(raw)
 	if err != nil {
-		return safePath
+		return nil, errors.New("malformed OAuth callback query")
 	}
-	callback := url.Values{}
+	callback := make(url.Values, 4)
 	for _, key := range []string{"code", "state", "iss", "error"} {
-		if values := query[key]; len(values) == 1 {
-			callback.Set(key, values[0])
+		if values, ok := query[key]; ok {
+			if len(values) != 1 {
+				return nil, errors.New("duplicate OAuth callback parameter")
+			}
+			callback[key] = values
 		}
 	}
-	if encoded := callback.Encode(); encoded != "" {
-		return safePath + "?" + encoded
+	if callback.Get("state") == "" {
+		return nil, errors.New("OAuth callback requires state")
 	}
-	return safePath
+	code, hasCode := callback["code"]
+	oauthError, hasError := callback["error"]
+	if hasCode == hasError || (hasCode && code[0] == "") || (hasError && oauthError[0] == "") {
+		return nil, errors.New("OAuth callback requires exactly one nonempty code or error")
+	}
+	return callback, nil
 }

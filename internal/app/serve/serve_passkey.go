@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,8 +71,7 @@ func newWebPasskeyHandler(runtime *hubPasskeyRuntime) *browserPasskeyHandler {
 	base := runtime.endpoint.BasePath
 	publicPath := func(p string) string { return base + p }
 	return &browserPasskeyHandler{passkey: runtime, basePath: base, web: true, publicPath: publicPath,
-		publicURLString: func(u *url.URL) string { return browserReturnURL(u, publicPath) },
-		writeHubShell:   writeBrowserAuthShell,
+		writeHubShell: writeBrowserAuthShell,
 		// OAuth callback authorization is its single-use SDK state, not a cookie.
 		bypass: func(r *http.Request) bool {
 			return r.Method == http.MethodGet && r.URL.Path == "/v1/mcp/oauth/callback"

@@ -37,20 +37,19 @@ const (
 // browserPasskeyHandler is the single HTTP authentication implementation for Hub
 // and Web. Application-specific routing exceptions are supplied only by Hub.
 type browserPasskeyHandler struct {
-	passkey         *hubPasskeyRuntime
-	basePath        string
-	token           func() string // Hub's explicit bearer compatibility; always nil for Web.
-	web             bool
-	publicPath      func(string) string
-	publicURLString func(*url.URL) string
-	writeHubShell   func(http.ResponseWriter, *http.Request, int, string, hubPageConfig)
-	bypass          func(*http.Request) bool
-	prepare         func(*http.Request) *http.Request
+	passkey       *hubPasskeyRuntime
+	basePath      string
+	token         func() string // Hub's explicit bearer compatibility; always nil for Web.
+	web           bool
+	publicPath    func(string) string
+	writeHubShell func(http.ResponseWriter, *http.Request, int, string, hubPageConfig)
+	bypass        func(*http.Request) bool
+	prepare       func(*http.Request) *http.Request
 }
 
 func (s *hubServer) browserAuth() *browserPasskeyHandler {
 	return &browserPasskeyHandler{passkey: s.passkey, basePath: s.basePath, token: func() string { return s.token },
-		publicPath: s.publicPath, publicURLString: s.publicURLString, writeHubShell: s.writeHubShell,
+		publicPath: s.publicPath, writeHubShell: s.writeHubShell,
 		bypass: func(r *http.Request) bool { return hubNodeAuthRoute(r) || hubRegistrationRoute(r) },
 		prepare: func(r *http.Request) *http.Request {
 			if hubDelegationOperatorRoute(r) {
@@ -71,17 +70,18 @@ func (s *browserPasskeyHandler) cookieName(name string) string {
 }
 
 type hubPasskeyRuntime struct {
-	endpoint      passkeyauth.Endpoint
-	store         *passkeyauth.Store
-	rp            *passkeyauth.RelyingParty
-	sessions      *passkeyauth.Sessions
-	ceremonies    *passkeyauth.Ceremonies
-	bootstrap     *passkeyauth.Grants
-	recovery      *passkeyauth.Grants
-	limiter       *hubAuthLimiter
-	peerResolver  *hubClientPeerResolver
-	nativeTickets nativeHandoffTickets
-	grantCommitMu sync.Mutex
+	endpoint        passkeyauth.Endpoint
+	store           *passkeyauth.Store
+	rp              *passkeyauth.RelyingParty
+	sessions        *passkeyauth.Sessions
+	ceremonies      *passkeyauth.Ceremonies
+	mcpOAuthReturns *passkeyauth.Ceremonies
+	bootstrap       *passkeyauth.Grants
+	recovery        *passkeyauth.Grants
+	limiter         *hubAuthLimiter
+	peerResolver    *hubClientPeerResolver
+	nativeTickets   nativeHandoffTickets
+	grantCommitMu   sync.Mutex
 }
 type hubPrincipalKey struct{}
 type hubExpectedOriginKey = apphub.ExpectedOriginKey
@@ -102,7 +102,7 @@ func newHubPasskeyRuntime(endpoint passkeyauth.Endpoint, store *passkeyauth.Stor
 	if err != nil {
 		return nil, err
 	}
-	return &hubPasskeyRuntime{endpoint: endpoint, store: store, rp: rp, sessions: sessions, ceremonies: passkeyauth.NewCeremonies(nil, nil), bootstrap: bootstrap, recovery: recovery, limiter: newHubAuthLimiter(nil), peerResolver: peerResolver}, nil
+	return &hubPasskeyRuntime{endpoint: endpoint, store: store, rp: rp, sessions: sessions, ceremonies: passkeyauth.NewCeremonies(nil, nil), mcpOAuthReturns: passkeyauth.NewCeremonies(nil, nil), bootstrap: bootstrap, recovery: recovery, limiter: newHubAuthLimiter(nil), peerResolver: peerResolver}, nil
 }
 
 func (s *browserPasskeyHandler) registerPasskeyRoutes(mux *http.ServeMux) {
@@ -439,8 +439,8 @@ func (s *browserPasskeyHandler) handleLoginBegin(w http.ResponseWriter, r *http.
 		return
 	}
 	returnPath := s.passkey.endpoint.SafeReturnPath(in.ReturnPath)
-	if !s.web {
-		returnPath = mcpweb.HubCallbackReturnPath(s.basePath, returnPath, in.ReturnPath)
+	if !s.web && kind == passkeyauth.CeremonyLogin {
+		returnPath = mcpweb.HubOAuthReturnPath(s.basePath, returnPath, in.ReturnPath)
 	}
 	ceremony, err := s.passkey.ceremonies.Create(kind, s.passkey.peerResolver.peer(r), "", sessionID, returnPath, s.passkey.store.User().WebAuthnID(), data)
 	if err != nil {
@@ -791,7 +791,18 @@ func (s *browserPasskeyHandler) passkeyAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if p, ok := s.authenticatePasskeyRequest(r); ok {
+		p, ok := s.authenticatePasskeyRequest(r)
+		if !s.web && mcpweb.IsHubOAuthCallback(r.URL.Path) {
+			oauth := mcpweb.HubOAuth{Endpoint: s.passkey.endpoint, Returns: s.passkey.mcpOAuthReturns,
+				Peer: s.passkey.peerResolver.peer, BootstrapAvailable: s.bootstrapAvailable}
+			var forward http.Handler
+			if ok {
+				r, forward = withHubPrincipal(r, p), next
+			}
+			oauth.ServeCallback(w, r, forward, p.SessionID != "")
+			return
+		}
+		if ok {
 			if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions && p.SessionID != "" {
 				w.Header().Add("Vary", "Origin")
 				if !s.passkeyAPIAllowed(w, r) {
@@ -809,11 +820,11 @@ func (s *browserPasskeyHandler) passkeyAuth(next http.Handler) http.Handler {
 			return
 		}
 		if hubShouldRenderLogin(r) {
-			returnURL := *r.URL
-			query := returnURL.Query()
-			query.Del("token")
-			returnURL.RawQuery = query.Encode()
-			target := s.publicPath("/auth/login") + "?return=" + url.QueryEscape(s.publicURLString(&returnURL))
+			// Login only restores paths; do not copy untrusted queries into a second URL.
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Referrer-Policy", "no-referrer")
+			returnPath := s.passkey.endpoint.SafeReturnPath(s.publicPath(r.URL.EscapedPath()))
+			target := s.publicPath("/auth/login") + "?return=" + url.QueryEscape(returnPath)
 			if s.bootstrapAvailable(r) {
 				target = s.publicPath("/auth/setup")
 			}

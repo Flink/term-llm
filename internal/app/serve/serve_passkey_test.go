@@ -146,9 +146,16 @@ func TestWebPasskeyMountAndReturnPaths(t *testing.T) {
 			t.Errorf("unsafe return %q: %q", raw, got)
 		}
 	}
-	u := httptest.NewRequest("GET", "http://backend/session?x=1", nil).URL
-	if got := auth.publicURLString(u); got != "/ui/session?x=1" {
-		t.Errorf("return lost path or retained host: %s", got)
+	_, credential := hubTestAssertionCredential(t)
+	if _, err := auth.passkey.store.CommitFirstCredential(credential, "Local key"); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "http://backend/session?x=1", nil)
+	r.Header.Set("Sec-Fetch-Mode", "navigate")
+	w := httptest.NewRecorder()
+	auth.passkeyAuth(http.NotFoundHandler()).ServeHTTP(w, r)
+	if got := w.Header().Get("Location"); w.Code != http.StatusSeeOther || got != "/ui/auth/login?return=%2Fui%2Fsession" {
+		t.Errorf("login redirect lost path or retained request query: %d %s", w.Code, got)
 	}
 }
 

@@ -250,6 +250,20 @@ intended result is passkey-only access; inherited systemd/container environment
 still counts as explicit bearer configuration.
 
 
+## MCP OAuth callbacks
+
+Configure your ingress or reverse proxy to omit the entire query string from
+logs for the original MCP OAuth callback request. On the Hub, the callback path
+is `/node/<id>/v1/mcp/oauth/callback`, including any Hub base-path prefix. Apply
+the same rule wherever the node callback (`/v1/mcp/oauth/callback`, with any
+applicable prefix) is logged. Log the path only, not the full request URI: the
+query can contain an authorization code and state. Redact logs without stripping
+the query from the request forwarded to the application.
+
+If the Hub asks you to sign in before completing the callback and the sign-in
+continuation expires, return to the node and start the MCP OAuth sign-in again.
+Reloading the old callback URL won't resume the flow.
+
 ## Run as a systemd service
 
 An example unit lives at

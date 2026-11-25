@@ -40,9 +40,28 @@ func TestServeMCPOAuthRoutesProtectFlowButNotStateGatedCallback(t *testing.T) {
 	if callbackRec.Code != http.StatusBadRequest {
 		t.Fatalf("state-gated callback status = %d, want 400 (not auth rejection)", callbackRec.Code)
 	}
+	assertServeMCPOAuthCallbackHeaders(t, callbackRec)
 	body := callbackRec.Body.String()
 	if strings.Contains(body, "secret-code") || strings.Contains(body, "evil.example") {
-		t.Fatalf("callback reflected request secrets: %q", body)
+		t.Fatal("callback reflected request secrets")
+	}
+
+	wrongMethod := httptest.NewRecorder()
+	handler.ServeHTTP(wrongMethod, httptest.NewRequest(http.MethodPost, "/ui/v1/mcp/oauth/callback", nil))
+	if wrongMethod.Code != http.StatusMethodNotAllowed || wrongMethod.Header().Get("Allow") != http.MethodGet {
+		t.Fatalf("callback status = %d, Allow = %q; want 405 and GET", wrongMethod.Code, wrongMethod.Header().Get("Allow"))
+	}
+	assertServeMCPOAuthCallbackHeaders(t, wrongMethod)
+}
+
+func assertServeMCPOAuthCallbackHeaders(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	header := rec.Result().Header
+	if got := header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	if got := header.Get("Referrer-Policy"); got != "no-referrer" {
+		t.Errorf("Referrer-Policy = %q, want no-referrer", got)
 	}
 }
 
@@ -218,10 +237,23 @@ func TestServeMCPOAuthCompletionReconnectsSelectedServer(t *testing.T) {
 				t.Fatal(err)
 			}
 			patchServeMCPOAuthSelection(t, srv, "sess_oauth_completion", tc.final)
-			coordinator := mcpoauth.DefaultCoordinator()
-			if _, accepted := coordinator.CompleteCallback(u.Query().Get("state"), "test-code", "", ""); !accepted {
-				t.Fatal("callback not accepted")
+			query := url.Values{"state": {u.Query().Get("state")}, "code": {"test-code"}}
+			callback := func(rawQuery string) *httptest.ResponseRecorder {
+				r := httptest.NewRequest(http.MethodGet, "/v1/mcp/oauth/callback", nil)
+				r.URL.RawQuery = rawQuery
+				rec := httptest.NewRecorder()
+				srv.handleMCPOAuthCallback(rec, r)
+				assertServeMCPOAuthCallbackHeaders(t, rec)
+				return rec
 			}
+			rawQuery := query.Encode()
+			if rec := callback(rawQuery + "&code=test-code"); rec.Code != http.StatusBadRequest {
+				t.Fatalf("ambiguous callback status = %d, want 400", rec.Code)
+			}
+			if rec := callback(rawQuery); rec.Code != http.StatusOK {
+				t.Fatalf("valid callback after rejection status = %d, want 200", rec.Code)
+			}
+			coordinator := mcpoauth.DefaultCoordinator()
 			completed, err := coordinator.Wait(ctx, flow.ID)
 			if err != nil || completed == nil || completed.State != mcpoauth.FlowSucceeded {
 				t.Fatalf("completion=%#v err=%v", completed, err)

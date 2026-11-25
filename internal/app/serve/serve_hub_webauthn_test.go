@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
+	"github.com/term-llm/term-llm/internal/app/serve/mcpweb"
 	"github.com/term-llm/term-llm/internal/passkeyauth"
 )
 
@@ -325,7 +327,28 @@ func TestHubPasskeyLoginReturnsToMCPOAuthCallback(t *testing.T) {
 		t.Fatalf("callback redirect = %d %q, want Hub login", response.Code, response.Header().Get("Location"))
 	}
 
-	challenge, ceremony := beginHubTestLogin(t, s, remote, login.Query().Get("return"))
+	if response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("Referrer-Policy") != "no-referrer" {
+		t.Fatal("callback redirect lacks cache or referrer protection")
+	}
+	resume := login.Query().Get("return")
+	resumeURL, err := url.Parse(resume)
+	if err != nil || resumeURL.Path != callback || len(resumeURL.Query()) != 1 || resumeURL.Query().Get("_term_llm_resume") == "" {
+		t.Fatalf("expected an opaque callback return, got %q", resume)
+	}
+	if strings.Contains(login.String(), "test-state") || strings.Contains(login.String(), "test%2Bcode") {
+		t.Fatal("callback fields appeared in the login URL")
+	}
+	var binding *http.Cookie
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == mcpweb.HubOAuthCookie {
+			binding = cookie
+		}
+	}
+	if binding == nil || !binding.HttpOnly || binding.Secure != s.passkey.endpoint.Secure || binding.SameSite != http.SameSiteStrictMode || binding.MaxAge <= 0 {
+		t.Fatalf("missing or unsafe browser binding: %v", binding != nil)
+	}
+
+	challenge, ceremony := beginHubTestLogin(t, s, remote, resume)
 	body := hubTestAssertionBody(t, key, credential, challenge, s.passkey.endpoint.Origin, s.passkey.endpoint.RPID)
 	finish := httptest.NewRequest(http.MethodPost, "/hub/api/auth/login/finish", strings.NewReader(body))
 	finish.RemoteAddr = remote
@@ -343,19 +366,79 @@ func TestHubPasskeyLoginReturnsToMCPOAuthCallback(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Redirect != callback+"?"+query {
-		t.Fatalf("login return = %q, want %q", result.Redirect, callback+"?"+query)
+	if result.Redirect != resume {
+		t.Fatalf("login finish did not return the original opaque continuation: %q", result.Redirect)
 	}
-	request = httptest.NewRequest(http.MethodGet, result.Redirect, nil)
+	var session *http.Cookie
 	for _, cookie := range response.Result().Cookies() {
 		if cookie.Name == hubSessionCookieName {
-			request.AddCookie(cookie)
+			session = cookie
 		}
 	}
-	request.Header.Set("Sec-Fetch-Site", "same-origin")
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusNoContent {
-		t.Fatalf("resumed callback = %d %s", response.Code, response.Body.String())
+	if session == nil {
+		t.Fatal("missing passkey session")
+	}
+	checkResume := func(path, site string, want int, cookies ...*http.Cookie) {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		r.Header.Set("Sec-Fetch-Site", site)
+		for _, cookie := range cookies {
+			r.AddCookie(cookie)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("resumed callback = %d %s, want %d", w.Code, w.Body, want)
+		}
+	}
+	checkResume(resume, "same-origin", http.StatusBadRequest, binding)
+	checkResume(resume, "same-origin", http.StatusBadRequest, session)
+	checkResume(resume, "cross-site", http.StatusBadRequest, session, binding)
+	checkResume(strings.Replace(resume, "/alpha/", "/other/", 1), "same-origin", http.StatusBadRequest, session, binding)
+	checkResume(resume, "same-origin", http.StatusNoContent, session, binding)
+	checkResume(resume, "same-origin", http.StatusBadRequest, session, binding)
+}
+
+func TestHubMCPOAuthCallbackValidationAndExpiry(t *testing.T) {
+	const callback = "/node/alpha/v1/mcp/oauth/callback"
+	s := newTestPasskeyHub(t, "")
+	_, credential := hubTestAssertionCredential(t)
+	if _, err := s.passkey.store.CommitFirstCredential(credential, "Local key"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.passkey.mcpOAuthReturns = passkeyauth.NewCeremonies(func() time.Time { return now }, nil)
+	handler := s.handler()
+	for _, query := range []string{"code=test&state=test&iss=one&iss=two", "code=test&state=test&error=%ZZ"} {
+		r := httptest.NewRequest(http.MethodGet, callback+"?"+query, nil)
+		r.Header.Set("Sec-Fetch-Mode", "navigate")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != http.StatusBadRequest || w.Header().Get("Location") != "" || w.Header().Get("Set-Cookie") != "" {
+			t.Fatalf("invalid callback created a continuation: %d %v", w.Code, w.Header())
+		}
+	}
+	r := httptest.NewRequest(http.MethodGet, callback+"?state=test&error=access_denied", nil)
+	r.Header.Set("Sec-Fetch-Mode", "navigate")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	login, err := w.Result().Location()
+	if err != nil || w.Code != http.StatusSeeOther || login.Path != "/auth/login" {
+		t.Fatalf("valid denial redirect = %d %v", w.Code, err)
+	}
+	session, err := s.passkey.sessions.Create(s.passkey.store.Credentials()[0].RecordID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(passkeyauth.CeremonyLifetime)
+	r = httptest.NewRequest(http.MethodGet, login.Query().Get("return"), nil)
+	for _, cookie := range w.Result().Cookies() {
+		r.AddCookie(cookie)
+	}
+	r.AddCookie(&http.Cookie{Name: hubSessionCookieName, Value: session.Token})
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "expired OAuth continuation") {
+		t.Fatalf("expired OAuth continuation = %d %s", w.Code, w.Body)
 	}
 }

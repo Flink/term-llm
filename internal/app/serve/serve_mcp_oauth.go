@@ -241,24 +241,27 @@ func (s *serveServer) handleMCPOAuthFlow(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *serveServer) handleMCPOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	flowID, accepted := mcpoauth.CompletePublicCallback(
-		r.URL.Query().Get("state"), r.URL.Query().Get("code"),
-		r.URL.Query().Get("iss"), r.URL.Query().Get("error"),
-	)
+	query, err := mcpweb.ParseOAuthCallbackQuery(r.URL.RawQuery)
+	if err != nil {
+		http.Error(w, "This authorization callback is invalid, expired, or was already used.", http.StatusBadRequest)
+		return
+	}
+	flowID, accepted := mcpoauth.CompletePublicCallback(query.Get("state"), query.Get("code"), query.Get("iss"), query.Get("error"))
 	if !accepted {
 		http.Error(w, "This authorization callback is invalid, expired, or was already used.", http.StatusBadRequest)
 		return
 	}
-	ok := r.URL.Query().Get("error") == "" && r.URL.Query().Get("code") != ""
+	ok := query.Get("code") != ""
 	flowJSON, _ := json.Marshal(flowID)
 	okJSON, _ := json.Marshal(ok)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'")
 	heading := "Connected"
 	detail := "You can close this window."

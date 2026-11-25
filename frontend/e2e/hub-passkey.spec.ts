@@ -73,16 +73,63 @@ test('enrolls and authenticates with a virtual passkey', async ({ page, context 
   await expect(page.getByText('Revoked 0 other sessions.')).toBeVisible();
 
   await page.getByRole('button', { name: 'Close security' }).click();
-  await context.clearCookies();
-  await page.getByRole('button', { name: 'Security', exact: true }).click();
-  await expect(page).toHaveURL(/\/hub\/auth\/login$/);
-  await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
-  await expect(page).toHaveURL(/\/hub\/$/);
+  const providerURL = 'https://oauth-provider.test/authorize';
+  const nodeID = 'missing-oauth-smoke-node';
+  const callbackPath = `/hub/node/${nodeID}/v1/mcp/oauth/callback`;
+  const callbackURL = new URL(callbackPath, smokeURL);
+  const oauthValues = { code: 'synthetic-oauth-code', state: 'synthetic-oauth-state' };
+  callbackURL.search = new URLSearchParams(oauthValues).toString();
+  await page.route(providerURL, (route) =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: `<a href="${callbackURL.href.replaceAll('&', '&amp;')}">Return to Hub</a>`,
+    }),
+  );
+  await page.goto(providerURL);
+  await expect(page).toHaveURL(providerURL);
+  // Click from a different site so Chromium applies its top-level navigation cookie rules.
+  await page.getByRole('link', { name: 'Return to Hub' }).click();
+  const loginURL = new URL('/hub/auth/login', smokeURL);
+  await expect(page).toHaveURL(
+    (url) => url.origin === loginURL.origin && url.pathname === loginURL.pathname,
+  );
+  const login = new URL(page.url());
+  expect([...login.searchParams.keys()]).toEqual(['return']);
+  const returnPath = login.searchParams.get('return') ?? '';
+  const continuation = new URL(returnPath, smokeURL);
+  expect(continuation.pathname).toBe(callbackPath);
+  expect(returnPath).toBe(`${callbackPath}${continuation.search}`);
+  expect([...continuation.searchParams.keys()]).toEqual(['_term_llm_resume']);
+  expect(continuation.searchParams.get('_term_llm_resume')).toBeTruthy();
+  for (const value of Object.values(oauthValues)) {
+    expect(login.href).not.toContain(value);
+  }
+  expect(
+    (await context.cookies()).find((cookie) => cookie.name === 'term_llm_hub_mcp_oauth'),
+  ).toMatchObject({
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Strict',
+  });
+
+  const [resumed] = await Promise.all([
+    page.waitForResponse((response) => response.url() === continuation.href),
+    page.getByRole('button', { name: 'Sign in with a passkey' }).click(),
+  ]);
+  await expect(page).toHaveURL(continuation.href);
+  for (const value of Object.values(oauthValues)) {
+    expect(page.url()).not.toContain(value);
+  }
+  // Reaching node lookup proves the continuation was accepted, even with no node to forward to.
+  expect(resumed.status()).toBe(404);
+  expect(await resumed.text()).toContain(`unknown node "${nodeID}"`);
+
+  await page.goto(smokeURL);
   await page.getByRole('button', { name: 'Security', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
-
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page).toHaveURL(/\/hub\/auth\/login$/);
+
   const { credentials } = await cdp.send('WebAuthn.getCredentials', {
     authenticatorId: primaryAuthenticatorId,
   });
