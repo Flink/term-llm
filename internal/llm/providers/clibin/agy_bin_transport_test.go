@@ -49,7 +49,10 @@ func newAgyTransportProvider(t *testing.T, binary string, env map[string]string)
 func runAgyTestTurn(t *testing.T, ctx context.Context, p *AgyBinProvider, expectedID, prompt string) (<-chan core.Event, error) {
 	t.Helper()
 	events := make(chan core.Event, 16)
-	_, err := p.runCommand(ctx, p.buildArgs(core.Request{}, expectedID), prompt, "", expectedID, false, eventSender{ctx: ctx, ch: events}, false)
+	_, err := p.runCommand(ctx, p.buildArgs(core.Request{}, expectedID), agyRunOptions{
+		prompt:                 prompt,
+		expectedConversationID: expectedID,
+	}, eventSender{ctx: ctx, ch: events})
 	return events, err
 }
 

@@ -102,17 +102,23 @@ func (p *AgyBinProvider) stageAgyPromptInput(prompt string, parts []agyproxy.Pro
 	return p.stageAgyPrompt(prompt)
 }
 
-func (p *AgyBinProvider) runCommand(ctx context.Context, args []string, prompt, workspaceDir, expectedConversationID string, debug bool, send eventSender, exposeBridge bool) (*agyStreamState, error) {
-	return p.runCommandWithParts(ctx, args, prompt, nil, workspaceDir, expectedConversationID, debug, send, exposeBridge)
+type agyRunOptions struct {
+	prompt                 string
+	parts                  []agyproxy.PromptPart
+	expectedConversationID string
+	requestedModel         string
+	requestedEff           string
+	debug                  bool
+	exposeBridge           bool
+	ephemeral              bool
 }
 
-// runCommandWithParts executes one agy process for one engine stream. The whole
-// prompt travels as a single NDJSON user event on stdin; argv carries flags
-// only, so a large transcript can no longer hit the per-argument E2BIG limit.
-// When parts are non-empty (multimodal turns with images), the parts are staged
-// in the private agy home and restored into Gemini inlineData parts by agyproxy.
-func (p *AgyBinProvider) runCommandWithParts(ctx context.Context, args []string, prompt string, parts []agyproxy.PromptPart, workspaceDir, expectedConversationID string, debug bool, send eventSender, exposeBridge bool) (*agyStreamState, error) {
-	wirePrompt, staged, err := p.stageAgyPromptInput(prompt, parts)
+// runCommand executes one agy process for one engine stream. The whole prompt
+// travels as a single NDJSON user event on stdin; argv carries flags only, so
+// a large transcript cannot hit the per-argument E2BIG limit. On multimodal
+// turns, prompt parts are staged privately for agyproxy to restore.
+func (p *AgyBinProvider) runCommand(ctx context.Context, args []string, opts agyRunOptions, send eventSender) (*agyStreamState, error) {
+	wirePrompt, staged, err := p.stageAgyPromptInput(opts.prompt, opts.parts)
 	if err != nil {
 		return nil, err
 	}
@@ -120,11 +126,11 @@ func (p *AgyBinProvider) runCommandWithParts(ctx context.Context, args []string,
 	if err != nil {
 		return nil, err
 	}
-	if debug {
+	if opts.debug {
 		// Original prompt bytes describe the conversation input; stdin bytes
 		// describe the transport. Neither contains prompt text.
 		runtimeoutput.Printf("[agy-bin] starting agy with model %q effort %q (prompt_bytes=%d stdin_bytes=%d staged=%t parts=%d)\n",
-			core.ChooseModel(argFlagValue(args, "--model"), p.model), argFlagValue(args, "--effort"), len(prompt), len(input), staged, len(parts))
+			opts.requestedModel, opts.requestedEff, len(opts.prompt), len(input), staged, len(opts.parts))
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -133,20 +139,11 @@ func (p *AgyBinProvider) runCommandWithParts(ctx context.Context, args []string,
 		return nil, err
 	}
 	defer owned.Close()
-	state, err := p.collectAgyStream(runCtx, cancel, owned, stdout, stderr, prompt, expectedConversationID, debug, send, exposeBridge)
+	state, err := p.collectAgyStream(runCtx, cancel, owned, stdout, stderr, opts, send)
 	if err != nil {
 		return nil, &agyProcessError{err: err}
 	}
 	return state, nil
-}
-
-func argFlagValue(args []string, flag string) string {
-	for i := 0; i+1 < len(args); i++ {
-		if args[i] == flag {
-			return args[i+1]
-		}
-	}
-	return ""
 }
 
 // startAgyCommand prepares and starts the subprocess. Every error it returns is
@@ -193,13 +190,13 @@ func (p *AgyBinProvider) startAgyCommand(ctx context.Context, args []string, inp
 
 // collectAgyStream drains stdout/stderr, dispatches bridge tools, and validates
 // the terminal result. Every error here is post-start.
-func (p *AgyBinProvider) collectAgyStream(runCtx context.Context, cancel context.CancelFunc, owned *procutil.Command, stdout, stderr io.Reader, prompt, expectedConversationID string, debug bool, send eventSender, exposeBridge bool) (*agyStreamState, error) {
+func (p *AgyBinProvider) collectAgyStream(runCtx context.Context, cancel context.CancelFunc, owned *procutil.Command, stdout, stderr io.Reader, opts agyRunOptions, send eventSender) (*agyStreamState, error) {
 	lineCh := make(chan string, 64)
 	scanErrCh := make(chan error, 1)
 	stderrDone := make(chan struct{})
 	var stderrMu, stdoutMu sync.Mutex
 	var stderrTail, stdoutTail []string
-	redact := p.diagnosticRedactor(prompt)
+	redact := p.diagnosticRedactor(opts.prompt)
 	go func() {
 		defer close(lineCh)
 		sc := bufio.NewScanner(stdout)
@@ -224,22 +221,27 @@ func (p *AgyBinProvider) collectAgyStream(runCtx context.Context, cancel context
 		defer close(stderrDone)
 		_ = drainCLIDiagnosticLines(stderr, func(rawLine string) {
 			line := redact(rawLine)
-			if debug {
+			if opts.debug {
 				runtimeoutput.Printf("[agy stderr] %s\n", line)
 			}
 			recordCLITailLine(&stderrMu, &stderrTail, line, agyStderrTailMaxLines)
 		})
 	}()
 	bridge := &cliTurnBridge{toolReqCh: make(chan cliToolRequest, 64), done: make(chan struct{})}
-	if exposeBridge {
+	if opts.exposeBridge {
 		p.cliToolBridgeState.activate(bridge, send.ch)
 		defer p.cliToolBridgeState.deactivate(bridge)
 	}
 	defer close(bridge.done)
-	expectedConversationID = strings.TrimSpace(expectedConversationID)
+	expectedConversationID := strings.TrimSpace(opts.expectedConversationID)
 	state := &agyStreamState{
 		conversationID:         expectedConversationID,
 		expectedConversationID: expectedConversationID,
+		requestedModel:         opts.requestedModel,
+		requestedEff:           opts.requestedEff,
+		exposeBridge:           opts.exposeBridge,
+		ephemeral:              opts.ephemeral,
+		isolation:              p.isolation,
 	}
 	dispatchErr := p.dispatchEvents(runCtx, lineCh, bridge.toolReqCh, send, state)
 	if dispatchErr != nil {

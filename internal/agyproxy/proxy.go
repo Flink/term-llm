@@ -48,23 +48,25 @@ const (
 // Code host; CONNECT requests for every other host are tunneled without TLS
 // termination.
 type Server struct {
-	mu            sync.Mutex
-	traceMu       sync.Mutex
-	server        *http.Server
-	listener      net.Listener
-	transport     *http.Transport
-	authority     *mitmca.Authority
-	caPath        string
-	proxyToken    string
-	upstreamProxy string
-	upstreamCA    string
-	upstream      *url.URL // immutable for the running server
-	requireMCP    bool
-	artifactRoot  string
-	promptRoot    string
-	filtered      atomic.Int64
-	connections   map[net.Conn]struct{}
-	running       bool
+	mu                  sync.Mutex
+	traceMu             sync.Mutex
+	server              *http.Server
+	listener            net.Listener
+	transport           *http.Transport
+	authority           *mitmca.Authority
+	caPath              string
+	proxyToken          string
+	upstreamProxy       string
+	upstreamCA          string
+	upstream            *url.URL // immutable for the running server
+	requireMCP          bool
+	artifactRoot        string
+	promptRoot          string
+	modelWindows        map[string]int
+	lastGenerationModel string
+	filtered            atomic.Int64
+	connections         map[net.Conn]struct{}
+	running             bool
 }
 
 // SetUpstream configures an optional authenticated HTTP(S) CONNECT proxy used for all
@@ -141,14 +143,6 @@ func (s *Server) Start() (proxyURL, caPath string, err error) {
 	return proxy.String(), path, nil
 }
 
-// SetRequireMCP controls whether tool-enabled generations lacking bridge tools are
-// rejected. Providers should enable this for turns exposing term-llm tools.
-func (s *Server) SetRequireMCP(required bool) {
-	s.mu.Lock()
-	s.requireMCP = required
-	s.mu.Unlock()
-}
-
 // SetArtifactRoot restricts agy spill-file rehydration to the provider's
 // private antigravity-cli/brain directory. The directory may not exist yet when
 // configured; every candidate is resolved and containment-checked at read time.
@@ -169,7 +163,10 @@ func (s *Server) SetPromptRoot(home string) {
 // BeginTurn resets interception evidence and configures dispatcher enforcement.
 func (s *Server) BeginTurn(requireMCP bool) {
 	s.filtered.Store(0)
-	s.SetRequireMCP(requireMCP)
+	s.mu.Lock()
+	s.requireMCP = requireMCP
+	s.lastGenerationModel = ""
+	s.mu.Unlock()
 }
 
 // FilteredGenerations reports successfully rewritten generation requests in the current turn.
@@ -418,7 +415,7 @@ func (s *Server) forward(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "agy tool-filter proxy rejected oversized request", http.StatusBadGateway)
 			return
 		}
-		filtered, verified, err := processGenerationRequestWithPrompts(body, artifactRoot, promptRoot, requireMCP, maxRequestBody)
+		filtered, verified, model, err := processGenerationRequestDetails(body, artifactRoot, promptRoot, requireMCP, maxRequestBody)
 		if err != nil {
 			http.Error(w, "agy tool-filter proxy rejected request: "+err.Error(), http.StatusBadGateway)
 			return
@@ -438,6 +435,7 @@ func (s *Server) forward(w http.ResponseWriter, req *http.Request) {
 		// were exposed.
 		if !requireMCP || verified {
 			s.filtered.Add(1)
+			s.recordGenerationModel(model)
 		}
 	}
 	resp, err := transport.RoundTrip(req)
@@ -458,22 +456,8 @@ func (s *Server) forward(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	flusher, _ := w.(http.Flusher)
-	buffer := make([]byte, 32<<10)
-	for {
-		n, readErr := resp.Body.Read(buffer)
-		if n > 0 {
-			if _, writeErr := w.Write(buffer[:n]); writeErr != nil {
-				return
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
-		if readErr != nil {
-			return
-		}
-	}
+	captureCatalog := resp.StatusCode == http.StatusOK && isAvailableModelsPath(req.URL.Path)
+	s.streamResponse(w, resp, captureCatalog)
 }
 
 type generationTraceRecord struct {
@@ -564,6 +548,8 @@ func (s *Server) Stop(ctx context.Context) error {
 	s.upstream = nil
 	s.artifactRoot = ""
 	s.promptRoot = ""
+	s.modelWindows = nil
+	s.lastGenerationModel = ""
 	s.connections = nil
 	s.mu.Unlock()
 	for _, conn := range connections {

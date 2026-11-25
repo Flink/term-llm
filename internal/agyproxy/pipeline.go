@@ -37,43 +37,49 @@ func processGenerationRequest(body []byte, artifactRoot string, requireMCP bool,
 }
 
 func processGenerationRequestWithPrompts(body []byte, artifactRoot, promptRoot string, requireMCP bool, sizeLimit int) ([]byte, bool, error) {
+	out, verified, _, err := processGenerationRequestDetails(body, artifactRoot, promptRoot, requireMCP, sizeLimit)
+	return out, verified, err
+}
+
+func processGenerationRequestDetails(body []byte, artifactRoot, promptRoot string, requireMCP bool, sizeLimit int) ([]byte, bool, string, error) {
 	if sizeLimit > 0 && len(body) > sizeLimit {
-		return nil, false, errors.New("oversized generation request")
+		return nil, false, "", errors.New("oversized generation request")
 	}
 	root, err := decodeGenerationRequest(body)
 	if err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
+	model, _ := root["model"].(string)
 	request, ok := root["request"].(map[string]any)
 	if !ok {
-		return nil, false, errors.New("generation request missing request object")
+		return nil, false, "", errors.New("generation request missing request object")
 	}
 	promptsExpanded, err := expandStagedPrompts(request, strings.TrimSpace(promptRoot))
 	if err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	expanded := expandAgyArtifacts(request, strings.TrimSpace(artifactRoot)) || promptsExpanded
 	// Check the expanded size BEFORE filtering; removed declarations must not
 	// hide an oversized expansion. Count the exact Marshal size without a
 	// second serialization or an intermediate expanded request buffer.
 	if expanded && sizeLimit > 0 && generationJSONSize(root) > sizeLimit {
-		return nil, false, errors.New("oversized expanded generation request")
+		return nil, false, "", errors.New("oversized expanded generation request")
 	}
 	filtered, verified, err := filterGenerationObject(request, requireMCP)
 	if err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	if !expanded && !filtered {
-		return body, verified, nil
+		return body, verified, model, nil
 	}
 	out, err := json.Marshal(root)
 	if err != nil {
-		return nil, false, fmt.Errorf("encode generation request: %w", err)
+		return nil, false, "", fmt.Errorf("encode generation request: %w", err)
 	}
 	if sizeLimit > 0 && len(out) > sizeLimit {
-		return nil, false, errors.New("oversized forwarded generation request")
+		return nil, false, "", errors.New("oversized forwarded generation request")
 	}
-	return out, verified, nil
+	return out, verified, model, nil
 }
 
 // generationJSONSize handles only the JSON types produced by our UseNumber

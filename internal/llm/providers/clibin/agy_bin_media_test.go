@@ -140,9 +140,13 @@ func TestAgyRunCommandWithPartsStagesEnvelopeForProxyExpansion(t *testing.T) {
 		t.Fatal("expected non-empty PromptParts for image turn")
 	}
 	events := make(chan core.Event, 16)
-	_, err = p.runCommandWithParts(context.Background(), p.buildArgs(core.Request{}, ""), plan.Prompt, plan.PromptParts, "", "", false, eventSender{ctx: context.Background(), ch: events}, false)
+	ctx := context.Background()
+	_, err = p.runCommand(ctx, p.buildArgs(core.Request{}, ""), agyRunOptions{
+		prompt: plan.Prompt,
+		parts:  plan.PromptParts,
+	}, eventSender{ctx: ctx, ch: events})
 	if err != nil {
-		t.Fatalf("runCommandWithParts: %v", err)
+		t.Fatalf("runCommand: %v", err)
 	}
 	raw, err := os.ReadFile(captureFile)
 	if err != nil {

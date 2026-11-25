@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -194,5 +195,102 @@ func TestTUIContextWindowNewPreservesLiveEngine(t *testing.T) {
 				t.Fatalf("New replaced live reading %+v with %+v", live, got)
 			}
 		})
+	}
+}
+
+func TestTUIStatusLineAndStatsShowReportedContextUsage(t *testing.T) {
+	saved := reportedWindowSession()
+	saved.ProviderKey, saved.Model = "agy-bin", "gemini-4-neon"
+	p := mockprovider.NewMockProvider("agy-bin").WithCapabilities(core.Capabilities{ManagesOwnContext: true})
+	m := New(&config.Config{DefaultProvider: "agy-bin"}, p, engine.NewEngine(p, nil), "agy-bin", "gemini-4-neon", nil, 20, false, false, false, nil, "", "", false, "", nil, saved, false, nil, false, false, "", "", false)
+	m.width = 120
+
+	// Live reading with known window appears in both status line and /stats,
+	// including while streaming.
+	streamWindowReading(t, m, p, core.ContextUsage{UsedTokens: 164_500, Window: 1_048_576})
+
+	m.streaming = true
+	streamingStatus := ui.StripANSI(m.renderStatusLine())
+	if !strings.Contains(streamingStatus, "~165K/1M") {
+		t.Fatalf("streaming status line %q missing reported context ~165K/1M", streamingStatus)
+	}
+
+	m.streaming = false
+	idleStatus := ui.StripANSI(m.renderStatusLine())
+	if !strings.Contains(idleStatus, "~165K/1M") {
+		t.Fatalf("idle status line %q missing reported context ~165K/1M", idleStatus)
+	}
+
+	modal := m.renderStatsModal()
+	if !strings.Contains(modal, "164.5k/1.05M tokens") {
+		t.Fatalf("stats modal did not show reported context/window:\n%s", modal)
+	}
+	if strings.Contains(modal, "context window unknown") {
+		t.Fatalf("stats modal unexpectedly claimed unknown window:\n%s", modal)
+	}
+
+	// Reading with unknown window shows token count without guessing a window.
+	streamWindowReading(t, m, p, core.ContextUsage{UsedTokens: 42_000})
+	unknownStatus := ui.StripANSI(m.renderStatusLine())
+	if !strings.Contains(unknownStatus, "~42K") || strings.Contains(unknownStatus, "~42K/") {
+		t.Fatalf("unknown-window status line %q should show ~42K without a limit", unknownStatus)
+	}
+	unknownModal := m.renderStatsModal()
+	if !strings.Contains(unknownModal, "context window unknown") || !strings.Contains(unknownModal, "42k tokens used") {
+		t.Fatalf("unknown-window stats modal unexpected:\n%s", unknownModal)
+	}
+}
+
+func TestTUIStatusLineAndStatsShowRestoredAgyBinContextWindow(t *testing.T) {
+	saved := reportedWindowSession()
+	saved.Provider, saved.ProviderKey, saved.Model = "agy-bin", "agy-bin", "gemini-4-neon"
+	saved.LastTotalTokens, saved.LastContextWindow = 96_400, 1_048_576
+	p := mockprovider.NewMockProvider("agy-bin").WithCapabilities(core.Capabilities{ManagesOwnContext: true})
+	m := New(&config.Config{DefaultProvider: "agy-bin"}, p, engine.NewEngine(p, nil), "agy-bin", "gemini-4-neon", nil, 20, false, false, false, nil, "", "", false, "", nil, saved, false, nil, false, false, "", "", false)
+	m.width = 120
+
+	idleStatus := ui.StripANSI(m.renderStatusLine())
+	if !strings.Contains(idleStatus, "~96K/1M") {
+		t.Fatalf("restored idle status line %q missing ~96K/1M", idleStatus)
+	}
+	m.streaming = true
+	streamingStatus := ui.StripANSI(m.renderStatusLine())
+	if !strings.Contains(streamingStatus, "~96K/1M") {
+		t.Fatalf("restored streaming status line %q missing ~96K/1M", streamingStatus)
+	}
+	modal := m.renderStatsModal()
+	if !strings.Contains(modal, "96.4k/1.05M tokens") {
+		t.Fatalf("restored stats modal missing 96.4k/1.05M tokens:\n%s", modal)
+	}
+}
+
+func TestTUIStatusLineHidesStaleTokensForNonManagedUnknownLimitProvider(t *testing.T) {
+	p := mockprovider.NewMockProvider("mock")
+	eng := engine.NewEngine(p, nil)
+	eng.SetContextEstimateBaseline(50_000, 2)
+	m := New(&config.Config{DefaultProvider: "mock"}, p, eng, "mock", "unknown-model", nil, 20, false, false, false, nil, "", "", false, "", nil, nil, false, nil, false, false, "", "", false)
+	m.width = 120
+
+	status := ui.StripANSI(m.renderStatusLine())
+	if strings.Contains(status, "~50K") {
+		t.Fatalf("non-managed provider with unknown limit leaked stale baseline in status line: %q", status)
+	}
+}
+
+func TestTUIStatusLineHidesStaleTokensForManagedProviderResumingDifferentProvider(t *testing.T) {
+	saved := reportedWindowSession()
+	saved.Provider, saved.ProviderKey, saved.Model = "Anthropic", "anthropic", "claude-sonnet-4-6"
+	saved.LastTotalTokens, saved.LastContextWindow = 50_000, 200_000
+
+	p := mockprovider.NewMockProvider("grok-bin").WithCapabilities(core.Capabilities{ManagesOwnContext: true})
+	m := New(&config.Config{DefaultProvider: "grok-bin"}, p, engine.NewEngine(p, nil), "grok-bin", "grok-4.6", nil, 20, false, false, false, nil, "", "", false, "", nil, saved, false, nil, false, false, "", "", false)
+	m.width = 120
+
+	if got := m.engine.ContextUsage(); got != (core.ContextUsage{}) {
+		t.Fatalf("managed provider resuming different provider inherited context = %+v, want empty", got)
+	}
+	status := ui.StripANSI(m.renderStatusLine())
+	if strings.Contains(status, "~50K") {
+		t.Fatalf("managed provider resuming different provider leaked stale baseline in status line: %q", status)
 	}
 }

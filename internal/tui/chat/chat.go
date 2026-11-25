@@ -1362,8 +1362,10 @@ func (m *Model) configureContextManagementForSession() {
 		// Initial attachment can receive an engine that is already live.
 		return
 	}
-	m.engine.SetContextEstimateBaseline(m.sess.LastTotalTokens, m.sess.LastMessageCount)
-	m.engine.RestoreContextWindow(savedProvider, savedModel, m.sess.LastContextWindow)
+	if !m.provider.Capabilities().ManagesOwnContext || savedProvider == provider {
+		m.engine.SetContextEstimateBaseline(m.sess.LastTotalTokens, m.sess.LastMessageCount)
+		m.engine.RestoreContextWindow(savedProvider, savedModel, m.sess.LastContextWindow)
+	}
 }
 
 func (m *Model) persistContextEstimate(ctx context.Context) {

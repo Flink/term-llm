@@ -56,22 +56,14 @@ func (m *Model) cmdStats() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) renderStatsModal() string {
-	limit := 0
+	var reading core.ContextUsage
 	if m.engine != nil {
-		limit = m.engine.InputLimit()
+		reading = m.engine.ContextUsage()
 	}
-	if limit <= 0 {
-		limit = llm.InputLimitForProviderModel(m.providerKey, m.modelName)
-	}
-	used := 0
-	if m.engine != nil {
-		used = m.engine.LastTotalTokens()
-	}
-	if used <= 0 {
-		used = m.estimateContextTokensCached()
-	}
-	if used < 0 {
-		used = 0
+	limit := llm.SessionDisplayInputLimit(m.providerKey, m.modelName, reading.Window)
+	currentTokens := max(0, reading.UsedTokens)
+	if currentTokens == 0 {
+		currentTokens = max(0, m.estimateContextTokensCached())
 	}
 
 	roleCounts := map[string]int{}
@@ -80,7 +72,6 @@ func (m *Model) renderStatsModal() string {
 		roleCounts[string(msg.Role)]++
 	}
 
-	currentTokens := used
 	if currentTokens <= 0 {
 		currentTokens = m.estimateMessagesTokens(activeMessages)
 	}
