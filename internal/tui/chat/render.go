@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -1523,31 +1522,8 @@ func (m *Model) statusLineWorktreePart() string {
 	return "wt:" + name
 }
 
-func contextMeterLabel(used, window int) string {
-	return fmt.Sprintf("~%s/%s", cmp.Or(llm.FormatTokenCount(used), "0"), llm.FormatTokenCount(window))
-}
-
 func (m *Model) statusLineUsageParts() (string, string) {
-	usageBase := ""
-	if m.engine != nil {
-		if m.provider != nil && m.provider.Capabilities().ManagesOwnContext {
-			reading := m.engine.ContextUsage()
-			if reading.Window > 0 {
-				usageBase = contextMeterLabel(reading.UsedTokens, reading.Window)
-			} else if used := llm.FormatTokenCount(reading.UsedTokens); used != "" {
-				usageBase = "~" + used
-			}
-		} else if limit := m.engine.InputLimit(); limit > 0 {
-			contextTokens := 0
-			if !m.streaming {
-				contextTokens = m.engine.LastTotalTokens()
-			}
-			if contextTokens <= 0 {
-				contextTokens = m.estimateContextTokensCached()
-			}
-			usageBase = contextMeterLabel(contextTokens, limit)
-		}
-	}
+	usageBase := ui.ContextMeterForEngine(m.engine, m.managesOwnContext(), m.streaming, m.estimateContextTokensCached)
 
 	cachedInputTokens := 0
 	if m.stats != nil && m.stats.CachedInputTokens > 0 {
