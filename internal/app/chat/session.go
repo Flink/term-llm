@@ -500,7 +500,7 @@ func (r *chatInvocation) buildChatSessionRuntime(ctx context.Context, launch cha
 	model.SetFastProviderResolver(func(key, name string) (core.Provider, error) {
 		return runtime.AuxProviderForPolicy(cfg, effectivePolicy, runtime.ModelSelection{Provider: key, Model: name}, key, cfg.DefaultProvider)
 	})
-	model.SetProviderUsageFetcher(appusage.LiveReport)
+	model.SetProviderUsageFetcher(appusage.NewLiveFetcher(cfg))
 	model.SetAgentMentionCapability(RuntimeAgentMentionCapability{Engine: model.CurrentAgentMentionEngine, Manager: toolMgr})
 	if sess != nil {
 		model.SetConversationBranch(sessionIsConversationBranch(context.Background(), store, sess.ID))

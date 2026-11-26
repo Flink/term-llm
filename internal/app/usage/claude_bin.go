@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
+	"github.com/term-llm/term-llm/internal/app/proxyrun"
+	"github.com/term-llm/term-llm/internal/config"
 	"github.com/term-llm/term-llm/internal/llm/providerusage"
 )
 
@@ -122,9 +124,24 @@ func loadClaudeBinUsage(parent context.Context) (json.RawMessage, string, error)
 	if err != nil {
 		return nil, "", err
 	}
+	return loadClaudeBinUsageWithConnection(parent, connection, proxied)
+}
+
+func loadClaudeBinUsageWithConfig(parent context.Context, cfg *config.Config, providerName string) (json.RawMessage, string, error) {
+	connection, proxied, err := configuredClaudeUsageProxyFor(cfg, providerName)
+	if err != nil {
+		return nil, "", err
+	}
+	return loadClaudeBinUsageWithConnection(parent, connection, proxied)
+}
+
+func loadClaudeBinUsageWithConnection(parent context.Context, connection proxyrun.Connection, proxied bool) (json.RawMessage, string, error) {
 	binary, err := exec.LookPath("claude")
 	if err != nil {
 		return nil, "", errors.New("claude-bin usage requires the Claude Code CLI in PATH")
+	}
+	if parent == nil {
+		parent = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()

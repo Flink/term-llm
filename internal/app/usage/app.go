@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -203,10 +204,7 @@ func copilotUsageFlagsChanged(cmd *cobra.Command) bool {
 	return false
 }
 
-var (
-	fetchDirectProviderUsage = fetchConfiguredDirectProviderUsage
-	loadProviderUsageConfig  = config.LoadWithoutCredentials
-)
+var loadProviderUsageConfig = config.LoadWithoutCredentials
 
 func (o *Options) runDirectProviderUsage(cmd *cobra.Command, provider string) error {
 	if o.Since != "" || o.Until != "" || o.Breakdown || o.IncludeExternal {
@@ -225,11 +223,16 @@ func (o *Options) runDirectProviderUsage(cmd *cobra.Command, provider string) er
 		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 	}
-	apiKey, err := resolvedProviderUsageAPIKey(provider)
+	cfg, err := loadProviderUsageConfig()
+	if err != nil {
+		return fmt.Errorf("load config for %s usage: %w", provider, err)
+	}
+	providerType := config.InferProviderType(provider, "")
+	apiKey, err := resolvedProviderUsageAPIKeyFromConfig(cfg, provider, providerType)
 	if err != nil {
 		return err
 	}
-	report, err := fetchDirectProviderUsage(ctx, provider, apiKey)
+	report, err := fetchDirectProviderUsageWithConfig(ctx, cfg, provider, providerType, apiKey)
 	if err != nil {
 		return fmt.Errorf("failed to fetch %s usage: %w", provider, err)
 	}
@@ -244,26 +247,25 @@ func (o *Options) runDirectProviderUsage(cmd *cobra.Command, provider string) er
 	return nil
 }
 
-func resolvedProviderUsageAPIKey(provider string) (string, error) {
-	if provider != "opencode-go" {
+func resolvedProviderUsageAPIKeyFromConfig(cfg *config.Config, providerKey string, providerType config.ProviderType) (string, error) {
+	if providerType != config.ProviderTypeOpenCodeGo || cfg == nil {
 		return "", nil
 	}
-	cfg, err := loadProviderUsageConfig()
-	if err != nil {
-		return "", fmt.Errorf("load config for %s usage: %w", provider, err)
-	}
-	if cfg == nil {
-		return "", nil
-	}
-	providerCfg, err := cfg.GetResolvedProviderConfig(provider)
-	if err != nil {
-		return "", fmt.Errorf("resolve %s credentials: %w", provider, err)
-	}
+	providerCfg := cfg.GetProviderConfig(providerKey)
 	if providerCfg == nil {
 		return "", nil
 	}
+	if providerCfg.Env != nil {
+		providerCfg.Env = maps.Clone(providerCfg.Env)
+	}
+	if providerCfg.Headers != nil {
+		providerCfg.Headers = maps.Clone(providerCfg.Headers)
+	}
+	if err := providerCfg.ResolveCredentials(providerKey); err != nil {
+		return "", fmt.Errorf("resolve %s credentials: %w", providerKey, err)
+	}
 	if err := providerCfg.ResolveForInference(); err != nil {
-		return "", fmt.Errorf("resolve %s API key: %w", provider, err)
+		return "", fmt.Errorf("resolve %s API key: %w", providerKey, err)
 	}
 	return strings.TrimSpace(providerCfg.ResolvedAPIKey), nil
 }

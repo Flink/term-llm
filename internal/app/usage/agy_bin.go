@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
+	"github.com/term-llm/term-llm/internal/config"
 	"github.com/term-llm/term-llm/internal/llm/providers/clibin"
 	"github.com/term-llm/term-llm/internal/llm/providerusage"
+	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
 const agyBinUsageMinimumVersion = "1.1.11"
@@ -95,11 +97,23 @@ func runAgyBinUsage(parent context.Context, out io.Writer, jsonOutput bool) erro
 
 // withAgyBinUsage fetches agy's quota data and passes it to handle. One
 // redaction scope keeps the proxy token out of every error, including handle's.
-func withAgyBinUsage(parent context.Context, handle func(raw json.RawMessage, report agyBinUsageReport, source string) error) (retErr error) {
+func withAgyBinUsage(parent context.Context, handle func(raw json.RawMessage, report agyBinUsageReport, source string) error) error {
 	binding, err := configuredAgyUsageProxy()
 	if err != nil {
 		return err
 	}
+	return withAgyBinUsageBinding(parent, binding, handle)
+}
+
+func withAgyBinUsageWithConfig(parent context.Context, cfg *config.Config, providerName string, handle func(raw json.RawMessage, report agyBinUsageReport, source string) error) error {
+	binding, err := configuredAgyUsageProxyFor(cfg, providerName)
+	if err != nil {
+		return err
+	}
+	return withAgyBinUsageBinding(parent, binding, handle)
+}
+
+func withAgyBinUsageBinding(parent context.Context, binding *proxyclient.Binding, handle func(raw json.RawMessage, report agyBinUsageReport, source string) error) (retErr error) {
 	if binding != nil {
 		defer func() { retErr = redactAgyProxyToken(retErr, binding.Token) }()
 	}

@@ -60,10 +60,18 @@ var claudeClient = clientSpec{"Claude", "claude", "claude-bin", proxyclient.Vali
 // any. A configured but invalid binding is an error: it never falls back to a
 // local Claude login or vendor credential.
 func ResolveConfiguredConnection(cfg *config.Config) (Connection, bool, error) {
+	return ResolveConfiguredConnectionFor(cfg, "claude-bin")
+}
+
+// ResolveConfiguredConnectionFor returns the explicitly bound claude-bin route
+// for providerName (including custom claude-bin aliases). A configured but
+// invalid binding is an error: it never falls back to a local Claude login or
+// vendor credential.
+func ResolveConfiguredConnectionFor(cfg *config.Config, providerName string) (Connection, bool, error) {
 	if cfg == nil {
 		return Connection{}, false, nil
 	}
-	provider := cfg.GetProviderConfig("claude-bin")
+	provider := cfg.GetProviderConfig(providerName)
 	if provider == nil || strings.TrimSpace(provider.ProxyBinding) == "" {
 		return Connection{}, false, nil
 	}

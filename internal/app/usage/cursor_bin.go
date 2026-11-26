@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
+	"github.com/term-llm/term-llm/internal/config"
 	"github.com/term-llm/term-llm/internal/llm/providerusage"
 	"github.com/term-llm/term-llm/internal/providerhttp"
 )
@@ -114,6 +115,17 @@ func loadCursorBinUsage(parent context.Context) (json.RawMessage, cursorBinUsage
 	if err := refuseLocalProxyAllowance("cursor-bin"); err != nil {
 		return nil, cursorBinUsageReport{}, err
 	}
+	return loadCursorBinUsageDirect(parent)
+}
+
+func loadCursorBinUsageWithConfig(parent context.Context, cfg *config.Config, providerName string) (json.RawMessage, cursorBinUsageReport, error) {
+	if err := refuseLocalProxyAllowanceFor(cfg, providerName); err != nil {
+		return nil, cursorBinUsageReport{}, err
+	}
+	return loadCursorBinUsageDirect(parent)
+}
+
+func loadCursorBinUsageDirect(parent context.Context) (json.RawMessage, cursorBinUsageReport, error) {
 	if parent == nil {
 		parent = context.Background()
 	}

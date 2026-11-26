@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/term-llm/term-llm/internal/app/proxyrun"
+	"github.com/term-llm/term-llm/internal/config"
 	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
@@ -19,7 +20,11 @@ func configuredClaudeUsageProxy() (proxyrun.Connection, bool, error) {
 	if err != nil {
 		return proxyrun.Connection{}, false, errors.New("could not load Claude proxy usage configuration")
 	}
-	connection, configured, err := proxyrun.ResolveConfiguredConnection(cfg)
+	return configuredClaudeUsageProxyFor(cfg, "claude-bin")
+}
+
+func configuredClaudeUsageProxyFor(cfg *config.Config, providerName string) (proxyrun.Connection, bool, error) {
+	connection, configured, err := proxyrun.ResolveConfiguredConnectionFor(cfg, providerName)
 	if err != nil {
 		return proxyrun.Connection{}, true, err
 	}

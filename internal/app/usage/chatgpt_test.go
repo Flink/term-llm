@@ -13,14 +13,15 @@ import (
 )
 
 func TestRunDirectProviderUsageWritesChatGPTPlanLimits(t *testing.T) {
-	originalFetch := fetchDirectProviderUsage
-	defer func() { fetchDirectProviderUsage = originalFetch }()
-	fetchDirectProviderUsage = func(_ context.Context, provider, apiKey string) (*providerusage.Report, error) {
+	stubUsageConfig(t, &config.Config{})
+	originalFetch := fetchProviderUsageWithBaseURL
+	defer func() { fetchProviderUsageWithBaseURL = originalFetch }()
+	fetchProviderUsageWithBaseURL = func(_ context.Context, provider, apiKey, baseURL string) (*providerusage.Report, error) {
 		if provider != "chatgpt" {
 			t.Fatalf("provider = %q", provider)
 		}
-		if apiKey != "" {
-			t.Fatalf("apiKey = %q, want empty for chatgpt", apiKey)
+		if apiKey != "" || baseURL != "" {
+			t.Fatalf("apiKey = %q baseURL = %q, want empty for chatgpt", apiKey, baseURL)
 		}
 		return &providerusage.Report{
 			Provider: "chatgpt",
@@ -52,11 +53,12 @@ func TestRunDirectProviderUsageWritesChatGPTPlanLimits(t *testing.T) {
 }
 
 func TestRunUsageRoutesGrokToOAuthUsageFetcher(t *testing.T) {
-	originalFetch := fetchDirectProviderUsage
-	defer func() { fetchDirectProviderUsage = originalFetch }()
-	fetchDirectProviderUsage = func(_ context.Context, provider, apiKey string) (*providerusage.Report, error) {
-		if provider != "grok" || apiKey != "" {
-			t.Fatalf("fetch args = provider %q, apiKey %q", provider, apiKey)
+	stubUsageConfig(t, &config.Config{})
+	originalFetch := fetchProviderUsageWithBaseURL
+	defer func() { fetchProviderUsageWithBaseURL = originalFetch }()
+	fetchProviderUsageWithBaseURL = func(_ context.Context, provider, apiKey, baseURL string) (*providerusage.Report, error) {
+		if provider != "grok" || apiKey != "" || baseURL != "" {
+			t.Fatalf("fetch args = provider %q, apiKey %q, baseURL %q", provider, apiKey, baseURL)
 		}
 		return &providerusage.Report{
 			Provider: "grok",
@@ -96,20 +98,22 @@ func TestRunUsageRejectsLocalFiltersForGrok(t *testing.T) {
 }
 
 func TestRunDirectProviderUsageOpenCodeGoUsesConfiguredKey(t *testing.T) {
-	originalFetch := fetchDirectProviderUsage
+	originalFetch := fetchProviderUsageWithBaseURL
 	originalLoad := loadProviderUsageConfig
 	defer func() {
-		fetchDirectProviderUsage = originalFetch
+		fetchProviderUsageWithBaseURL = originalFetch
 		loadProviderUsageConfig = originalLoad
 	}()
+	loads := 0
 	loadProviderUsageConfig = func() (*config.Config, error) {
+		loads++
 		return &config.Config{Providers: map[string]config.ProviderConfig{
 			"opencode-go": {Type: config.ProviderTypeOpenCodeGo, ResolvedAPIKey: "configured-key"},
 		}}, nil
 	}
-	fetchDirectProviderUsage = func(_ context.Context, provider, apiKey string) (*providerusage.Report, error) {
-		if provider != "opencode-go" || apiKey != "configured-key" {
-			t.Fatalf("fetch args = provider %q, apiKey %q", provider, apiKey)
+	fetchProviderUsageWithBaseURL = func(_ context.Context, provider, apiKey, baseURL string) (*providerusage.Report, error) {
+		if provider != "opencode-go" || apiKey != "configured-key" || baseURL != "" {
+			t.Fatalf("fetch args = provider %q, apiKey %q, baseURL %q", provider, apiKey, baseURL)
 		}
 		return &providerusage.Report{
 			Provider: "opencode-go",
@@ -129,6 +133,9 @@ func TestRunDirectProviderUsageOpenCodeGoUsesConfiguredKey(t *testing.T) {
 	command.SetOut(&out)
 	if err := o.runDirectProviderUsage(command, "opencode-go"); err != nil {
 		t.Fatalf("runDirectProviderUsage: %v", err)
+	}
+	if loads != 1 {
+		t.Fatalf("config loads = %d, want 1", loads)
 	}
 	for _, want := range []string{"OpenCode Go", "Rolling usage", "42% used"} {
 		if !strings.Contains(out.String(), want) {

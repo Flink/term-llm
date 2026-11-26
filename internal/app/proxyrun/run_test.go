@@ -249,6 +249,31 @@ func TestResolveConfiguredConnectionUsesMaterializedProviderProxy(t *testing.T) 
 	}
 }
 
+func TestResolveConfiguredConnectionForNamedAlias(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	path := filepath.Join(dir, "term-llm", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root := "https://provider-alias.example.test/work-claude"
+	configYAML := "providers:\n  work-claude:\n    type: claude-bin\n    proxy:\n      url: " + root + "\n      token: " + testToken + "\n"
+	if err := os.WriteFile(path, []byte(configYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, configured, err := ResolveConfiguredConnectionFor(cfg, "work-claude")
+	if err != nil || !configured || connection.Root != root || connection.Token != testToken {
+		t.Fatalf("alias connection = %+v, configured=%v, err=%v", connection, configured, err)
+	}
+	if _, configured, err := ResolveConfiguredConnection(cfg); err != nil || configured {
+		t.Fatalf("default claude-bin unexpectedly configured: configured=%v err=%v", configured, err)
+	}
+}
+
 func TestRunPropagatesChildExitCodeAndCancellation(t *testing.T) {
 	_, _, work := isolateLauncher(t)
 	server := metadataServer(t)

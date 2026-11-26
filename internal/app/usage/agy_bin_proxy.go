@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/term-llm/term-llm/internal/config"
 	"github.com/term-llm/term-llm/internal/proxyclient"
 )
 
@@ -15,10 +16,14 @@ func configuredAgyUsageProxy() (*proxyclient.Binding, error) {
 	if err != nil {
 		return nil, errors.New("could not load Antigravity proxy usage configuration")
 	}
+	return configuredAgyUsageProxyFor(cfg, proxyclient.AgyNativeKind)
+}
+
+func configuredAgyUsageProxyFor(cfg *config.Config, providerName string) (*proxyclient.Binding, error) {
 	if cfg == nil {
 		return nil, nil
 	}
-	provider := cfg.GetProviderConfig(proxyclient.AgyNativeKind)
+	provider := cfg.GetProviderConfig(providerName)
 	if provider == nil || strings.TrimSpace(provider.ProxyBinding) == "" {
 		return nil, nil
 	}
