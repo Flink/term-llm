@@ -115,7 +115,7 @@
   display: block;
   padding: 0.4rem;
   font-size: 0.75rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-muted);
 }
 

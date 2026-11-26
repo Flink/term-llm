@@ -997,7 +997,7 @@ test('breadcrumb header preserves desktop height and fixed phone rows with every
     expect(icon!.height).toBeLessThanOrEqual(20);
   }
   if (testInfo.project.name === 'mobile') {
-    await expect(projectMenu).toHaveCSS('border-radius', '18px');
+    await expect(projectMenu).toHaveCSS('border-radius', '16px');
     const sheet = await projectMenu.boundingBox();
     expect(sheet!.width).toBeGreaterThan(320 - 20);
     await expect(projectMenu.getByRole('button', { name: 'Close project menu' })).toHaveCSS(
@@ -1041,7 +1041,7 @@ test('context meter opens its details as an anchored card or a phone sheet', asy
   expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
   expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
   if (testInfo.project.name === 'mobile') {
-    await expect(card).toHaveCSS('border-radius', '18px');
+    await expect(card).toHaveCSS('border-radius', '16px');
     expect(box.width).toBeGreaterThan(viewport.width - 20);
     await expect(card.getByRole('button', { name: 'Compact now' })).toHaveCSS('min-height', '44px');
   } else {
@@ -1169,7 +1169,7 @@ test('mobile viewport opens a styled sidebar and returns to a usable composer', 
     false,
   );
   await expect(page.getByRole('textbox', { name: 'Message' })).toBeVisible();
-  await expect(page.locator('.composer-box')).toHaveCSS('border-radius', '22px');
+  await expect(page.locator('.composer-box')).toHaveCSS('border-radius', '24px');
   await expect(page.locator('#sendBtn svg')).toBeVisible();
 });
 
@@ -1187,7 +1187,7 @@ test('mobile floating surfaces dismiss from their outside area and restore inter
   expect(await runtime.evaluate((el) => el.getBoundingClientRect().right <= innerWidth)).toBe(true);
   await expect(runtimeClose).toBeFocused();
   await expect(page.getByRole('combobox', { name: 'Provider' })).not.toBeFocused();
-  await expect(runtime).toHaveCSS('border-radius', '18px');
+  await expect(runtime).toHaveCSS('border-radius', '16px');
   await expect(page.getByRole('combobox', { name: 'Runtime model' })).toHaveCSS(
     'min-height',
     '48px',

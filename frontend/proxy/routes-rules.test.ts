@@ -16,6 +16,7 @@ import {
   type ProxyState,
 } from '../src/api/proxy-client';
 import type { UIContext } from './dom';
+import { openProvider } from './provider-test-helpers';
 import { routesView } from './routes';
 
 const opencodeKey = {
@@ -146,16 +147,6 @@ function choose(root: HTMLElement) {
   fireEvent.click(getByRole(root, 'button', { name: 'Add provider' }));
   fireEvent.click(getByRole(root, 'button', { name: 'OpenCode Go' }));
 }
-function openManage(root: HTMLElement, routeName: string) {
-  const line = root.querySelector<HTMLElement>(`[data-focus="route:${routeName}"]`);
-  if (!line) throw new Error(`Missing route line: ${routeName}`);
-  const details = line
-    .closest('article.route-card')
-    ?.querySelector<HTMLDetailsElement>('details.provider-manage');
-  if (!details) throw new Error(`Missing provider Manage: ${routeName}`);
-  details.open = true;
-  return details;
-}
 function ruleRows(root: HTMLElement): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>('.subpath-rule')];
 }
@@ -194,7 +185,7 @@ it('creates OpenCode Go through one preset, key and provider request', async () 
 it('loads and saves a unified route unchanged without asking to drop grants', async () => {
   const { root, save } = setup({ routes: [unified], secrets: [opencodeKey] });
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-  openManage(root, 'opencode-go');
+  openProvider(root, 'opencode-go');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go' }));
   expect(ruleRows(root)).toHaveLength(3);
   expect(root.querySelector<HTMLDetailsElement>('details.route-rule-editors')?.open).toBe(false);
@@ -208,7 +199,7 @@ it('loads and saves a unified route unchanged without asking to drop grants', as
 it('edits subpaths and upstreams through the same agency-bearing rules', async () => {
   const { root, save } = setup({ routes: [unified], secrets: [opencodeKey] });
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-  openManage(root, 'opencode-go');
+  openProvider(root, 'opencode-go');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go' }));
   openRuleEditors(root);
   const rows = ruleRows(root);
@@ -235,7 +226,7 @@ it('edits subpaths and upstreams through the same agency-bearing rules', async (
 it('saves subpath mapping and billing edits without a grant-loss prompt', async () => {
   const { root, save } = setup({ routes: [unified], secrets: [opencodeKey] });
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-  openManage(root, 'opencode-go');
+  openProvider(root, 'opencode-go');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go' }));
   fireEvent.change(getByLabelText(root, 'Billing'), { target: { value: 'pay_as_you_go' } });
   fireEvent.click(getByRole(root, 'button', { name: 'Save route' }));
@@ -254,7 +245,7 @@ it('saves subpath mapping and billing edits without a grant-loss prompt', async 
 it('allows the same key across subpaths with different upstream origins', async () => {
   const { root, save } = setup({ routes: [unified], secrets: [opencodeKey] });
   vi.spyOn(window, 'confirm').mockReturnValue(true);
-  openManage(root, 'opencode-go');
+  openProvider(root, 'opencode-go');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go' }));
   openRuleEditors(root);
   fireEvent.input(within(ruleRows(root)[1]).getByLabelText('Upstream base URL'), {
@@ -273,7 +264,7 @@ it('reuses one Add API key dialog for every saved subpath', async () => {
     routes: [unified],
     secrets: [opencodeKey],
   });
-  openManage(root, 'opencode-go');
+  openProvider(root, 'opencode-go');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go' }));
   vi.spyOn(window, 'confirm').mockReturnValue(true);
   vi.spyOn(api, 'secret').mockResolvedValue();
@@ -323,7 +314,7 @@ it('allows a stored key for SRV subpath rules and leaves target validation to th
   }));
   const srvRoute = { ...unified, rules: srvRules };
   const { root, save } = setup({ routes: [srvRoute], secrets: [srvSecret] });
-  openManage(root, 'opencode-go');
+  openProvider(root, 'opencode-go');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go' }));
   expect(getByLabelText(root, 'Secret name')).toHaveValue('srv-key');
   fireEvent.click(getByRole(root, 'button', { name: 'Save route' }));
@@ -354,7 +345,7 @@ it('leaves an existing single-upstream route on the legacy editor and save shape
   };
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
   const { root, save } = setup({ routes: [legacy], secrets: [opencodeKey] });
-  openManage(root, 'opencode-go');
+  openProvider(root, 'opencode-go');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go' }));
   expect(ruleRows(root)).toHaveLength(0);
   expect(root.querySelector('.route-key')).toBeNull();
@@ -368,38 +359,37 @@ it('leaves an existing single-upstream route on the legacy editor and save shape
   expect(confirm).not.toHaveBeenCalled();
 });
 
-it('shows one route card for a unified route with subpaths and one key badge', () => {
+it('shows one provider for a unified route with subpaths and one key', () => {
   const { root } = setup({ routes: [unified], secrets: [opencodeKey] });
-  const cards = root.querySelectorAll('.route-card');
-  expect(cards).toHaveLength(1);
-  const card = cards[0] as HTMLElement;
+  expect(root.querySelectorAll('.provider-list-item')).toHaveLength(1);
+  const card = root.querySelector<HTMLElement>('.provider-detail')!;
   expect(getByRole(card, 'heading', { name: 'opencode-go' })).toBeVisible();
-  const line = card.querySelector<HTMLElement>('.provider-route-line')!;
+  const line = card.querySelector<HTMLElement>('[data-focus="route:opencode-go"]')!;
   expect(line).toHaveAttribute('tabindex', '-1');
-  expect(line).toHaveAttribute('data-focus', 'route:opencode-go');
-  expect(line.querySelector('code')).toHaveTextContent('/opencode-go/');
-  const manage = card.querySelectorAll<HTMLDetailsElement>('details.provider-manage');
-  expect(manage).toHaveLength(1);
-  expect(manage[0].open).toBe(false);
-  expect(manage[0].querySelector('summary')).toHaveTextContent('Manage');
-  expect(getByRole(card, 'button', { name: 'Edit opencode-go' })).not.toBeVisible();
-  openManage(root, 'opencode-go');
-  expect(manage[0].open).toBe(true);
+  expect(line).toHaveTextContent('/opencode-go/');
+  expect(card.querySelectorAll('.provider-route-management')).toHaveLength(1);
+  expect(getByRole(card, 'button', { name: 'Edit opencode-go', hidden: true })).not.toBeVisible();
+  openProvider(root, 'opencode-go', 'connection');
   expect(getByRole(card, 'button', { name: 'Edit opencode-go' })).toBeVisible();
   const settings = card.querySelector<HTMLElement>('.route-row-settings')!;
   expect(settings).toBeVisible();
   expect(settings).toHaveTextContent('3 subpath rules');
-  expect(card).toHaveTextContent(
-    'One key opencode-go-key → Authorization, x-api-key, x-goog-api-key',
+  // One key serves every subpath, each in the header its upstream expects.
+  expect(settings).toHaveTextContent(
+    'API key opencode-go-keyadded as Authorization: Bearer, x-api-key, x-goog-api-key',
   );
-  const lines = [...card.querySelectorAll('.route-rule-lines small')].map(
-    (line) => line.textContent,
-  );
-  expect(lines).toEqual([
-    '/ → https://opencode.ai/zen/go/v1 · client Authorization: Bearer',
-    '/messages/ → https://opencode.ai/zen/go · client x-api-key',
-    '/gemini/ → https://opencode.ai/inference/go/v1 · client x-goog-api-key',
+  const lines = [...card.querySelectorAll<HTMLElement>('.route-fact-rules > li')];
+  expect(lines.map((item) => item.querySelector('code')!.textContent)).toEqual([
+    '/opencode-go/',
+    '/opencode-go/messages/',
+    '/opencode-go/gemini/',
   ]);
+  expect(lines[0]).toHaveTextContent('→ https://opencode.ai/zen/go/v1');
+  expect(lines[0]).toHaveTextContent('client token in Authorization: Bearer');
+  expect(lines[1]).toHaveTextContent('→ https://opencode.ai/zen/go');
+  expect(lines[1]).toHaveTextContent('client token in x-api-key');
+  expect(lines[2]).toHaveTextContent('→ https://opencode.ai/inference/go/v1');
+  expect(lines[2]).toHaveTextContent('client token in x-goog-api-key');
   expect(queryByLabelText(root, 'Secret name')).toBeNull();
 });
 
@@ -428,9 +418,9 @@ it('leaves saved sibling routes independent and never converts them on edit', ()
     sibling('opencode-go-gemini', 'https://opencode.ai/inference/go/v1', 'x-goog-api-key', ''),
   ];
   const { root } = setup({ routes: siblings, secrets: [opencodeKey] });
-  expect(root.querySelectorAll('.route-card')).toHaveLength(3);
+  expect(root.querySelectorAll('.provider-list-item')).toHaveLength(3);
   expect(ruleRows(root)).toHaveLength(0);
-  openManage(root, 'opencode-go-messages');
+  openProvider(root, 'opencode-go-messages');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit opencode-go-messages' }));
   expect(ruleRows(root)).toHaveLength(0);
   expect(root.querySelector('.route-key')).toBeNull();
@@ -466,7 +456,7 @@ it('renders catch-alls as prose and sends raw catch-all syntax from the editor',
   };
   const { root, save } = setup({ routes: [saved], secrets: [opencodeKey] });
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-  openManage(root, saved.name);
+  openProvider(root, saved.name);
   expect(root.querySelector('.route-row-settings')).toHaveTextContent('GET any path below /v1/');
   expect(root.querySelector('.route-row-settings')).toHaveTextContent('HEAD any path');
   expect(root.querySelector('.route-row-settings')).toHaveTextContent('POST /models');

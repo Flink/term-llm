@@ -20,7 +20,7 @@
 
 .inspect-modal button:not(.close-button) {
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface-2);
   color: var(--text);
   padding: 0.45rem 0.65rem;
@@ -88,7 +88,7 @@
 .inspect-block {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   margin-block: 0.6rem;
   padding: 0.6rem;
 }
@@ -108,7 +108,7 @@
 }
 
 .inspect-kind {
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
   padding: 0.1rem 0.25rem;
   font-size: 0.7rem;
@@ -138,15 +138,21 @@
   margin-top: 0.6rem;
 }
 
-.inspect-failed,
+/* Notices are square, so a side bar stays straight. */
 .inspect-modal .inspect-notice {
   border-left: 3px solid var(--danger);
   padding-left: 0.6rem;
 }
 
+/* Blocks are rounded: mark them with fill and outline, never a side bar. */
 .inspect-tail {
-  border-left: 3px solid var(--border-strong);
   margin-left: 0.6rem;
+  background: var(--surface-2);
+}
+
+.inspect-failed {
+  border-color: var(--state-error-border);
+  background: var(--state-error-bg);
 }
 
 .inspect-turn {
@@ -195,7 +201,7 @@
 .inspect-model-change,
 .inspect-active-model {
   border: 2px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface-2);
   overflow-wrap: anywhere;
   padding: 0.65rem;

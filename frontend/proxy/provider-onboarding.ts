@@ -74,7 +74,7 @@ async function issueNativeConnection(
     const details = nativeConnectionDetails(provider, connection, context, use, choice?.label);
     const dismiss = button(mintsToken ? 'I saved it — dismiss' : 'Done', () => {
       void context.run(async () => {
-        await context.refresh(route?.name ?? provider.launcher);
+        await context.refresh(route ? `route:${route.name}` : `native:${provider.launcher}`);
         details.querySelectorAll('textarea').forEach((text) => (text.value = ''));
         if (mintsToken) context.protectToken(false);
         onDismiss();

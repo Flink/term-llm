@@ -116,15 +116,6 @@ export function badge(text: string, kind = ''): HTMLSpanElement {
   node.className = `badge ${kind}`;
   return node;
 }
-export function routeBadges(enabled: boolean, ...badges: HTMLSpanElement[]): HTMLDivElement {
-  const node = el(
-    'div',
-    badge(enabled ? 'Enabled' : 'Disabled', enabled ? 'enabled' : 'muted'),
-    ...badges,
-  );
-  node.className = 'route-badges';
-  return node;
-}
 export function actions(...children: Child[]): HTMLElement {
   const node = el('div', ...children);
   node.className = 'actions';

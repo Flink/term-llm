@@ -23,9 +23,9 @@ term-llm serve proxy
    what it needs: sign in for ChatGPT or [Grok](#share-a-grok-subscription), [sign in once for Claude Code](#set-up-a-shared-claude-subscription),
    [sign in once for personal Antigravity](#run-personal-antigravity-through-the-proxy),
    or add an API key for a service like Venice.
-4. Open **Manage** on the new provider card, then choose **Approve access for**
-   followed by the provider name. That gives an app or device access to every
-   route the provider currently has. For Claude Code and Antigravity, use the
+4. Select the new provider in the **Providers** list. On its **Access** tab,
+   choose **New client** (or tick existing clients and choose **Approve selected**).
+   That gives an app or device access to every route the provider currently has. For Claude Code and Antigravity, use the
    device launcher instead, after the shared subscription is ready. Save the
    shown-once client token privately. In an app that accepts a custom API root,
    use the route URL and the client token, **not** the upstream credential. The **Clients** tab lets you see and manage
@@ -59,6 +59,14 @@ rules. If several conditions apply, the first matching row wins:
 The dot describes the active configuration, not upstream connectivity or client
 approval. Save and reload errors are reported separately.
 
+**Providers** lists every provider by family with its dot, any reason, and how
+many clients have access; a filter appears once the list is long. Selecting a
+provider opens its tabs: **Access** (approve, create or remove clients),
+**Connection** (routes, upstream credentials and accounts), **Client config**
+(inference providers' term-llm settings) and **Settings** (label and
+**Delete provider**). Each route's facts say which credential the client sends
+and which one the proxy adds upstream.
+
 Client approval applies to the whole configured provider. Approving a client
 authorizes every route the provider has at that moment; it never authorizes a
 different provider or a route added later. If you add a route to the provider or
@@ -83,14 +91,14 @@ bookmarks still open **Providers**. The public management API is route-based.
    ChatGPT routes together when their names and prefixes are available. No local
    OAuth credential file is required. Your OpenAI account must allow device-code
    sign-in.
-3. Open **Manage**, then choose **Approve access for ChatGPT** to authorize an
-   app or device for the provider's current routes. A successful provider
+3. Select **chatgpt** in the **Providers** list and use its **Access** tab to
+   authorize an app or device for the provider's current routes. A successful provider
    sign-in does not give any new client access by itself.
 
 If your workspace disables device-code sign-in, **Advanced** in ChatGPT setup
 lets you import credentials manually, even on a new proxy.
 
-Use **Manage → Reconnect ChatGPT** to renew the login without changing client
+Use **Reconnect ChatGPT** on the provider's **Connection** tab to renew the login without changing client
 approvals. Use a distinct name when setting up a separate ChatGPT account. The
 main route is enough for chat; the other routes cover usage, dictation,
 embeddings, and realtime sideband, and one approval covers all of them. If a
@@ -105,7 +113,7 @@ with `providers: [chatgpt]`.
 2. Open the xAI verification page, enter the one-time code and approve the
    request. The proxy stores the login and creates one Grok plan route (`/grok/`
    by default).
-3. Under **Manage**, approve the apps or devices that should use the plan.
+3. On the provider's **Access** tab, approve the apps or devices that should use the plan.
    With the proxy URL and client token configured, try `term-llm models --provider grok`.
    If the client has a `proxy.providers` allowlist, include `grok`.
 
@@ -116,7 +124,7 @@ choose **Advanced → Use a saved account** instead of signing in again.
 create a route for it. Existing `grok-bin` routes and their approvals are
 unchanged. Choose **xAI API** instead if you want to use a developer API key.
 
-**Manage → Reconnect Grok** renews the same account, including for file-managed
+**Connection → Reconnect Grok** renews the same account, including for file-managed
 routes, without changing approvals. If a Grok account was already signed out
 before the proxy began retaining its identity, it cannot verify a reconnect.
 Create a separately named provider for the account and explicitly approve the
@@ -146,19 +154,19 @@ Clients share its limits, so only approve devices you trust.
    sign-in. If Claude does not ask you to sign in, run `/login`. The proxy holds
    the subscription credentials; workers do not get them.
 4. Use **Refresh** on
-   **Providers** after finishing sign-in. Once the shared subscription is ready, open
-   **Manage** and click **Add device**.
+   **Providers** after finishing sign-in. Once the shared subscription is ready, select
+   the provider and click **Add device** under **Shared subscription** on its **Access** tab.
    Run that command on the worker with an updated `term-llm`. The worker uses the
    proxy’s shared sign-in without opening a browser. Issue a separate launcher
    for each worker so you can remove its access without signing out Claude or
    affecting other workers.
-5. If the shared sign-in needs attention, open **Manage** and click
-   **Sign in to shared subscription** (or **Reconnect**) for the same
+5. If the shared sign-in needs attention, click
+   **Sign in to shared subscription** (or **Reconnect**) on the same tab for the same
    route, then choose the client to sign in from. Finish sign-in and refresh **Providers**. **Add device** does not sign
    in or reconnect the subscription, and is unavailable while it is not ready.
 
-Remove a worker’s access from the provider’s **Client approval** section under
-**Manage**, or revoke its client in **Clients**. Do not use **Delete provider**
+Remove a worker’s access with **Remove** in the provider’s **Access** tab, or
+revoke its client in **Clients**. Do not use **Delete provider** (on **Settings**)
 to remove just one worker: it removes all Claude routes, grants and saved proxy
 sign-ins.
 
@@ -257,13 +265,13 @@ only on loopback.
    to sign in with your personal Google account. If `agy` prints a sign-in link,
    open it in your own browser.
 3. Refresh **Providers**
-   after signing in. Once the shared subscription is ready, open **Manage**
-   and click **Add device** to issue a separate
+   after signing in. Once the shared subscription is ready, select the provider
+   and click **Add device** on its **Access** tab to issue a separate
    launcher for each worker. Run it as shown, without `-- acp --login`. Workers
    use the shared subscription and its limits without signing in to Google.
-4. Open **Manage** and click **Sign in to shared subscription** or **Reconnect** if
+4. Click **Sign in to shared subscription** or **Reconnect** on the **Access** tab if
    the subscription needs attention. Remove a worker’s provider approval or
-   revoke its client token to remove only its access. **Manage → Delete provider**
+   revoke its client token to remove only its access. **Settings → Delete provider**
    removes all Antigravity proxy routes, their grants and saved proxy sign-ins.
    Other providers, request history and your normal Antigravity setup are unchanged.
 
@@ -310,7 +318,7 @@ your local agy login.
 The proxy’s schema v8 upgrade keeps routes, client tokens, grants, and existing
 shared Claude sign-ins. It does not turn any old per-device Claude Code or
 Antigravity sign-in into a shared login. For each converted account, open
-**Providers → Manage → Sign in to shared subscription** on its route and complete one new operator
+**Providers → Access → Sign in to shared subscription** for its provider and complete one new operator
 sign-in. Refresh **Providers** afterward. The operator sign-in restores access
 for existing clients; workers do not need new tokens or a vendor login. New
 worker launchers and approvals are unavailable until the shared route is enabled
@@ -562,7 +570,7 @@ its API key is sent in the request URL rather than an authentication header.
 
 ## Trusted accounts
 
-Under **Providers**, open **Manage** on a provider and choose **Edit → Advanced**;
+Under **Providers**, select a provider and choose **Connection → Edit → Advanced**;
 manual credential JSON is still supported for
 `chatgpt`, `grok`, `copilot` and `aws-sigv4`. Use the guided sign-in for new
 ChatGPT and Grok plan routes.
@@ -570,8 +578,8 @@ Select the account when creating its route. Credentials are write-only; metadata
 contains state, mode and expiry. Account-managed headers cannot also have static
 substitutions. Origins and API paths are restricted to that integration. Sign-out
 clears credentials and closes streams; requests fail closed until credentials are
-replaced. Claude Code and personal Antigravity use **Manage → Add device**
-and **Manage → Delete provider**, not this account editor.
+replaced. Claude Code and personal Antigravity use **Access → Add device**
+and **Settings → Delete provider**, not this account editor.
 For either shared subscription, use **Sign in to shared subscription** or
 **Reconnect** to manage the operator sign-in.
 

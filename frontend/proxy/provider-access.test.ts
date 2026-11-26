@@ -382,7 +382,8 @@ it('creates a provider-scoped client, shows the token once, and guards dismissal
   expect(token.value).toBe('sk-tlp-once-only');
 
   fireEvent.click(getByRole(root, 'button', { name: 'I saved it — dismiss' }));
-  await waitFor(() => expect(refresh).toHaveBeenCalledWith('caller:phone'));
+  // Focus returns to the provider, which is what stays on screen.
+  await waitFor(() => expect(refresh).toHaveBeenCalledWith('route:openai'));
   expect(token.value).toBe('');
   expect(protectToken).toHaveBeenLastCalledWith(false);
   expect(root).toHaveTextContent('Phone');
@@ -490,7 +491,7 @@ it('points native Claude providers at the device launcher instead of a generic c
   };
   const { root, createProviderCaller } = fixture(claudeGroup, state);
   expect(root).toHaveTextContent(
-    'Claude Code uses a device launcher instead of a generic API URL. Use Add device below to connect a new device.',
+    'Claude Code uses a device launcher instead of a generic API URL. Use Add device under Shared subscription to connect a new device.',
   );
   expect(queryByLabelText(root, 'Client name')).toBeNull();
   expect(queryByRole(root, 'button', { name: 'Create client' })).toBeNull();
@@ -599,4 +600,64 @@ it('refreshes provider state without replaying a stale approval write', async ()
   expect(announce).toHaveBeenCalledWith(
     'Provider configuration changed; refresh before changing access',
   );
+});
+
+it('puts approval first and lists approved clients by recent use with relative times', () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date(2026, 10, 26, 12, 0));
+  try {
+    const now = Date.now();
+    const { root } = fixture(chatgptGroup, {
+      callers: [
+        caller({
+          id: 'c_old00000',
+          name: 'Old',
+          grants: ['chatgpt', 'chatgpt-backend', 'chatgpt-openai'],
+          last_used: now - 3 * 86_400_000,
+        }),
+        caller({
+          id: 'c_dupe1111',
+          name: 'Dupe',
+          grants: ['chatgpt', 'chatgpt-backend', 'chatgpt-openai'],
+          last_used: now - 5 * 60_000,
+        }),
+        caller({
+          id: 'c_dupe2222',
+          name: 'Dupe',
+          grants: ['chatgpt'],
+          last_used: now - 2 * 3_600_000,
+        }),
+        caller({ id: 'c_waiting0', name: 'Waiting', grants: [] }),
+      ],
+    });
+    const panel = root.querySelector<HTMLElement>('.route-access-panel')!;
+    // Adding is the action, so it sits above a list that can grow long.
+    expect(panel.firstElementChild).toHaveClass('route-access-add');
+    expect(getByRole(panel, 'group', { name: 'Approve clients' })).toBeVisible();
+    expect(getByRole(panel, 'heading', { name: 'Clients with access 3' })).toBeVisible();
+    const rows = [...panel.querySelectorAll<HTMLElement>('.route-access-client')];
+    expect(rows.map((row) => row.querySelector('strong')!.textContent)).toEqual([
+      'Dupe #dupe1',
+      'Dupe #dupe2',
+      'Old',
+    ]);
+    expect(rows[0]).toHaveTextContent('Last seen 5 min ago');
+    expect(rows[1]).toHaveTextContent('Last seen 2 hr ago');
+    expect(rows[1].querySelector('.route-access-pending')).toHaveTextContent('Needs approval');
+    expect(rows[2]).toHaveTextContent('Last seen 3 days ago');
+    expect(rows[2].querySelector('small')).toHaveAttribute(
+      'title',
+      new Date(now - 3 * 86_400_000).toLocaleString(),
+    );
+    // Duplicate names keep their suffix in the action, too.
+    expect(
+      getByRole(rows[0], 'button', { name: 'Remove Dupe #dupe1’s access to ChatGPT' }),
+    ).toBeVisible();
+    const remove = getByRole(rows[2], 'button', { name: 'Remove Old’s access to ChatGPT' });
+    expect(remove).toHaveTextContent(/^Remove$/);
+    expect(remove).toHaveClass('route-access-remove');
+    expect(panel).toHaveTextContent('Approval covers every current route of this provider.');
+  } finally {
+    vi.useRealTimers();
+  }
 });

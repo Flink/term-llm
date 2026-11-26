@@ -15,6 +15,7 @@ import {
   type ProxyState,
 } from '../src/api/proxy-client';
 import { mountProxy } from './app';
+import { openProvider, providerItem } from './provider-test-helpers';
 import { callerCurl } from './security';
 import { localPath, outcomeLabel } from './requests';
 
@@ -96,18 +97,10 @@ function openDetails(root: HTMLElement, title: string) {
   details.open = true;
   return details;
 }
-async function openManage(root: HTMLElement, routeName: string) {
-  const line = await waitFor(() => {
-    const found = root.querySelector<HTMLElement>(`[data-focus="route:${routeName}"]`);
-    if (!found) throw new Error(`Missing route line: ${routeName}`);
-    return found;
-  });
-  const details = line
-    .closest('article.route-card')
-    ?.querySelector<HTMLDetailsElement>('details.provider-manage');
-  if (!details) throw new Error(`Missing provider Manage: ${routeName}`);
-  details.open = true;
-  return details;
+/** Selects the provider owning `routeName` and shows its Connection tab. */
+async function openConnection(root: HTMLElement, routeName: string) {
+  await waitFor(() => providerItem(root, routeName));
+  return openProvider(root, routeName, 'connection');
 }
 afterEach(() => {
   disposals.splice(0).forEach((dispose) => dispose());
@@ -263,7 +256,7 @@ describe('proxy navigation', () => {
     expect(root.querySelector('input[type=password]')).toBeNull();
     await click(root, 'Providers');
     // No page-level account list; accounts live on the routes that use them.
-    await waitFor(() => expect(root.querySelector('.route-card')).not.toBeNull());
+    await waitFor(() => expect(root.querySelector('.provider-detail')).not.toBeNull());
     expect(root.querySelector('details.route-management')).toBeNull();
     expect(root.textContent).not.toContain('Other provider accounts');
   });
@@ -451,7 +444,7 @@ describe('provider presets', () => {
   });
   it('does not offer presets when editing an existing route', async () => {
     const { root } = setup(state({ presets, routes: [route] }));
-    await openManage(root, 'Example');
+    await openConnection(root, 'Example');
     await click(root, 'Edit Example');
     expect(root.querySelector('.route-form label')?.textContent).toBe('Name');
     expect(root.querySelector('.route-form')?.textContent).not.toContain(
@@ -635,7 +628,7 @@ describe('proxy configuration and credential operations', () => {
       const { root, api } = setup(state({ routes: [original] }));
       const config = vi.spyOn(api, 'config').mockResolvedValue();
       const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-      await openManage(root, 'Example');
+      await openConnection(root, 'Example');
       await click(root, 'Edit Example');
       fireEvent.change(getByLabelText(root, 'Billing'), {
         target: { value: billing },
@@ -711,7 +704,7 @@ describe('proxy configuration and credential operations', () => {
     const { root, api } = setup(state({ routes: [route] }));
     const config = vi.spyOn(api, 'config').mockResolvedValue();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    await openManage(root, 'Example');
+    await openConnection(root, 'Example');
     await click(root, 'Disable Example');
     await waitFor(() =>
       expect(config).toHaveBeenCalledWith(expect.objectContaining({ revision: 7 }), [
@@ -719,7 +712,7 @@ describe('proxy configuration and credential operations', () => {
       ]),
     );
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    await openManage(root, 'Example');
+    await openConnection(root, 'Example');
     await click(root, 'Edit Example');
     await click(root, 'Delete route Example');
     await waitFor(() =>
@@ -734,7 +727,7 @@ describe('proxy configuration and credential operations', () => {
       }),
     );
     const config = vi.spyOn(api, 'config').mockResolvedValue();
-    await openManage(root, 'Example');
+    await openConnection(root, 'Example');
     await click(root, 'Edit Example');
     await click(root, 'Add substitution');
     fireEvent.input(getByLabelText(root, 'Header name'), { target: { value: 'Authorization' } });
@@ -1102,7 +1095,7 @@ describe('acceptance refinements', () => {
   });
   it('prefills a name-only secret dialog', async () => {
     const { root } = setup(state({ routes: [route] }));
-    await openManage(root, 'Example');
+    await openConnection(root, 'Example');
     await click(root, 'Edit Example');
     await click(root, 'Add substitution');
     await click(root, 'Add API key');
@@ -1339,7 +1332,7 @@ describe('acceptance refinements', () => {
     const { root, api } = setup(state({ routes: [route] }));
     const write = vi.spyOn(api, 'config').mockResolvedValue();
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    await openManage(root, 'Example');
+    await openConnection(root, 'Example');
     await click(root, 'Edit Example');
     fireEvent.input(getByLabelText(root, 'Upstream base URL'), {
       target: { value: 'https://example.com/wider/' },
@@ -1349,7 +1342,8 @@ describe('acceptance refinements', () => {
     expect(confirm).not.toHaveBeenCalled();
     await waitFor(() => expect(root.textContent).toContain('Saved route Example'));
     expect(document.activeElement).toBe(root.querySelector('[data-focus="route:Example"]'));
-    expect(document.activeElement?.tagName).toBe('LI');
+    expect(document.activeElement?.textContent).toBe('/example/');
+    expect(getByRole(root, 'tab', { selected: true })).toHaveTextContent('Connection');
     await click(root, 'Secrets');
     expect(root.textContent).not.toContain('Saved route Example');
   });
@@ -1446,7 +1440,7 @@ describe('pending issuance guard', () => {
   });
 });
 
-describe('route pagination', () => {
+describe('provider list', () => {
   const makeRoutes = (count: number) =>
     Array.from({ length: count }, (_, i) => ({
       ...route,
@@ -1455,29 +1449,59 @@ describe('route pagination', () => {
       local_prefix: `/r${i + 1}/`,
     }));
 
-  it('hides pagination controls when providers fit on one page', async () => {
-    const { root } = setup(state({ routes: makeRoutes(10) }));
-    await waitFor(() => expect(root.querySelectorAll('.route-card')).toHaveLength(10));
-    expect(root.querySelector('.route-pagination')).toBeNull();
+  it('omits the filter while the list fits on one screen', async () => {
+    const { root } = setup(state({ routes: makeRoutes(7) }));
+    await click(root, 'Providers');
+    await waitFor(() => expect(root.querySelectorAll('.provider-list-item')).toHaveLength(7));
+    expect(queryByRole(root, 'searchbox', { name: 'Filter providers' })).toBeNull();
   });
 
-  it('paginates providers at 10 per page with Previous, Next, and ellipsis page buttons', async () => {
+  it('lists every provider without pagination and filters by name or route prefix', async () => {
     const { root } = setup(state({ routes: makeRoutes(85) }));
-    await waitFor(() => expect(root.querySelectorAll('.route-card')).toHaveLength(10));
-    const nav = getByRole(root, 'navigation', { name: 'Inference provider pagination' });
-    expect(nav).not.toBeNull();
-    expect(nav.textContent).toContain('Showing 1–10 of 85 providers');
-    expect(nav.querySelectorAll('.route-pagination-ellipsis')).toHaveLength(1);
-    expect(getByRole(root, 'button', { name: 'Previous' })).toHaveProperty('disabled', true);
+    await click(root, 'Providers');
+    await waitFor(() => expect(root.querySelectorAll('.provider-list-item')).toHaveLength(85));
+    const visible = () =>
+      [...root.querySelectorAll<HTMLElement>('.provider-list-item')]
+        .filter((item) => !item.closest('li')!.hidden)
+        .map((item) => item.dataset.provider);
+    const filter = getByRole(root, 'searchbox', { name: 'Filter providers' });
+    fireEvent.input(filter, { target: { value: 'route-85' } });
+    expect(visible()).toEqual(['route-85']);
+    fireEvent.input(filter, { target: { value: '/r8' } });
+    expect(visible()).toEqual([
+      'route-08',
+      ...makeRoutes(85)
+        .slice(79)
+        .map((r) => r.name),
+    ]);
+    // The filter survives a refresh, which rebuilds the view.
+    await click(root, 'Refresh state');
+    await waitFor(() => expect(visible()).toHaveLength(7));
+    expect(getByRole(root, 'searchbox', { name: 'Filter providers' })).toHaveValue('/r8');
+  });
 
-    await click(root, 'Next');
-    expect(nav.textContent).toContain('Showing 11–20 of 85 providers');
-    expect(root.querySelector('.route-card h3')?.textContent).toBe('route-11');
-
-    await click(root, 'Page 9');
-    expect(nav.textContent).toContain('Showing 81–85 of 85 providers');
-    expect(root.querySelectorAll('.route-card')).toHaveLength(5);
-    expect(getByRole(root, 'button', { name: 'Next' })).toHaveProperty('disabled', true);
+  it('selects and focuses a provider right after it is created', async () => {
+    const { root, api } = setup(state({ routes: [route] }));
+    const config = vi.spyOn(api, 'config').mockResolvedValue();
+    await click(root, 'Providers');
+    await waitFor(() => expect(root.querySelector('.provider-detail')).not.toBeNull());
+    await click(root, 'Add provider');
+    await click(root, 'Custom endpoint');
+    fireEvent.input(getByLabelText(root, 'Name'), { target: { value: 'second' } });
+    fireEvent.input(getByLabelText(root, 'Upstream base URL'), {
+      target: { value: 'https://second.example/' },
+    });
+    const created = { ...route, name: 'second', provider: 'second', local_prefix: '/second/' };
+    vi.mocked(api.state).mockResolvedValue(
+      withSingletonProviders(state({ revision: 8, routes: [route, created] })),
+    );
+    await click(root, 'Save route');
+    await waitFor(() => expect(config).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(root.querySelector('.provider-detail')).toHaveAttribute('data-provider', 'second'),
+    );
+    expect(providerItem(root, 'second')).toHaveAttribute('aria-current', 'true');
+    expect(document.activeElement).toBe(root.querySelector('[data-focus="route:second"]'));
   });
 });
 

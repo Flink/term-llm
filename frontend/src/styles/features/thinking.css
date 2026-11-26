@@ -21,7 +21,7 @@
   margin-left: 1px; /* a tool card's border */
   padding: 0.2rem 0.6rem 0.2rem var(--thought-inset);
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-muted);
   font: inherit;
@@ -106,7 +106,7 @@
 .slash-command-badge {
   padding: 0.05rem 0.45rem;
   border: 1px solid var(--border-strong);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   color: var(--text-muted);
   font-size: 0.7rem;
   white-space: nowrap;

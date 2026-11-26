@@ -186,7 +186,7 @@ export function mountProxy(
       if (!preserveView && !tokenPending && (!tokenProtected || canDiscardToken)) {
         tokenProtected = false;
         tokenPending = false;
-        render();
+        render(key);
         focus(key);
       }
       return snapshot;
@@ -332,7 +332,8 @@ export function mountProxy(
     showSignIn(card('Sign in', form));
     token.focus();
   }
-  function render() {
+  /** `focusKey` is the refresh's focus target; Providers selects what it names. */
+  function render(focusKey?: string) {
     if (!state || disposed) return;
     notifications.clear();
     closeView();
@@ -403,7 +404,7 @@ export function mountProxy(
         homeView(snapshot, api, context, () => {
           currentURL = window.location.href;
         }),
-      Routes: () => routesView(snapshot, api, context),
+      Routes: () => routesView(snapshot, api, context, focusKey),
       Secrets: () => secretsView(snapshot, api, context),
       Clients: () => callersView(snapshot, api, context),
       Requests: () => {

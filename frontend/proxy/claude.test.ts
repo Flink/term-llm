@@ -19,6 +19,7 @@ import {
 } from '../src/api/proxy-client';
 import type { PasskeyPlatform } from '../src/hub/platform/passkeys';
 import { mountProxy } from './app';
+import { providerItem } from './provider-test-helpers';
 import { providerOnboarding, providerRouteAction, clearNativeSetup } from './provider-onboarding';
 import type { UIContext } from './dom';
 import {
@@ -312,15 +313,25 @@ it('offers only shared Claude setup and presents an operator-only launcher', asy
   vi.mocked(api.state).mockResolvedValueOnce(sharedSnapshot('needs_login'));
   await click(root, 'I saved it — dismiss');
   await waitFor(() => expect(root).toHaveTextContent('Sign-in needed'));
-  const summary = getByText(root, 'Manage', { selector: 'summary' });
-  fireEvent.click(summary);
-  expect(getByRole(root, 'button', { name: 'Sign in to shared subscription' })).toBeVisible();
+  // The new provider is selected and its Access tab shows the shared sign-in.
+  const detail = getByRole(root, 'region', { name: 'Claude Code' });
+  expect(getByRole(detail, 'tab', { selected: true })).toHaveTextContent('Access');
+  // The attention mark points at the tab holding the fix, not Connection.
+  expect(getByRole(detail, 'tab', { name: /^Access \d+, needs attention$/ })).toBeVisible();
+  expect(getByRole(detail, 'tab', { name: 'Connection' })).toBeVisible();
+  expect(getByRole(detail, 'button', { name: 'Sign in to shared subscription' })).toBeVisible();
   expect(queryByRole(root, 'button', { name: 'Add device' })).toBeNull();
-  expect(summary.parentElement!.querySelectorAll('details')).toHaveLength(0);
+  expect(detail.querySelectorAll('details')).toHaveLength(0);
 
   vi.mocked(api.state).mockResolvedValueOnce(sharedSnapshot('ready'));
   await click(root, 'Refresh state');
-  await waitFor(() => expect(getByRole(root, 'img', { name: 'Status: green' })).toBeVisible());
+  await waitFor(() =>
+    expect(
+      getByRole(getByRole(root, 'region', { name: 'Claude Code' }), 'img', {
+        name: 'Status: green',
+      }),
+    ).toBeVisible(),
+  );
   expect(getByRole(root, 'button', { name: 'Add device' })).toBeInTheDocument();
 });
 
@@ -623,8 +634,8 @@ it.each(
 
 it('describes removing a shared grant without signing the subscription out', async () => {
   const { root } = setup(sharedSnapshot('ready'));
-  const manage = await waitFor(() => getByText(root, 'Manage', { selector: 'summary' }));
-  fireEvent.click(manage);
+  await click(root, 'Providers');
+  fireEvent.click(await waitFor(() => providerItem(root, route.name)));
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
   await click(root, `Remove ${caller.name}’s access to Claude Code`);
   expect(confirm).toHaveBeenCalledWith(
@@ -676,7 +687,7 @@ it('signs in and adds workers to the same shared Antigravity route without sendi
   );
   await click(pending, 'I saved it — dismiss');
   await waitFor(() => expect(context.hasProtectedToken!()).toBe(false));
-  expect(refresh).toHaveBeenCalledWith(agyRoute.name);
+  expect(refresh).toHaveBeenCalledWith(`route:${agyRoute.name}`);
   pending.remove();
 
   const ready = { ...state, accounts: [account, { ...shared, state: 'ready' }], revision: 8 };

@@ -27,6 +27,22 @@ export function shortDate(
   });
 }
 
+/** Relative activity for recent use ("5 min ago"), falling back to shortDate. */
+export function lastSeen(value: string | number | undefined, now = new Date()): string {
+  if (!value) return 'never';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'unknown';
+  const minutes = Math.floor((now.getTime() - date.getTime()) / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 2) return 'yesterday';
+  if (days < 7) return `${days} days ago`;
+  return shortDate(value, 'never', now);
+}
+
 /**
  * Short ID suffixes for clients that share a name, so identical names stay
  * distinguishable. Derived from the public client ID, never the token.

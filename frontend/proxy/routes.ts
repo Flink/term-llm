@@ -1,102 +1,102 @@
-import {
-  ProxyAPIError,
-  type ProxyAccount,
-  type ProxyClient,
-  type ProxyPreset,
-  type ProxyProviderFamily,
-  type ProxyRoute,
-  type ProxyState,
-} from '../src/api/proxy-client';
-import { accountControls, connectAccount, unusedAccountsView } from './accounts';
-import {
-  nativeProvider,
-  nativeProviders,
-  routeNativeProvider,
-  type NativeProvider,
-} from './native';
-import { actions, button, card, disclosure, el, field, input, submit, type UIContext } from './dom';
-import {
-  approvalSummary,
-  providerGroups,
-  providerRouteLine,
-  providerFamilies,
-  type ProviderGroup,
-} from './provider-groups';
-import { clearNativeSetup, providerOnboarding, providerRouteAction } from './provider-onboarding';
-import { providerAccess } from './provider-access';
-import { providerConfigSection } from './provider-config';
+import { type ProxyClient, type ProxyState } from '../src/api/proxy-client';
+import { unusedAccountsView } from './accounts';
+import { nativeProvider, nativeProviders, routeNativeProvider } from './native';
+import { actions, button, card, disclosure, el, type UIContext } from './dom';
+import { providerFamilies, providerGroups, type ProviderGroup } from './provider-groups';
+import { clearNativeSetup, providerOnboarding } from './provider-onboarding';
+import { providerDetail, type RouteEditorSlot } from './provider-detail';
+import { FILTER_THRESHOLD, matchesFilter, providerList } from './provider-list';
 import { routeForm } from './route-form';
-import { missingCompanions } from './route-companions';
 import { providerForm } from './provider-form';
 import { clientDefaults } from './provider-defaults';
-import { matchRoutePreset, routePresetPicker } from './route-presets';
-import { routeSummary } from './route-summary';
-import { routeNeedsSecret, routeRules } from './route-rules';
+import { routePresetPicker } from './route-presets';
 
-const PAGE_SIZE = 10;
-const providerPages = new WeakMap<UIContext, Map<ProxyProviderFamily, number>>();
-const openManagers = new WeakMap<UIContext, Set<string>>();
-
-function pageNumbers(current: number, total: number): (number | 'ellipsis')[] {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i);
-  const pages: (number | 'ellipsis')[] = [0];
-  const start = Math.max(1, current - 1);
-  const end = Math.min(total - 2, current + 1);
-  if (start > 1) pages.push('ellipsis');
-  for (let i = start; i <= end; i++) pages.push(i);
-  if (end < total - 2) pages.push('ellipsis');
-  pages.push(total - 1);
-  return pages;
+/** Selection survives refreshes, which rebuild the whole view. */
+interface ProviderPreferences {
+  selected?: string;
+  tab: string;
+  filter: string;
 }
+const preferences = new WeakMap<UIContext, ProviderPreferences>();
+const DETAIL_ID = 'provider-detail';
 
-function routeUsesSecret(route: ProxyRoute): boolean {
-  const rules = routeRules(route);
-  const destinations = rules.length ? rules : [route];
-  return destinations.some((dest) =>
-    Object.values(dest.set_headers).some((header) => header.secret !== undefined),
-  );
-}
-
-function deleteProviderConsequence(group: ProviderGroup, state: ProxyState): string {
-  const routeNames = new Set(group.routes.map((route) => route.name));
-  const affected = state.callers
-    .filter((caller) => !caller.revoked && caller.grants.some((grant) => routeNames.has(grant)))
-    .map((caller) => caller.name)
-    .join(', ');
-  const routesPart =
-    group.routes.length === 1
-      ? `Removes route ${group.routes[0].name}`
-      : `Removes ${group.routes.length} routes (${group.routes.map((route) => route.name).join(', ')})`;
-  const notes: string[] = [];
-  if (group.routes.some((route) => route.account)) {
-    notes.push('Connected accounts stay until removed separately.');
+/**
+ * The provider a refresh's focus key points at: `route:<name>` after a save,
+ * `native:<launcher>` after shared native setup. Other keys select nothing.
+ */
+function focusedProvider(groups: ProviderGroup[], state: ProxyState, focusKey?: string) {
+  const [kind, name] = focusKey?.split(/:(.*)/s) ?? [];
+  if (kind === 'route') {
+    return groups.find((group) => group.routes.some((route) => route.name === name));
   }
-  if (group.routes.some(routeUsesSecret)) {
-    notes.push('Keys no other route uses are removed from Secrets.');
+  if (kind === 'native') {
+    return groups.find((group) =>
+      group.routes.some((route) => routeNativeProvider(route, state)?.launcher === name),
+    );
   }
-  const extra = notes.length ? ` ${notes.join(' ')}` : '';
-  return `Delete provider ${group.id}? ${routesPart} and permanently revokes client access${affected ? ` for ${affected}` : ''}.${extra} Re-adding this provider will not restore grants. Only new requests are blocked; dispatched requests may continue.`;
+  return undefined;
 }
 
-export function routesView(state: ProxyState, api: ProxyClient, context: UIContext): HTMLElement {
+export function routesView(
+  state: ProxyState,
+  api: ProxyClient,
+  context: UIContext,
+  focusKey?: string,
+): HTMLElement {
   const readonly = state.mode === 'file';
   const view = el('div');
   const groups = providerGroups(state);
-  const open = openManagers.get(context) ?? new Set<string>();
-  openManagers.set(context, open);
-  const intro = card('Providers');
-  intro.classList.add('page-intro', 'providers-intro');
+  const prefs = preferences.get(context) ?? { tab: 'access', filter: '' };
+  preferences.set(context, prefs);
+  const previous = prefs.selected;
+  // Only the refresh that renders this view can move the selection, so a plain
+  // Refresh (no key) or an unrelated save never jumps to another provider.
+  const target = focusedProvider(groups, state, focusKey);
+  if (target && target.id !== previous) {
+    prefs.selected = target.id;
+    // Another provider's route was saved: that is setup, which continues on Access.
+    prefs.tab = 'access';
+  }
+  // Default to the first row the list shows, which is grouped by family.
+  const ordered = providerFamilies.flatMap(([family]) =>
+    groups.filter((group) => group.family === family),
+  );
+  const selectedGroup =
+    groups.find((group) => group.id === prefs.selected) ?? ordered[0] ?? groups[0];
+  prefs.selected = selectedGroup?.id;
+  // Never keep a filter that hides the provider just selected for the operator.
+  if (
+    groups.length < FILTER_THRESHOLD ||
+    (selectedGroup && previous !== selectedGroup.id && !matchesFilter(selectedGroup, prefs.filter))
+  )
+    prefs.filter = '';
+
+  const heading = el('h2', 'Providers');
+  heading.tabIndex = -1;
+  const attention = groups.filter((group) => group.status === 'red' || group.status === 'orange');
+  const summary = el(
+    'p',
+    `${groups.length} ${groups.length === 1 ? 'provider' : 'providers'}${attention.length ? ` · ${attention.length} ${attention.length === 1 ? 'needs' : 'need'} attention` : ''}`,
+  );
+  const introActions = el('div');
+  introActions.className = 'providers-intro-actions';
+  const intro = el('section', el('div', heading, groups.length ? summary : ''), introActions);
+  intro.className = 'page-intro providers-intro';
   view.append(intro);
 
-  // The app guards navigation. Within Routes, an operation must not replace a
-  // component that is issuing or displaying a show-once client token.
+  // The app guards navigation. Within Providers, an operation must not replace
+  // a component that is issuing or displaying a show-once client token.
   let tokenOwner: symbol | undefined;
   const operations = new Map<symbol, number>();
-  const blocked = (owner?: symbol) => {
+  const tokenShown = (owner?: symbol) => {
     if ((tokenOwner || context.hasProtectedToken?.()) && (!owner || tokenOwner !== owner)) {
       context.announce('Finish saving or dismissing the one-time connection details first.');
       return true;
     }
+    return false;
+  };
+  const blocked = (owner?: symbol) => {
+    if (tokenShown(owner)) return true;
     if ([...operations.keys()].some((active) => active !== owner)) {
       context.announce('Wait for the current route action to finish.');
       return true;
@@ -133,11 +133,12 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
   }
 
   const composer = el('div');
-  let editor: { row: HTMLElement; form: HTMLElement } | undefined;
-  function closeEditor() {
-    editor?.form.remove();
-    editor = undefined;
-  }
+  const editor: RouteEditorSlot = {
+    close() {
+      this.current?.form.remove();
+      this.current = undefined;
+    },
+  };
   if (readonly) {
     view.append(
       el(
@@ -149,7 +150,7 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
     const addButton = button('Add provider', () => {
       if (blocked()) return;
       if (!composer.childElementCount) {
-        closeEditor();
+        editor.close();
         composer.append(
           routePresetPicker(
             state.presets ?? [],
@@ -209,283 +210,11 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
     }
     addButton.className = 'primary';
     addButton.setAttribute('aria-expanded', 'false');
-    intro.append(addButton);
+    introActions.append(addButton);
     view.append(composer);
   }
 
-  const pages = providerPages.get(context) ?? new Map<ProxyProviderFamily, number>();
-  providerPages.set(context, pages);
   view.append(clientDefaults(state, api, componentContext()));
-
-  const accountDeps = () => ({ state, api, context: componentContext() });
-  // Credentials are maintained beside the routes that use them. Native
-  // sign-ins are held by the proxy and managed in the provider section.
-  function routeAccountTools(route: ProxyRoute, kind?: ProxyAccount['kind']) {
-    if (
-      !route.account ||
-      state.accounts === undefined ||
-      routeNativeProvider(route, state) ||
-      nativeProvider(kind)
-    )
-      return;
-    const account = state.accounts.find((a) => a.name === route.account);
-    if (!account) return connectAccount(accountDeps(), route.account, kind);
-    const usedBy = state.routes.filter((r) => r.account === account.name).map((r) => r.name);
-    return accountControls(accountDeps(), account, usedBy, `route:${route.name}`);
-  }
-
-  function deleteProviderButton(group: ProviderGroup): HTMLButtonElement {
-    const removeContext = componentContext();
-    const remove = button('Delete provider', () => {
-      if (blocked()) return;
-      const consequence = deleteProviderConsequence(group, state);
-      if (!window.confirm(consequence)) return;
-      void removeContext.run(async () => {
-        try {
-          await api.deleteProvider(state.revision, group.id);
-        } catch (error) {
-          if (error instanceof ProxyAPIError && error.status === 409) {
-            try {
-              await context.refresh();
-            } catch {
-              // Preserve the conflict message.
-            }
-          }
-          throw error;
-        }
-        open.delete(group.id);
-        await context.refresh();
-        context.announce(
-          `Deleted provider ${group.id}. Its client grants were removed; dispatched requests may continue.`,
-        );
-      }, remove);
-    });
-    remove.className = 'danger';
-    remove.setAttribute('aria-label', `Delete provider ${group.label}`);
-    return remove;
-  }
-
-  function routeAdminActions(
-    route: ProxyRoute,
-    panel: HTMLElement,
-    preset: ProxyPreset | undefined,
-  ) {
-    const rowContext = componentContext();
-    const edit = (focusAccount = false) => {
-      if (blocked()) return;
-      if (editor?.row === panel) {
-        focusWithin(editor.form);
-        return;
-      }
-      closeEditor();
-      const form = routeForm(
-        state,
-        api,
-        rowContext,
-        () => {
-          if (blocked()) return;
-          closeEditor();
-          editButton.focus();
-        },
-        route,
-        preset,
-      );
-      panel.append(form);
-      editor = { row: panel, form };
-      if (focusAccount) {
-        const accountSelect = form.querySelector<HTMLSelectElement>('select');
-        if (accountSelect) accountSelect.focus();
-        else form.querySelector('input')?.focus();
-      } else {
-        form.querySelector('input')?.focus();
-      }
-    };
-    const editButton = button('Edit', () => edit());
-    editButton.setAttribute('aria-label', `Edit ${route.name}`);
-    const toggle = button(route.enabled ? 'Disable' : 'Enable', () => {
-      if (blocked()) return;
-      if (
-        route.enabled &&
-        !window.confirm(
-          `Disable route ${route.name}? New requests will be blocked. Client grants are kept; dispatched requests may continue until finish or deadline.`,
-        )
-      )
-        return;
-      void rowContext.run(async () => {
-        await api.config(
-          state,
-          state.routes.map((r) => (r === route ? { ...r, enabled: !r.enabled } : r)),
-        );
-        await context.refresh(`route:${route.name}`);
-        context.announce(
-          `${route.enabled ? 'Disabled' : 'Enabled'} route ${route.name}.${route.enabled ? ' New requests are blocked; dispatched requests may continue.' : ''}`,
-        );
-      }, toggle);
-    });
-    toggle.setAttribute('aria-label', `${route.enabled ? 'Disable' : 'Enable'} ${route.name}`);
-    const controls = actions(editButton, toggle);
-    if ((route.account && !routeNativeProvider(route, state)) || routeNeedsSecret(route)) {
-      controls.append(
-        button(route.account ? 'Change linked account' : 'Configure API key', () =>
-          edit(!!route.account),
-        ),
-      );
-    }
-    return controls;
-  }
-
-  function renderProvider(group: ReturnType<typeof providerGroups>[number]): HTMLElement {
-    const routes = group.routes.map((route) => ({
-      route,
-      preset: matchRoutePreset(route, state),
-      display: routeSummary(route, state),
-    }));
-    const dot = el('span');
-    dot.className = `provider-dot provider-dot-${group.status}`;
-    dot.setAttribute('role', 'img');
-    dot.setAttribute(
-      'aria-label',
-      `Status: ${group.status}${group.reason ? `, ${group.reason}` : ''}`,
-    );
-    const heading = el('h3', group.id);
-    const statusText = el('span', group.reason);
-    statusText.className = 'provider-status';
-    const title = el('div', dot, heading);
-    if (group.label !== group.id) title.append(el('span', group.label));
-    title.append(statusText);
-    title.className = 'provider-title';
-    const list = el('ul');
-    list.className = 'provider-routes';
-    list.setAttribute('aria-label', `${group.label} routes`);
-    const manage = disclosure('Manage');
-    const details = el('div');
-    details.className = 'provider-management-content';
-    manage.append(details);
-    manage.className = 'provider-manage';
-    manage.open = open.has(group.id);
-    manage.addEventListener('toggle', () => {
-      if (manage.open) open.add(group.id);
-      else open.delete(group.id);
-    });
-
-    details.append(providerAccess(group, state, api, componentContext()));
-
-    const seenAccounts = new Set<string>();
-    const seenNative = new Set<NativeProvider>();
-    for (const { route, preset } of routes) {
-      const native = routeNativeProvider(route, state);
-      list.append(providerRouteLine(route));
-      if (route.account && !seenAccounts.has(route.account) && !native) {
-        seenAccounts.add(route.account);
-        // Legacy Grok CLI routes no longer have a picker preset.
-        const kind = preset?.account_kind ?? (route.profile === 'grok-bin' ? 'grok' : undefined);
-        const account = routeAccountTools(route, kind);
-        const signIn = providerRouteAction(route, state, api, componentContext());
-        if (signIn || account) {
-          const settings = el('div', el('h4', 'Account'));
-          settings.className = 'provider-section provider-account-section';
-          if (signIn) settings.append(signIn);
-          if (account) settings.append(account);
-          // Account controls belong to the provider, not to each child route.
-          details.append(settings);
-        }
-      }
-      if (!readonly && native && !seenNative.has(native)) {
-        const setup = providerRouteAction(route, state, api, componentContext());
-        if (setup) {
-          seenNative.add(native);
-          const section = el('div', el('h4', 'Shared subscription'), setup);
-          section.className = 'provider-section provider-account-section';
-          details.append(section);
-        }
-      }
-    }
-
-    const routesSection = el('div', el('h4', routes.length === 1 ? 'Route' : 'Routes'));
-    routesSection.className = 'provider-section provider-routes-section';
-    for (const { route, preset, display } of routes) {
-      const panel = el('div');
-      panel.className = 'provider-route-management';
-      panel.dataset.route = route.name;
-      const routeHeader = el('div', el('code', route.local_prefix));
-      routeHeader.className = 'provider-route-header';
-      if (!readonly) routeHeader.append(routeAdminActions(route, panel, preset));
-      panel.append(routeHeader, display.advanced);
-      routesSection.append(panel);
-    }
-    details.append(routesSection);
-
-    if (group.family === 'inference')
-      details.append(providerConfigSection(group, state, api, componentContext(), readonly));
-
-    if (!readonly) {
-      // Renaming is rare: keep the editor closed until asked for.
-      const label = input(group.label);
-      const labelForm = el('form', field('Provider label', label));
-      submit(
-        labelForm,
-        componentContext(),
-        async () => {
-          await api.renameProviderLabel(state.revision, group.id, label.value.trim());
-          await context.refresh(`route:${group.routes[0].name}`);
-          context.announce(`Saved label for ${group.id}.`);
-        },
-        'Save label',
-      );
-      const rename = button('Rename', () => {
-        if (blocked()) return;
-        setRenaming(true);
-        label.focus();
-        label.select();
-      });
-      rename.setAttribute('aria-label', `Rename ${group.label}`);
-      labelForm.append(
-        button('Cancel', () => {
-          setRenaming(false);
-          rename.focus();
-        }),
-      );
-      labelForm.className = 'provider-section provider-label-form';
-      const setRenaming = (renaming: boolean) => {
-        if (!renaming) label.value = group.label;
-        labelForm.hidden = !renaming;
-        rename.setAttribute('aria-expanded', String(renaming));
-      };
-      setRenaming(false);
-      details.append(labelForm);
-      const additions = missingCompanions(group, state).map((preset) => {
-        const addRoute = button(`Add ${preset.label} route`, () => {
-          if (blocked()) return;
-          closeEditor();
-          const form = routeForm(
-            state,
-            api,
-            componentContext(),
-            () => {
-              if (blocked()) return;
-              closeEditor();
-              addRoute.focus();
-            },
-            undefined,
-            preset,
-            group,
-          );
-          routesSection.append(form);
-          editor = { row: details, form };
-          form.querySelector('input')?.focus();
-        });
-        return addRoute;
-      });
-      const footer = el('div', actions(rename, ...additions), actions(deleteProviderButton(group)));
-      footer.className = 'provider-manage-footer';
-      details.append(footer);
-    }
-
-    const row = el('article', title, approvalSummary(group, state), list, manage);
-    row.className = 'route-card route-accordion-item provider-card';
-    row.setAttribute('aria-label', group.label);
-    return row;
-  }
 
   // Keep every disclosure containing a show-once token reachable until the
   // operator has copied or dismissed it (including native device launchers).
@@ -502,68 +231,64 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
     }
   });
 
-  function familySection(family: ProxyProviderFamily, label: string, groups: ProviderGroup[]) {
-    const section = el('section', el('h2', label));
-    section.className = 'provider-family';
-    section.setAttribute('aria-label', label);
-    let currentPage = Math.min(pages.get(family) ?? 0, Math.ceil(groups.length / PAGE_SIZE) - 1);
-    const routeList = el('div');
-    routeList.className = 'route-list';
-    const pagination = el('nav');
-    pagination.className = 'route-pagination';
-    pagination.setAttribute('aria-label', `${label} provider pagination`);
-    section.append(routeList);
-    function renderPage() {
-      const start = currentPage * PAGE_SIZE;
-      const end = Math.min(start + PAGE_SIZE, groups.length);
-      routeList.replaceChildren(...groups.slice(start, end).map(renderProvider));
-      const totalPages = Math.ceil(groups.length / PAGE_SIZE);
-      if (totalPages <= 1) return;
-      const goTo = (page: number) => {
-        if (page === currentPage || blocked()) return;
-        closeEditor();
-        currentPage = page;
-        pages.set(family, page);
-        renderPage();
-        focusWithin(routeList);
-      };
-      const controls = el('div');
-      controls.className = 'route-pagination-controls';
-      const prev = button('Previous', () => goTo(currentPage - 1));
-      prev.disabled = currentPage === 0;
-      controls.append(prev);
-      for (const item of pageNumbers(currentPage, totalPages)) {
-        if (item === 'ellipsis') {
-          const dots = el('span', '…');
-          dots.className = 'route-pagination-ellipsis';
-          dots.setAttribute('aria-hidden', 'true');
-          controls.append(dots);
-        } else {
-          const control = button(String(item + 1), () => goTo(item));
-          control.setAttribute('aria-label', `Page ${item + 1}`);
-          if (item === currentPage) control.setAttribute('aria-current', 'page');
-          controls.append(control);
-        }
-      }
-      const next = button('Next', () => goTo(currentPage + 1));
-      next.disabled = currentPage >= totalPages - 1;
-      controls.append(next);
-      pagination.replaceChildren(
-        el('small', `Showing ${start + 1}–${end} of ${groups.length} providers`),
-        controls,
-      );
-      if (!pagination.parentElement) section.append(pagination);
-    }
-
-    renderPage();
-    return section;
-  }
-
   if (groups.length) {
-    for (const [family, label] of providerFamilies) {
-      const entries = groups.filter((group) => group.family === family);
-      if (entries.length) view.append(familySection(family, label, entries));
-    }
+    const detailSlot = el('div');
+    detailSlot.className = 'provider-detail-slot';
+    const renderDetail = () => {
+      const group = groups.find((entry) => entry.id === prefs.selected);
+      if (!group) return;
+      const detail = providerDetail(group, {
+        state,
+        api,
+        context,
+        readonly,
+        componentContext,
+        blocked: () => blocked(),
+        editor,
+        tab: prefs.tab,
+        onTab(id) {
+          // Hiding a show-once token behind another tab invites losing it.
+          if (tokenShown()) return false;
+          prefs.tab = id;
+          return true;
+        },
+        onDeleted(id) {
+          if (prefs.selected === id) prefs.selected = undefined;
+        },
+      });
+      detail.id = DETAIL_ID;
+      detailSlot.replaceChildren(detail);
+    };
+    const list = providerList({
+      groups,
+      state,
+      selected: prefs.selected,
+      filter: prefs.filter,
+      detailID: DETAIL_ID,
+      onSelect(id) {
+        if (blocked()) return false;
+        editor.close();
+        prefs.selected = id;
+        for (const item of list.querySelectorAll<HTMLElement>('[data-provider]')) {
+          if (item.dataset.provider === id) item.setAttribute('aria-current', 'true');
+          else item.removeAttribute('aria-current');
+        }
+        renderDetail();
+        // Stacked on narrow screens, the detail sits below the list: move there.
+        if (detailSlot.getBoundingClientRect().top >= list.getBoundingClientRect().bottom) {
+          detailSlot.scrollIntoView?.({ block: 'start' });
+          detailSlot.querySelector<HTMLElement>('h2')?.focus({ preventScroll: true });
+        }
+        return true;
+      },
+      onFilter(value) {
+        prefs.filter = value;
+      },
+    });
+    renderDetail();
+    const workspace = el('div', list, detailSlot);
+    workspace.className = 'provider-workspace';
+    view.append(workspace);
   } else {
     view.append(
       card(
@@ -595,7 +320,7 @@ export function routesView(state: ProxyState, api: ProxyClient, context: UIConte
     }
   }
   if (state.accounts !== undefined) {
-    const unused = unusedAccountsView(accountDeps());
+    const unused = unusedAccountsView({ state, api, context: componentContext() });
     if (unused) view.append(unused);
   }
   return view;

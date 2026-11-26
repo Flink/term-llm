@@ -1,3 +1,5 @@
+@import './radius.css';
+
 /* Design tokens: color scheme, spacing, layout and syntax palettes.
 
    A theme sets the seeds (--bg, --text, --accent-blue, and optionally --accent
@@ -39,10 +41,16 @@
   --code-inline-bg: var(--surface-2);
   --accent-hover: color-mix(in oklab, var(--accent), var(--bg) 15%);
   --accent-active: color-mix(in oklab, var(--accent), var(--bg) 25%);
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-full: 999px;
+
+  /* State surfaces: a tinted fill plus an outline that follows the box's own
+     corner. Never mark a rounded box with a side bar; the bar bends with it. */
+  --state-outline-width: 1px;
+  --state-current-bg: var(--surface-2);
+  --state-current-border: color-mix(in oklab, var(--accent) 40%, var(--border));
+  --state-active-bg: color-mix(in oklab, var(--accent-amber) 8%, transparent);
+  --state-active-border: color-mix(in oklab, var(--accent-amber) 40%, transparent);
+  --state-error-bg: color-mix(in oklab, var(--danger) 5%, transparent);
+  --state-error-border: color-mix(in oklab, var(--danger) 35%, var(--border));
   --shadow-composer: 0 2px 8px rgb(0 0 0 / 6%);
   --content-width: 48rem;
   --action-btn-size: 24px;

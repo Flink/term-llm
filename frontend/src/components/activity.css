@@ -11,7 +11,7 @@
   background: #fff;
   color: #262b31;
   border: 1px solid rgb(0 0 0 / 5%);
-  border-radius: 22px 22px 0 0;
+  border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
   padding: 18px 20px calc(16px + env(safe-area-inset-bottom));
   box-shadow: 0 -10px 48px rgb(27 37 52 / 10%);
   overflow-wrap: anywhere;
@@ -45,7 +45,7 @@
   display: grid;
   place-items: center;
   border: 1px solid #dfe2e6;
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   background: #f6f7f9;
   color: #4b5260;
 }
@@ -210,7 +210,7 @@
   }
 
   .activity-panel.modal {
-    border-radius: 20px;
+    border-radius: var(--radius-2xl);
     padding-bottom: 20px;
     max-height: min(78dvh, 720px);
   }
@@ -281,7 +281,7 @@
   overflow: auto;
   font-size: 12px;
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: #f7f8fa;
   color: #34383d;
 }

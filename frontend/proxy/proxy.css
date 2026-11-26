@@ -1,3 +1,4 @@
+@import '../src/styles/base/radius.css';
 @import '../src/styles/base/typography.css';
 @import './timeline.css';
 @import './timeline-tokens.css';
@@ -92,7 +93,7 @@ article {
   padding: 0.85rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
 }
 
@@ -126,14 +127,14 @@ textarea {
   font: inherit;
   font-size: 0.875rem;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 input[type='file']::file-selector-button {
   margin-right: 0.65rem;
   padding: 0.15rem 0.5rem;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface-2);
   color: var(--text);
   font: inherit;
@@ -296,7 +297,7 @@ fieldset {
   margin: 0.65rem 0;
   padding: 0.75rem;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 legend {
@@ -311,7 +312,7 @@ pre {
   padding: 0.75rem;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   font-size: 0.8rem;
 }
 
@@ -360,12 +361,13 @@ dd {
   padding: 0.5rem 0.75rem;
   background: var(--surface-2);
   border: 1px solid var(--border-strong);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   font-size: 0.875rem;
 }
 
 #proxy-app > [role='status'][data-tone='error'] {
-  border-inline-start: 3px solid var(--down);
+  border-color: var(--state-error-border);
+  background: var(--state-error-bg);
   color: var(--down);
 }
 
@@ -401,15 +403,10 @@ details {
   margin: 0.65rem 0;
 }
 
-.badge.enabled {
-  color: color-mix(in srgb, var(--ok) 72%, var(--text));
-  background: color-mix(in srgb, var(--ok) 10%, var(--surface));
-}
-
 .preview,
 .warning {
   padding: 0.6rem 0.75rem;
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   font-size: 0.85rem;
 }
 
@@ -445,15 +442,11 @@ details {
 .badge {
   display: inline-block;
   padding: 0.2rem 0.55rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 0.75rem;
   font-weight: 500;
   background: var(--surface-2);
   color: var(--muted);
-}
-
-.badge.credential {
-  color: var(--text);
 }
 
 .badge.caution,
@@ -496,7 +489,7 @@ article.selected {
   padding: 0.45rem 0.75rem;
   background: var(--surface);
   border: 1px solid var(--border-strong);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .route-picker {
@@ -570,7 +563,7 @@ button.route-preset-choice:hover {
   place-items: center;
   width: 1.75rem;
   height: 1.75rem;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--surface-3);
   font-size: 0.68rem;
   font-weight: 700;
@@ -623,28 +616,6 @@ button.route-preset-custom {
   border-color: transparent;
 }
 
-.route-list {
-  margin: 0.65rem 0;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: var(--shadow-card);
-}
-
-.route-accordion-item {
-  margin: 0;
-  padding: 0.55rem 0.85rem;
-  border: 0;
-  border-bottom: 1px solid var(--border);
-  border-radius: 0;
-  box-shadow: none;
-}
-
-.route-accordion-item:last-child {
-  border-bottom: 0;
-}
-
 .providers-intro {
   display: flex;
   align-items: center;
@@ -656,63 +627,289 @@ button.route-preset-custom {
   margin: 0;
 }
 
-.provider-card {
-  position: relative;
-  padding-block: 0.8rem;
-}
-
-.provider-title {
+.providers-intro-actions {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.2rem 0.55rem;
-  padding-inline-end: 5.75rem;
-  overflow-wrap: anywhere;
+  align-items: center;
+  gap: 0.5rem;
 }
 
-.provider-status,
-.provider-approval-summary {
-  color: var(--muted);
-  font-size: 0.8rem;
+.providers-intro p {
+  margin-top: 0.15rem;
 }
 
-.provider-approval-summary {
-  margin: 0.22rem 0 0;
-}
-
-.provider-routes {
+/* Providers: a compact list beside one provider's detail. */
+.provider-workspace {
   display: grid;
-  gap: 0.14rem;
-  margin: 0.48rem 0 0;
+  grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
+  align-items: start;
+  gap: 0.75rem;
+  margin: 0.65rem 0;
+}
+
+.provider-list {
+  position: sticky;
+  top: 0.75rem;
+  max-height: calc(100vh - 1.5rem);
+  overflow: auto;
+  padding: 0.45rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+.provider-list ul {
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.provider-route-line {
+input.provider-list-filter {
+  height: 2rem;
+  margin-bottom: 0.2rem;
+  font-size: 0.82rem;
+}
+
+.provider-list-family {
+  margin: 0.65rem 0.5rem 0.2rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.provider-list > div:first-child .provider-list-family {
+  margin-top: 0.25rem;
+}
+
+button.provider-list-item {
   display: grid;
-  grid-template-columns: minmax(0, 9.5rem) minmax(0, 1fr);
-  align-items: baseline;
-  gap: 0 0.55rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.05rem 0.5rem;
+  width: 100%;
+  min-height: 0;
+  padding: 0.4rem 0.5rem;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-weight: 400;
+  text-align: start;
+}
+
+button.provider-list-item:hover {
+  background: var(--surface-2);
+}
+
+button.provider-list-item[aria-current='true'] {
+  background: var(--surface-3);
+}
+
+.provider-list-name {
+  overflow: hidden;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-list-count {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.provider-list-note {
+  grid-column: 2 / -1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-list-note-red {
+  color: var(--down);
+}
+
+.provider-list-note-orange {
+  color: var(--warn);
+}
+
+.provider-list-empty {
+  margin: 0.5rem;
+  color: var(--muted);
   font-size: 0.8rem;
+}
+
+.provider-detail {
+  margin: 0;
+  padding: 1rem 1.15rem 1.1rem;
+}
+
+.provider-detail-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.6rem;
   overflow-wrap: anywhere;
 }
 
-.provider-manage {
+.provider-detail-title h2 {
   margin: 0;
+  font-size: 1.15rem;
 }
 
-.provider-manage > summary {
-  position: absolute;
-  inset-block-start: 0.35rem;
-  inset-inline-end: 0.85rem;
-  display: list-item;
-  align-content: center;
-  padding: 0 0.12rem;
+.provider-detail-label {
+  color: var(--muted);
+  font-size: 0.95rem;
 }
 
-.provider-management-content {
-  margin-top: 0.65rem;
-  border-top: 1px solid var(--border);
+.provider-status {
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.provider-status-red {
+  background: color-mix(in srgb, var(--down) 9%, var(--surface));
+  color: var(--down);
+}
+
+.provider-status-orange {
+  background: color-mix(in srgb, var(--warn) 11%, var(--surface));
+  color: var(--warn);
+}
+
+.provider-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0.3rem 0 0.9rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.provider-detail-meta > * + *::before {
+  margin: 0 0.45rem;
+  content: '\b7';
+}
+
+.provider-detail-routes code {
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.provider-detail-routes code + code {
+  margin-left: 0.45rem;
+}
+
+.provider-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  width: fit-content;
+  max-width: 100%;
+  margin-bottom: 0.9rem;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.provider-tabs > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 30px;
+  padding: 0.3rem 0.75rem;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 550;
+}
+
+.provider-tabs > button:hover {
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+  color: var(--text);
+}
+
+.provider-tabs > button[aria-selected='true'] {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow:
+    0 1px 2px #0000001a,
+    0 0 0 1px #0000000a;
+}
+
+.provider-tab-count {
+  padding: 0 0.4rem;
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.provider-tab-mark {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+}
+
+.provider-tab-mark-down {
+  background: #d95050;
+}
+
+.provider-tab-mark-warn {
+  background: #d98230;
+}
+
+.provider-tab-panel > .provider-section:first-child,
+.provider-tab-panel > :first-child > .provider-section:first-child {
+  padding-top: 0;
+}
+
+.provider-label-form .field {
+  max-width: 26rem;
+  margin-top: 0;
+}
+
+.provider-danger-zone {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-top: 0.9rem;
+  padding: 0.6rem 0.6rem 0.6rem 0.9rem;
+  background: color-mix(in srgb, var(--down) 3%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--down) 28%, var(--border));
+  border-radius: var(--radius-lg);
+}
+
+.provider-danger-zone p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+@media (width <= 52rem) {
+  .provider-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .provider-list {
+    position: static;
+    max-height: 18rem;
+  }
 }
 
 .provider-section {
@@ -734,7 +931,6 @@ button.route-preset-custom {
 
 .provider-section-header,
 .provider-route-header,
-.provider-manage-footer,
 .route-form-danger {
   display: flex;
   flex-wrap: wrap;
@@ -781,7 +977,6 @@ button.route-preset-custom {
   color: var(--text);
 }
 
-.provider-manage-footer,
 .route-form-advanced,
 .route-form-danger {
   padding-top: 0.7rem;
@@ -828,53 +1023,97 @@ button.route-preset-custom {
   margin-top: 0.6rem;
 }
 
-.route-card h2 {
-  margin: 0;
-  font-size: 0.92rem;
-}
-
-.route-card code {
-  font-size: 0.78rem;
-  color: var(--muted);
-  overflow-wrap: anywhere;
-}
-
-.route-card .actions {
-  margin: 0;
-  flex-shrink: 0;
-}
-
-.route-card .actions button,
+.provider-detail .actions button,
 .route-cmd-bar > button {
   min-height: 30px;
   padding: 0.28rem 0.68rem;
   font-size: 0.8rem;
 }
 
-.route-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-}
-
 .route-row-settings {
-  margin-top: 0.55rem;
+  margin-top: 0.45rem;
 }
 
-.route-row-settings .route-badges {
-  margin-top: 0.4rem;
+dl.route-facts {
+  grid-template-columns: 9rem minmax(0, 1fr);
+  gap: 0.45rem 0.9rem;
+  margin: 0;
+  font-size: 0.84rem;
 }
 
-/* Route access: one compact row per client, actions at the end. */
+.route-facts dt {
+  font-size: 0.8rem;
+}
+
+.route-facts dd {
+  min-width: 0;
+}
+
+.route-facts code {
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.route-fact-note {
+  display: block;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.route-fact-missing {
+  color: var(--down);
+  font-weight: 600;
+}
+
+.route-fact-rules,
+.route-fact-allow {
+  margin: 0.25rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.route-fact-rules > li + li {
+  margin-top: 0.3rem;
+}
+
+/* After the base rule: same specificity, so order decides. */
+@media (width <= 40rem) {
+  dl.route-facts {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 0.1rem;
+  }
+
+  .route-facts dd {
+    margin-bottom: 0.45rem;
+  }
+}
+
+/* Provider access: approve first, then one compact row per approved client. */
 .route-access-panel h4 {
   margin: 0 0 0.25rem;
   font-size: 0.78rem;
   color: var(--muted);
 }
 
-.route-access-grant,
-.route-access-create {
-  margin-top: 0.55rem;
+.route-access-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.6rem 1rem;
+  margin-bottom: 1rem;
+  padding: 0.7rem 0.8rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.route-access-add > .route-access-grant {
+  flex: 1 1 22rem;
+}
+
+.route-access-add > .route-access-create:only-child,
+.route-access-add > .route-access-create:has(form:not([hidden])) {
+  flex: 1 1 100%;
 }
 
 .route-access-panel .route-access-grant .client-grant-fields {
@@ -887,18 +1126,38 @@ button.route-preset-custom {
   color: var(--muted);
 }
 
+.route-access-current > h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.3rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.route-access-count {
+  padding: 0 0.4rem;
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .route-access-clients {
   margin: 0;
   padding: 0;
   list-style: none;
+  border-block: 1px solid var(--border);
 }
 
 .route-access-client {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(7.5rem, auto) auto;
   align-items: center;
-  gap: 0.25rem 0.5rem;
-  padding: 0.35rem 0;
+  gap: 0.25rem 0.75rem;
+  min-height: 2.5rem;
+  padding: 0.25rem 0.35rem;
   border-top: 1px solid var(--border);
 }
 
@@ -906,12 +1165,54 @@ button.route-preset-custom {
   border-top: 0;
 }
 
+.route-access-client:hover {
+  background: var(--surface-2);
+}
+
+.route-access-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem 0.5rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+}
+
+.route-access-pending {
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--warn) 11%, var(--surface));
+  color: var(--warn);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
 .route-access-client small {
   color: var(--muted);
 }
 
 .route-access-client > .actions {
-  margin: 0 0 0 auto;
+  margin: 0;
+}
+
+.provider-detail .route-access-client button.route-access-remove {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.provider-detail .route-access-client button.route-access-remove:is(:hover, :focus-visible),
+.route-access-client:hover button.route-access-remove {
+  color: color-mix(in srgb, var(--down) 90%, var(--text));
+}
+
+.provider-detail .route-access-client button.route-access-remove:hover {
+  border-color: color-mix(in srgb, var(--down) 40%, var(--border));
+}
+
+.route-access-panel > .provider-note {
+  margin-top: 0.6rem;
 }
 
 .route-access-panel form {
@@ -924,6 +1225,16 @@ button.route-preset-custom {
 .route-access-panel form .field {
   flex: 1 1 12rem;
   margin: 0;
+}
+
+@media (width <= 40rem) {
+  .route-access-client {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .route-access-client small {
+    grid-row: 2;
+  }
 }
 
 /* Clients: one line per client; expanding a row edits its grants. */
@@ -941,7 +1252,7 @@ button.route-preset-custom {
   padding: 1rem 1.15rem;
   background: var(--surface);
   border: 1px solid var(--border-strong);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
 }
 
@@ -1002,7 +1313,7 @@ button.route-preset-custom {
   min-height: 2.1rem;
   background: var(--bg);
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 0.825rem;
   font-weight: 500;
   line-height: 1.3;
@@ -1071,7 +1382,7 @@ button.route-preset-custom {
   padding: 0.8rem 0.9rem;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .config-snippet-head {
@@ -1136,7 +1447,7 @@ button.route-preset-custom {
   margin: 0.65rem 0;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   box-shadow: var(--shadow-card);
 }
@@ -1280,7 +1591,7 @@ button.client-toggle:hover {
   padding: 0.7rem 0.8rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .client-detail[hidden] {
@@ -1446,7 +1757,7 @@ button.defaults-edit[aria-expanded='true'] {
   padding: 0.85rem;
   background: var(--surface);
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 14px 40px rgb(0 0 0 / 16%);
 }
 
@@ -1509,49 +1820,8 @@ button.defaults-edit[aria-expanded='true'] {
   overflow-wrap: anywhere;
 }
 
-.route-pagination {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem 0.75rem;
-  margin: 0.5rem 0 0.75rem;
-  padding: 0.25rem 0;
-  border-bottom: 0;
-}
-
-.route-pagination-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.25rem;
-}
-
-.route-pagination-controls button {
-  min-height: 28px;
-  min-width: 28px;
-  padding: 0.2rem 0.55rem;
-  font-size: 0.78rem;
-  font-weight: 500;
-  border-color: var(--border);
-  background: var(--surface);
-  color: var(--text);
-}
-
-.route-pagination-controls button[aria-current='page'] {
-  background: var(--accent);
-  color: var(--accent-contrast);
-  border-color: var(--accent);
-}
-
-.route-pagination-ellipsis {
-  padding: 0 0.25rem;
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
 .insecure-option {
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 0.65rem;
 }
 
@@ -1668,7 +1938,7 @@ form > button + button {
   margin-top: 0.6rem;
   padding: 0.75rem;
   background: var(--surface-2);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 /* The footer owns paging controls; the top keeps only a quiet result count. */
@@ -1727,7 +1997,7 @@ form > button + button {
 .request-list {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
 }
 
@@ -1800,7 +2070,7 @@ form > button + button {
   padding: 0;
   background: transparent;
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-size: inherit;
   text-align: left;
 }
@@ -1862,7 +2132,7 @@ form > button + button {
 .request-status-code {
   display: inline-block;
   padding: 0.1rem 0.35rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface-3);
   font-weight: 650;
 }
@@ -2028,7 +2298,7 @@ form > button + button {
 
 .request-tokens dl > div {
   padding: 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
 }
 
@@ -2052,7 +2322,7 @@ form > button + button {
   max-width: 460px;
   margin: 2rem auto;
   padding: 1.25rem;
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
 }
 
 .passkey-auth > p {
@@ -2082,11 +2352,7 @@ form > button + button {
     gap: 0.15rem;
   }
 
-  .route-pagination {
-    overflow-x: auto;
-  }
-
-  nav button {
+  main > nav button {
     min-height: 44px;
     min-width: 0;
     flex: 1 1 0;
@@ -2102,15 +2368,8 @@ form > button + button {
   .filters,
   .header-substitution,
   .route-form-grid,
-  .provider-route-line,
   .subpath-rule {
     grid-template-columns: 1fr;
-  }
-
-  .route-pagination button {
-    flex: 0 0 auto;
-    min-height: 32px;
-    padding: 0.25rem 0.55rem;
   }
 
   dl {
@@ -2139,9 +2398,10 @@ form > button + button {
 @media (pointer: coarse), (width <= 40rem) {
   button,
   summary,
-  .route-card .actions button,
+  .provider-detail .actions button,
+  .provider-tabs > button,
+  button.provider-list-item,
   .route-cmd-bar > button,
-  .route-pagination-controls button,
   .config-snippet-head button,
   .token-copy-row > button {
     min-height: 44px;
@@ -2154,7 +2414,8 @@ form > button + button {
   input:not([type='checkbox']),
   select,
   .route-form input:not([type='checkbox']),
-  .route-form select {
+  .route-form select,
+  input.provider-list-filter {
     height: 44px;
   }
 
@@ -2162,12 +2423,12 @@ form > button + button {
   select,
   textarea,
   .route-form input:not([type='checkbox']),
-  .route-form select {
+  .route-form select,
+  input.provider-list-filter {
     font-size: 1rem;
   }
 
-  .request-pagination button,
-  .route-pagination-controls button {
+  .request-pagination button {
     min-width: 44px;
   }
 
@@ -2193,7 +2454,7 @@ dialog {
   color: var(--text);
   background: var(--surface);
   border: 1px solid var(--border-strong);
-  border-radius: 14px;
+  border-radius: var(--radius-xl);
 }
 
 dialog::backdrop {
@@ -2239,6 +2500,12 @@ header .actions button {
   --accent: #20242c;
   --accent-contrast: #fff;
   --warn: #a86815;
+
+  /* Same state tokens as the web UI: tinted fill plus an outline that follows
+     the corner, never a side bar on a rounded box. */
+  --state-outline-width: 1px;
+  --state-error-bg: color-mix(in srgb, var(--down) 6%, var(--surface));
+  --state-error-border: color-mix(in srgb, var(--down) 30%, var(--border));
 }
 
 .money-settings-fields {
@@ -2251,14 +2518,6 @@ header .actions button {
 .debug-preview {
   max-height: 32rem;
   overflow: auto;
-}
-
-.provider-family {
-  margin-block: 1.25rem;
-}
-
-.provider-title h3 {
-  margin: 0;
 }
 
 .provider-dot {

@@ -8,7 +8,7 @@
   height: min(46rem, calc(var(--app-height) - 2rem));
   max-height: calc(var(--app-height) - 2rem);
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: var(--radius-xl);
 }
 
 .side-question-modal .modal-title-row {
@@ -83,7 +83,7 @@
   place-items: center;
   margin: 0 auto 0.7rem;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: var(--radius-lg);
   background: var(--surface-2);
   color: var(--text-muted);
   font-size: 1.05rem;
@@ -111,7 +111,7 @@
 .side-question-starters button {
   padding: 0.42rem 0.62rem;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--text-muted);
   font-size: 0.76rem;
@@ -155,7 +155,7 @@
   gap: 0.75rem;
   padding: 0.55rem 0.65rem;
   border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--danger) 7%, transparent);
   color: var(--danger);
   font-size: 0.8rem;
@@ -188,7 +188,7 @@
   gap: 0.35rem;
   padding: 0.28rem;
   border: 1px solid var(--border);
-  border-radius: 22px;
+  border-radius: var(--radius-2xl);
   background: var(--surface-2);
   transition: border-color var(--panel-fade-duration) ease;
 }
@@ -246,7 +246,7 @@
   min-width: 8.5rem;
   padding: 0.58rem 0.85rem;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--surface-2);
   color: var(--text);
   font-size: 0.82rem;
@@ -257,7 +257,7 @@
 .side-question-stop span {
   width: 0.58rem;
   height: 0.58rem;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: currentcolor;
 }
 
@@ -279,7 +279,7 @@
     height: min(78dvh, calc(var(--app-height) - var(--safe-top) - 0.5rem));
     max-height: calc(var(--app-height) - var(--safe-top) - 0.5rem);
     padding: 0.9rem 0.8rem calc(0.8rem + var(--safe-bottom));
-    border-radius: 16px 16px 0 0;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   }
 
   .side-question-transcript {
