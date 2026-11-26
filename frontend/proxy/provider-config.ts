@@ -31,11 +31,13 @@ export function providerConfigSection(
   const providerID = group.id;
   const summary = el('p', providerConfigSummary(group.config));
   summary.className = 'provider-config-summary';
+  const purpose = el('p', 'Model settings sent to approved term-llm clients through discovery.');
+  purpose.className = 'provider-note';
   const section = el('div');
   section.className = 'provider-config provider-section';
 
   if (readonly) {
-    section.append(el('h4', 'Client config (term-llm)'), summary);
+    section.append(el('h3', 'Client config (term-llm)'), summary, purpose);
     if (group.config_yaml) {
       section.append(el('pre', el('code', group.config_yaml)));
     }
@@ -63,9 +65,9 @@ export function providerConfigSection(
     `${group.config ? 'Edit' : 'Add'} client config for ${group.label}`,
   );
 
-  const header = el('div', el('div', el('h4', 'Client config (term-llm)'), summary), toggle);
+  const header = el('div', el('div', el('h3', 'Client config (term-llm)'), summary), toggle);
   header.className = 'provider-section-header';
-  section.append(header);
+  section.append(header, purpose);
 
   const textarea = el('textarea');
   textarea.className = 'provider-config-yaml';

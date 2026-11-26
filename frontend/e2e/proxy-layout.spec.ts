@@ -56,24 +56,36 @@ async function choosePreset(page: Page, name: string) {
   await picker.getByRole('button', { name, exact: true }).click();
 }
 
-function routeLine(page: Page, name: string): Locator {
-  return page.locator(`[data-focus="route:${name}"]`);
+function providerItem(page: Page, routeName: string): Locator {
+  return page.locator(`.provider-list-item[data-routes~="${routeName}"]`);
 }
 
-function providerCard(page: Page, routeName: string): Locator {
-  return page
-    .locator('article.route-card')
-    .filter({ has: page.locator(`[data-focus="route:${routeName}"]`) });
+function providerRoutePrefix(detail: Locator, routeName: string): Locator {
+  return detail.locator(`.provider-detail-routes code[data-focus="route:${routeName}"]`);
 }
 
-async function openManage(page: Page, routeName: string): Promise<Locator> {
-  const manage = providerCard(page, routeName).locator('details.provider-manage');
-  await expect(manage).toHaveCount(1);
-  if (!(await manage.evaluate((node) => (node as HTMLDetailsElement).open))) {
-    await manage.locator('> summary').click();
-  }
-  await expect(manage).toHaveAttribute('open', '');
-  return manage;
+type ProviderTab = 'access' | 'connection' | 'config' | 'settings';
+
+function providerTab(detail: Locator, tab: ProviderTab): Locator {
+  return detail.locator(`[role="tab"][data-tab="${tab}"]`);
+}
+
+async function openProvider(page: Page, routeName: string, tab: ProviderTab = 'access') {
+  const item = providerItem(page, routeName);
+  await expect(item).toHaveAttribute('data-provider', /.+/);
+  const id = await item.getAttribute('data-provider');
+  await item.click();
+  await expect(item).toHaveAttribute('aria-current', 'true');
+  const detail = page.locator(`#provider-detail[data-provider="${id}"]`);
+  await expect(detail).toBeVisible();
+  const control = providerTab(detail, tab);
+  await control.click();
+  await expect(control).toHaveAttribute('aria-selected', 'true');
+  return detail;
+}
+
+function routeFact(route: Locator, label: RegExp): Locator {
+  return route.locator('.route-facts dt').filter({ hasText: label }).locator('+ dd');
 }
 
 /**
@@ -1258,7 +1270,7 @@ test('Clients stays scoped to generic tokens without a Claude pairing wizard', a
 });
 
 for (const width of [1440, 390]) {
-  test(`Provider cards keep one compact status per provider at ${width}px`, async ({ page }) => {
+  test(`Provider list keeps one compact status per provider at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1000 });
     let enabled = true;
     await page.route('http://proxy.test/_proxy/api/state', (route) => {
@@ -1325,42 +1337,80 @@ for (const width of [1440, 390]) {
     for (const disabled of [false, true]) {
       enabled = !disabled;
       await page.goto('http://proxy.test/_proxy/?tab=routes');
-      await expect(page.locator('article.route-card')).toHaveCount(2);
-      const claude = providerCard(page, 'native');
-      const venice = providerCard(page, 'venice');
-      await expect(claude.getByRole('heading', { name: 'native', exact: true })).toBeVisible();
-      await expect(venice.getByRole('heading', { name: 'venice', exact: true })).toBeVisible();
-      await expect(claude.locator('details.provider-manage')).toHaveCount(1);
-      await expect(venice.locator('details.provider-manage')).toHaveCount(1);
-      await expect(claude.getByRole('img', { name: 'Status: red, Sign-in needed' })).toBeVisible();
-      await expect(claude.locator('.provider-status')).toHaveText('Sign-in needed');
+      const intro = page.locator('.providers-intro');
+      await expect(intro.getByRole('heading', { name: 'Providers', exact: true })).toBeVisible();
+      await expect(intro.locator('p')).toHaveText('2 providers · 1 needs attention');
       await expect(
-        venice.getByRole('img', { name: disabled ? 'Status: grey, Disabled' : 'Status: green' }),
+        intro.locator('.providers-intro-actions').getByRole('button', { name: 'Add provider' }),
       ).toBeVisible();
-      await expect(venice.locator('.provider-status')).toHaveText(disabled ? 'Disabled' : '');
-      await expect(claude.locator('.provider-approval-summary')).toHaveText('No clients approved');
-      await expect(venice.locator('.provider-approval-summary')).toHaveText('No clients approved');
-      expect(await claude.locator('.provider-route-line .provider-route-clients').count()).toBe(0);
-      expect(await venice.locator('.provider-route-line .provider-route-clients').count()).toBe(0);
-      const claudeManage = await openManage(page, 'native');
-      const veniceManage = await openManage(page, 'venice');
-      await expect(claudeManage.locator('details')).toHaveCount(0);
-      await expect(veniceManage.locator('details')).toHaveCount(0);
-      await expect(
-        claudeManage.getByRole('button', { name: 'Delete provider Claude Code', exact: true }),
-      ).toBeVisible();
-      await expect(
-        veniceManage.getByRole('button', { name: 'Delete provider Venice', exact: true }),
-      ).toBeVisible();
-      await expect(
-        claudeManage.getByRole('heading', { name: 'Client approval', exact: true }),
-      ).toBeVisible();
-      await expect(
-        veniceManage.getByRole('heading', { name: 'Client approval', exact: true }),
-      ).toBeVisible();
-      await expect(
-        claudeManage.getByRole('heading', { name: 'Client access', exact: true }),
-      ).toHaveCount(0);
+      const list = page.getByRole('navigation', { name: 'Providers', exact: true });
+      await expect(list.getByRole('heading', { name: 'Inference', exact: true })).toBeVisible();
+      await expect(list.getByLabel('Filter providers', { exact: true })).toHaveCount(0);
+      await expect(list.locator('.provider-list-name')).toHaveText(['native', 'venice']);
+      const claude = providerItem(page, 'native');
+      const venice = providerItem(page, 'venice');
+      await expect(claude).toHaveAccessibleName(
+        'Claude Code (native), Sign-in needed, 0 clients with access',
+      );
+      await expect(venice).toHaveAccessibleName(
+        `Venice (venice), ${disabled ? 'Disabled, ' : ''}0 clients with access`,
+      );
+      await expect(claude.locator('.provider-list-note')).toHaveText('Sign-in needed');
+      await expect(venice.locator('.provider-list-note')).toHaveText(
+        disabled ? 'Disabled' : 'Venice',
+      );
+      for (const [item, status] of [
+        [claude, 'red'],
+        [venice, disabled ? 'grey' : 'green'],
+      ] as const) {
+        const dot = item.locator('.provider-dot');
+        await expect(dot).toHaveCount(1);
+        await expect(dot).toBeVisible();
+        await expect(dot).toHaveClass(`provider-dot provider-dot-${status}`);
+        await expect(item.locator('.provider-list-count')).toHaveText('0');
+      }
+
+      await expect(claude).toHaveAttribute('aria-current', 'true');
+      const selected = page.locator('#provider-detail');
+      await expect(selected).toHaveAttribute('data-provider', 'native');
+      await expect(providerTab(selected, 'access')).toHaveAttribute('aria-selected', 'true');
+      await expect(selected.locator('.provider-status-red')).toHaveText('Sign-in needed');
+      await expect(selected.getByRole('tab')).toHaveCount(4);
+      await expect(selected.getByRole('tabpanel')).toHaveCount(1);
+      for (const [routeName, label] of [
+        ['native', 'Claude Code'],
+        ['venice', 'Venice'],
+      ]) {
+        const detail = await openProvider(page, routeName);
+        await expect(page.locator('.provider-detail')).toHaveCount(1);
+        await expect(list.locator('.provider-list-item[aria-current="true"]')).toHaveCount(1);
+        await expect(detail.getByRole('heading', { name: routeName, exact: true })).toBeVisible();
+        await expect(detail).toHaveAccessibleName(label);
+        await expect(detail.locator('.route-access-empty')).toHaveText('No clients approved yet.');
+        await expect(
+          detail.getByRole('heading', { name: 'Clients with access', exact: true }),
+        ).toBeVisible();
+        const remove = detail.getByRole('button', {
+          name: `Delete provider ${label}`,
+          exact: true,
+        });
+        await expect(remove).toBeHidden();
+        await providerTab(detail, 'connection').click();
+        // Route facts stack into one column on narrow screens.
+        const columns = await detail
+          .locator('dl.route-facts')
+          .first()
+          .evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(' ').length);
+        expect(columns).toBe(width <= 640 ? 1 : 2);
+        await providerTab(detail, 'settings').click();
+        await expect(remove).toBeVisible();
+      }
+      const veniceStatus = selected.locator('.provider-status');
+      if (disabled) await expect(veniceStatus).toHaveText('Disabled');
+      else await expect(veniceStatus).toHaveCount(0);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
     }
   });
 
@@ -1549,39 +1599,38 @@ for (const width of [1440, 390]) {
       await page.getByRole('button', { name: 'I saved it — dismiss' }).click();
       await expect(operatorCommand).toHaveCount(0);
 
-      const card = providerCard(page, kind);
-      const line = routeLine(page, kind);
-      await expect(card).toHaveAccessibleName(provider);
-      await expect(card.getByRole('heading', { name: kind, exact: true })).toBeVisible();
-      await expect(line.locator('code')).toHaveText(prefix);
-      await expect(card.getByRole('img', { name: 'Status: red, Sign-in needed' })).toBeVisible();
-      await expect(card.locator('.provider-route-clients')).toHaveCount(0);
-      await expect(page.getByText(upstream, { exact: true })).toBeHidden();
-      await expect(card).not.toContainText('scoped-browser-canary');
+      const detail = await openProvider(page, kind);
+      const prefixCode = providerRoutePrefix(detail, kind);
+      await expect(detail).toHaveAccessibleName(provider);
+      await expect(detail.getByRole('heading', { name: kind, exact: true })).toBeVisible();
+      await expect(prefixCode).toHaveText(prefix);
+      await expect(detail.getByRole('img', { name: 'Status: red, Sign-in needed' })).toBeVisible();
+      await expect(detail.getByText(upstream, { exact: true })).toBeHidden();
+      await expect(detail).not.toContainText('scoped-browser-canary');
       await expect(page.locator('.account-controls', { hasText: 'native' })).toHaveCount(0);
 
-      const manage = await openManage(page, kind);
-      await expect(manage.locator('details')).toHaveCount(0);
+      const shared = detail.locator('.provider-account-section');
       await expect(
-        manage.getByRole('button', { name: 'Sign in to shared subscription', exact: true }),
+        shared.getByRole('heading', { name: 'Shared subscription', exact: true }),
       ).toBeVisible();
-      const addDevice = manage.getByRole('button', { name: 'Add device', exact: true });
+      await expect(
+        shared.getByRole('button', { name: 'Sign in to shared subscription', exact: true }),
+      ).toBeVisible();
+      const addDevice = shared.getByRole('button', { name: 'Add device', exact: true });
       await expect(addDevice).toHaveCount(0);
       // The operator finishes sign-in outside this browser UI.
       state.accounts![0].state = 'ready';
       state.providers[0].status = 'green';
       state.providers[0].reason = '';
       await page.getByRole('button', { name: 'Refresh state', exact: true }).click();
-      await expect(card.getByRole('img', { name: 'Status: green' })).toBeVisible();
-      await openManage(page, kind);
+      await expect(detail.getByRole('img', { name: 'Status: green' })).toBeVisible();
       await addDevice.click();
       await expect(workerCommand).toHaveValue(launcher(workerToken));
       await expect(operatorCommand).toHaveCount(0);
-      await expect(manage).toContainText('does not open a browser');
+      await expect(shared).toContainText('does not open a browser');
       await page.getByRole('button', { name: 'Copy launcher command', exact: true }).click();
       await expect(nativeToast).toContainText('Launcher command copied');
-      await expect(manage.locator('.native-integration').getByLabel('Provider YAML')).toBeVisible();
-      await expect(manage.locator('details')).toHaveCount(0);
+      await expect(shared.locator('.native-integration').getByLabel('Provider YAML')).toBeVisible();
       await page.getByRole('button', { name: 'Copy provider YAML' }).click();
       const copies = await page.evaluate(
         () => (window as unknown as { proxyCopies: string[] }).proxyCopies,
@@ -1600,12 +1649,14 @@ for (const width of [1440, 390]) {
       });
       await page.getByRole('button', { name: 'I saved it — dismiss' }).click();
       await expect(workerCommand).toHaveCount(0);
-      await expect(card.locator('.provider-approval-summary')).toContainText(`${shortName} worker`);
+      await expect(
+        detail.locator('.route-access-clients').getByText(`${shortName} worker`, { exact: true }),
+      ).toBeVisible();
       await page.getByRole('button', { name: 'Clients', exact: true }).click();
       await expect(page.getByText(`${shortName} worker`, { exact: true })).toBeVisible();
       await page.getByRole('button', { name: 'Providers', exact: true }).click();
-      await openManage(page, kind);
-      const removeProvider = manage.getByRole('button', {
+      await openProvider(page, kind, 'settings');
+      const removeProvider = detail.getByRole('button', {
         name: `Delete provider ${provider}`,
         exact: true,
       });
@@ -1616,7 +1667,7 @@ for (const width of [1440, 390]) {
       });
       await removeProvider.click();
       expect(mutations).toHaveLength(2);
-      await expect(line).toBeVisible();
+      await expect(prefixCode).toBeVisible();
       page.once('dialog', (dialog) => dialog.accept());
       await removeProvider.click();
       await expect(
@@ -1696,7 +1747,7 @@ function configuredClaudeState(mode: ProxyState['mode'] = 'ui'): ProxyState {
 }
 
 for (const status of [409, 503]) {
-  test(`Claude provider delete failure retains the route; delete is blocked during token display (${status})`, async ({
+  test(`Claude provider delete failure retains the route; leaving Access is blocked during launcher display (${status})`, async ({
     page,
   }) => {
     const state = configuredClaudeState();
@@ -1725,27 +1776,39 @@ for (const status of [409, 503]) {
       return request.fallback();
     });
     await page.goto('http://proxy.test/_proxy/?tab=routes');
-    const line = routeLine(page, 'manual-claude');
-    const manage = await openManage(page, 'manual-claude');
-    await manage.getByRole('button', { name: 'Add device', exact: true }).click();
-    const command = page.getByLabel('Launcher command', { exact: true });
+    const detail = await openProvider(page, 'manual-claude');
+    const prefixCode = providerRoutePrefix(detail, 'manual-claude');
+    await detail.getByRole('button', { name: 'Add device', exact: true }).click();
+    const command = detail.getByLabel('Launcher command', { exact: true });
     await expect(command).toHaveValue(/scoped-failure-canary/);
-    const removeProvider = manage.getByRole('button', {
+    const removeProvider = detail.getByRole('button', {
       name: 'Delete provider manual-claude',
       exact: true,
     });
-    await removeProvider.click();
-    await expect(page.getByRole('status')).toContainText('Finish saving or dismissing');
-    await expect(command).toHaveValue(/scoped-failure-canary/);
-    expect(deletes).toBe(0);
-    await page.getByRole('button', { name: 'I saved it — dismiss' }).click();
+    // The delete action lives in Settings, so blocking the tab switch keeps it
+    // unreachable. Switching providers must not hide the launcher either.
+    for (const control of [providerTab(detail, 'settings'), providerItem(page, 'openai')]) {
+      await control.click();
+      await expect(page.getByRole('status')).toHaveText(
+        'Finish saving or dismissing the one-time connection details first.',
+      );
+      await expect(command).toBeVisible();
+      await expect(command).toHaveValue(/scoped-failure-canary/);
+      await expect(providerTab(detail, 'access')).toHaveAttribute('aria-selected', 'true');
+      await expect(providerItem(page, 'manual-claude')).toHaveAttribute('aria-current', 'true');
+      await expect(removeProvider).toBeHidden();
+      expect(deletes).toBe(0);
+    }
+    await detail.getByRole('button', { name: 'I saved it — dismiss' }).click();
     await expect(command).toHaveCount(0);
+    await openProvider(page, 'manual-claude', 'settings');
     page.once('dialog', (dialog) => dialog.accept());
     await removeProvider.click();
     await expect(page.getByRole('status')).toContainText(
       status === 409 ? 'Claude delete unavailable.' : '503',
     );
-    await expect(line).toBeVisible();
+    await expect(prefixCode).toBeVisible();
+    await expect(providerTab(detail, 'settings')).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('status')).not.toContainText('cleared');
     expect(deletes).toBe(1);
   });
@@ -1760,16 +1823,20 @@ for (const width of [1440, 390]) {
       request.fulfill({ json: withSingletonProviders(configuredClaudeState('file')) }),
     );
     await page.goto('http://proxy.test/_proxy/?tab=routes');
-    const claude = routeLine(page, 'manual-claude');
     await expect(page.getByText(/Routes are file-managed and read-only/)).toBeVisible();
-    await expect(claude.getByText('Add device', { exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Add provider', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Edit manual-claude', exact: true })).toHaveCount(
-      0,
-    );
-    await expect(page.locator('.route-list')).toContainText('manual-claude');
-    await expect(page.locator('.route-list')).toContainText('openai');
-    await expect(page.locator('.account-controls', { hasText: 'manual-slot' })).toHaveCount(0);
+    await expect(providerItem(page, 'openai')).toBeVisible();
+    const detail = await openProvider(page, 'manual-claude');
+    await expect(providerRoutePrefix(detail, 'manual-claude')).toHaveText('/manual/');
+    await expect(
+      detail.getByRole('button', { name: 'Add device', includeHidden: true }),
+    ).toHaveCount(0);
+    await expect(providerTab(detail, 'settings')).toHaveCount(0);
+    await openProvider(page, 'manual-claude', 'connection');
+    await expect(
+      detail.getByRole('button', { name: 'Edit manual-claude', exact: true }),
+    ).toHaveCount(0);
+    await expect(detail.locator('.account-controls')).toHaveCount(0);
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -1779,7 +1846,7 @@ for (const width of [1440, 390]) {
 }
 
 for (const width of [1440, 390]) {
-  test(`Routes stays focused and Admin owns configuration at ${width}px`, async ({
+  test(`Providers stays focused and Admin owns configuration at ${width}px`, async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width, height: 1000 });
@@ -1845,14 +1912,14 @@ for (const width of [1440, 390]) {
       );
     for (const size of navigationWidths) expect(size.content).toBeLessThanOrEqual(size.visible + 1);
     await expect(page.getByRole('button', { name: 'Download routes.yaml' })).toHaveCount(0);
-    const manage = await openManage(page, 'claude');
-    await expect(manage.locator('details')).toHaveCount(0);
+    const detail = await openProvider(page, 'claude', 'settings');
     await expect(
-      manage.getByRole('button', { name: 'Delete provider claude', exact: true }),
+      detail.getByRole('button', { name: 'Delete provider claude', exact: true }),
     ).toBeVisible();
-    await expect(manage.getByRole('button', { name: 'Edit claude', exact: true })).toBeVisible();
+    await providerTab(detail, 'connection').click();
+    await expect(detail.getByRole('button', { name: 'Edit claude', exact: true })).toBeVisible();
     await expect(
-      manage.getByRole('button', { name: 'Add Claude account', exact: true }),
+      detail.getByRole('button', { name: 'Add Claude account', exact: true, includeHidden: true }),
     ).toHaveCount(0);
     await choosePreset(page, 'OpenAI');
     await expect(page.getByLabel('Provider name', { exact: true })).toHaveValue('openai');
@@ -1934,6 +2001,16 @@ for (const { id, label, issuer, verificationURL, upstream } of [
           upstream: 'https://example.test/v1',
         },
       ],
+      providers: [
+        {
+          family: 'inference',
+          status: 'green',
+          reason: '',
+          id: 'legacy',
+          label: 'legacy',
+          routes: ['legacy'],
+        },
+      ],
       callers: [
         {
           id: 'desktop',
@@ -1978,16 +2055,14 @@ for (const { id, label, issuer, verificationURL, upstream } of [
         expect(url.searchParams.get('id')).toBe('mock-attempt');
         if (!approved) return request.fulfill({ json: { status: 'pending' } });
         state.routes.push({ ...providerRoute, account: `${id}-account` });
-        state.providers = [
-          {
-            family: 'inference',
-            status: 'green',
-            reason: '',
-            id,
-            label,
-            routes: [id],
-          },
-        ];
+        state.providers.push({
+          family: 'inference',
+          status: 'green',
+          reason: '',
+          id,
+          label,
+          routes: [id],
+        });
         state.accounts = [
           { name: `${id}-account`, kind: id, state: 'ready', generation: 1, updated: 1 },
         ];
@@ -2011,6 +2086,7 @@ for (const { id, label, issuer, verificationURL, upstream } of [
       return request.fallback();
     });
     await page.goto('http://proxy.test/_proxy/?tab=routes');
+    await expect(providerItem(page, 'legacy')).toHaveAttribute('aria-current', 'true');
     await choosePreset(page, label);
     await expect(page.getByRole('heading', { name: `Set up ${label}`, exact: true })).toBeVisible();
     for (const field of [
@@ -2027,24 +2103,26 @@ for (const { id, label, issuer, verificationURL, upstream } of [
     await expect(
       page.getByRole('link', { name: `Continue to ${issuer}`, exact: true }),
     ).toHaveAttribute('href', verificationURL);
-    const row = routeLine(page, id);
-    await expect(row).toHaveCount(0);
+    const item = providerItem(page, id);
+    await expect(item).toHaveCount(0);
     approved = true;
-    await expect(row).toBeFocused();
-    const card = providerCard(page, id);
-    await expect(card.getByRole('heading', { name: id, exact: true })).toBeVisible();
-    await expect(card.getByRole('img', { name: 'Status: green' })).toBeVisible();
-    await expect(card.locator('.provider-approval-summary')).toHaveCount(1);
-    await expect(card.locator('.provider-approval-summary')).toHaveText('No clients approved');
-    await expect(row.locator('.provider-route-clients')).toHaveCount(0);
+    // Wait for route-focused refresh to select the new provider without clicking it.
+    const detail = page.locator(`#provider-detail[data-provider="${id}"]`);
+    const prefix = providerRoutePrefix(detail, id);
+    await expect(prefix).toBeFocused();
+    await expect(item).toHaveAttribute('aria-current', 'true');
+    await expect(detail.getByRole('img', { name: 'Status: green' })).toBeVisible();
+    await expect(detail.locator('.route-access-empty')).toHaveText('No clients approved yet.');
+    await expect(item.locator('.provider-list-count')).toHaveText('0');
     await expect(code).toHaveCount(0);
     expect(approvals).toEqual([]);
-    const manage = await openManage(page, id);
-    await manage.getByLabel('Desktop', { exact: true }).check();
-    await manage.getByRole('button', { name: 'Approve selected', exact: true }).click();
-    await expect(card.locator('.provider-approval-summary')).toHaveText('Approved: Desktop');
-    await expect(row).not.toContainText('Desktop');
-    await expect(row.locator('.provider-route-clients')).toHaveCount(0);
+    const access = detail.locator('.route-access');
+    await access.getByLabel('Desktop', { exact: true }).check();
+    await access.getByRole('button', { name: 'Approve selected', exact: true }).click();
+    await expect(access.locator('.route-access-client')).toContainText('Desktop');
+    await expect(item.locator('.provider-list-count')).toHaveText('1');
+    await expect(prefix).toHaveText(`/${id}/`);
+    expect(state.callers[0].grants).toEqual(['legacy', id]);
     expect(approvals).toEqual([
       {
         id: 'desktop',
@@ -2074,7 +2152,7 @@ test('Provider approval creates one show-once client for every current route', a
     },
     {
       ...routeDefaults,
-      provider: 'alpha-extra',
+      provider: 'alpha',
       profile: '',
       serves: [],
       name: 'alpha-extra',
@@ -2131,25 +2209,31 @@ test('Provider approval creates one show-once client for every current route', a
     return request.fallback();
   });
   await page.goto('http://proxy.test/_proxy/?tab=routes');
-  const card = providerCard(page, 'alpha');
-  await expect(card.locator('.provider-approval-summary')).toHaveCount(1);
-  await expect(card.locator('.provider-approval-summary')).toHaveText('No clients approved');
-  await expect(card.locator('.provider-route-clients')).toHaveCount(0);
-  const manage = await openManage(page, 'alpha');
-  await expect(manage.locator('details')).toHaveCount(0);
-  await expect(manage.locator('.provider-route-management .route-access')).toHaveCount(0);
-  await expect(manage.getByRole('heading', { name: 'Client access', exact: true })).toHaveCount(0);
-  await manage.getByLabel('Client name', { exact: true }).fill('Worker');
-  await manage.getByRole('button', { name: 'Create client', exact: true }).click();
-  const token = manage.getByLabel('Client token', { exact: true });
+  const detail = await openProvider(page, 'alpha');
+  const item = providerItem(page, 'alpha');
+  await expect(item).toHaveAttribute('data-routes', 'alpha alpha-extra');
+  await expect(item.locator('.provider-list-count')).toHaveText('0');
+  const access = detail.locator('.route-access');
+  await expect(access).toHaveCount(1);
+  await expect(access.locator('.route-access-empty')).toHaveText('No clients approved yet.');
+  await expect(access.locator('.route-access-create')).toHaveCount(1);
+  await access.getByLabel('Client name', { exact: true }).fill('Worker');
+  await access.getByRole('button', { name: 'Create client', exact: true }).click();
+  const token = access.getByLabel('Client token', { exact: true });
   await expect(token).toHaveValue('provider-show-once-token');
   await expect(token).toBeFocused();
   await expect(page.getByRole('status')).toContainText('shown once');
   expect(creations).toEqual([{ name: 'Worker', providers: ['alpha'], revision: 4 }]);
-  await expect(manage.getByRole('button', { name: 'Create client', exact: true })).toHaveCount(0);
-  await manage.getByRole('button', { name: 'I saved it — dismiss' }).click();
+  for (const route of routes) {
+    await expect(
+      access.getByText(`Base URL: http://proxy.test${route.local_prefix}`, { exact: false }),
+    ).toBeVisible();
+  }
+  await expect(access.getByRole('button', { name: 'Create client', exact: true })).toHaveCount(0);
+  await access.getByRole('button', { name: 'I saved it — dismiss' }).click();
   await expect(token).toHaveCount(0);
-  await expect(card.locator('.provider-approval-summary')).toHaveText('Approved: Worker');
+  await expect(access.locator('.route-access-client')).toContainText('Worker');
+  await expect(item.locator('.provider-list-count')).toHaveText('1');
 });
 
 test('Providers group ChatGPT routes under one OAuth account and keep OpenAI routes separate', async ({
@@ -2329,120 +2413,116 @@ test('Providers group ChatGPT routes under one OAuth account and keep OpenAI rou
     'page',
   );
   await expect(page.getByRole('heading', { name: 'Providers', exact: true })).toBeVisible();
-  const cards = page.locator('article.route-card');
-  await expect(cards).toHaveCount(2);
-  await expect(cards.nth(0).getByRole('heading', { name: 'chatgpt', exact: true })).toBeVisible();
-  await expect(cards.nth(1).getByRole('heading', { name: 'openai', exact: true })).toBeVisible();
-  const chatgpt = cards.nth(0);
-  const openai = cards.nth(1);
+  const list = page.getByRole('navigation', { name: 'Providers', exact: true });
+  await expect(list.locator('.provider-list-name')).toHaveText(['chatgpt', 'openai']);
+  const chatgptItem = providerItem(page, 'chatgpt');
+  const openaiItem = providerItem(page, 'openai');
+  await expect(chatgptItem).toHaveAttribute(
+    'data-routes',
+    'chatgpt chatgpt-backend chatgpt-openai',
+  );
+  await expect(openaiItem).toHaveAttribute('data-routes', 'openai');
+  // Partial grants count as access, without implying full approval.
+  await expect(chatgptItem).toHaveAccessibleName(
+    'ChatGPT (chatgpt), 1 client with access, 1 needs approval',
+  );
+  await expect(openaiItem).toHaveAccessibleName('OpenAI (openai), 1 client with access');
+  await expect(chatgptItem).toHaveAttribute('aria-current', 'true');
+  const chatgpt = page.locator('#provider-detail[data-provider="chatgpt"]');
   await expect(chatgpt).toHaveAccessibleName('ChatGPT');
-  await expect(openai).toHaveAccessibleName('OpenAI');
+  await expect(chatgpt.locator('.provider-detail-meta')).toContainText('Account chatgpt-work');
+  await expect(providerTab(chatgpt, 'access')).toHaveAttribute('aria-selected', 'true');
+  await expect(chatgpt.getByRole('tabpanel')).toHaveCount(1);
+  await expect(chatgpt.locator('.provider-routes-section')).toBeHidden();
   await choosePreset(page, 'OpenAI');
   await expect(page.getByRole('heading', { name: 'Set up OpenAI', exact: true })).toBeVisible();
   await expect(page.getByLabel('Label', { exact: true })).toHaveValue('OpenAI');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-  const lines = chatgpt.locator('.provider-route-line');
-  await expect(lines).toHaveCount(3);
-  await expect(lines.nth(0)).toHaveAttribute('data-focus', 'route:chatgpt');
-  await expect(lines.nth(1)).toHaveAttribute('data-focus', 'route:chatgpt-backend');
-  await expect(lines.nth(2)).toHaveAttribute('data-focus', 'route:chatgpt-openai');
-  await expect(lines.nth(0).locator('code')).toHaveText('/chatgpt/');
-  await expect(lines.nth(1).locator('code')).toHaveText('/chatgpt-backend/');
-  await expect(lines.nth(2).locator('code')).toHaveText('/chatgpt-openai/');
-  await expect(lines.nth(0)).toContainText('providers.chatgpt.base_url');
-  await expect(lines.nth(1)).toContainText('transcription: chatgpt');
-  await expect(lines.nth(2)).toContainText('embed: chatgpt');
-  // Route lines are informational only: approval belongs to the provider.
-  await expect(chatgpt.locator('.provider-route-clients')).toHaveCount(0);
-  await expect(openai.locator('.provider-route-clients')).toHaveCount(0);
-  for (const line of [lines.nth(0), lines.nth(1), lines.nth(2)]) {
-    await expect(line).not.toContainText('jarvis');
-    await expect(line).not.toContainText('forge');
-  }
-  // Legacy partial grants stay partial and are summarized once per provider.
-  await expect(chatgpt.locator('.provider-approval-summary')).toHaveCount(1);
-  await expect(chatgpt.locator('.provider-approval-summary')).toHaveText(
-    'No clients approved · 1 client needs approval',
+
+  await expect(chatgpt.locator('.provider-detail-routes code')).toHaveText(
+    chatgptRoutes.map((route) => route.local_prefix),
   );
-  await expect(openai.locator('.provider-approval-summary')).toHaveCount(1);
-  await expect(openai.locator('.provider-approval-summary')).toHaveText('Approved: forge');
-  // One native disclosure per provider, and it starts closed.
-  const chatgptManage = chatgpt.locator('details.provider-manage');
-  const openaiManage = openai.locator('details.provider-manage');
-  await expect(chatgptManage).toHaveCount(1);
-  await expect(openaiManage).toHaveCount(1);
-  await expect(chatgptManage.locator('> summary')).toHaveText('Manage');
-  await expect(openaiManage.locator('> summary')).toHaveText('Manage');
-  await expect(chatgptManage).not.toHaveAttribute('open', '');
-  await expect(openaiManage).not.toHaveAttribute('open', '');
+  await providerTab(chatgpt, 'connection').click();
+  const connection = chatgpt.getByRole('tabpanel');
   // The OAuth account is represented once even though three routes use it.
-  await openManage(page, 'chatgpt');
-  await expect(chatgptManage.locator('details')).toHaveCount(0);
-  await expect(chatgptManage.getByRole('heading', { name: 'Account', exact: true })).toHaveCount(1);
-  await expect(chatgptManage.locator('.account-controls')).toHaveCount(1);
-  await expect(chatgptManage.locator('.account-controls-status')).toContainText('chatgpt-work');
+  await expect(connection.getByRole('heading', { name: 'Account', exact: true })).toHaveCount(1);
+  await expect(connection.locator('.account-controls')).toHaveCount(1);
+  await expect(connection.locator('.account-controls-status')).toContainText('chatgpt-work');
   await expect(
-    chatgptManage.getByRole('button', { name: 'Reconnect ChatGPT', exact: true }),
-  ).toHaveCount(1);
-  await expect(chatgptManage.locator('.route-access')).toHaveCount(1);
-  await expect(
-    chatgptManage.getByRole('heading', { name: 'Client approval', exact: true }),
-  ).toHaveCount(1);
-  const panels = chatgptManage.locator('.provider-route-management');
-  await expect(panels).toHaveCount(3);
-  await expect(panels.nth(0)).toHaveAttribute('data-route', 'chatgpt');
-  await expect(panels.nth(1)).toHaveAttribute('data-route', 'chatgpt-backend');
-  await expect(panels.nth(2)).toHaveAttribute('data-route', 'chatgpt-openai');
-  for (const panel of [panels.nth(0), panels.nth(1), panels.nth(2)]) {
-    await expect(panel.getByRole('heading', { name: 'Client access', exact: true })).toHaveCount(0);
-    await expect(panel.locator('.route-access')).toHaveCount(0);
-    await expect(panel.locator('.provider-route-header code')).toBeVisible();
-  }
-  await expect(
-    chatgptManage.getByRole('button', { name: 'Edit chatgpt', exact: true }),
-  ).toHaveCount(1);
-  await expect(
-    chatgptManage.getByRole('button', { name: 'Edit chatgpt-backend', exact: true }),
-  ).toHaveCount(1);
-  await expect(
-    chatgptManage.getByRole('button', { name: 'Edit chatgpt-openai', exact: true }),
-  ).toHaveCount(1);
-  await expect(
-    chatgptManage.getByRole('button', { name: 'Delete provider ChatGPT', exact: true }),
+    connection.getByRole('button', { name: 'Reconnect ChatGPT', exact: true }),
   ).toBeVisible();
-  // A partial legacy grant is directly listed as needing approval.
-  const current = chatgptManage.locator('.route-access-current');
+  const panels = connection.locator('.provider-route-management');
+  await expect(panels).toHaveCount(3);
+  for (const route of chatgptRoutes) {
+    await expect(providerRoutePrefix(chatgpt, route.name)).toHaveText(route.local_prefix);
+    const panel = connection.locator(`.provider-route-management[data-route="${route.name}"]`);
+    await expect(panel.locator('.provider-route-header code')).toHaveText(route.local_prefix);
+    await expect(routeFact(panel, /^term-llm uses it for$/)).toHaveText(route.serves.join(' · '));
+    await expect(
+      panel.getByRole('button', { name: `Edit ${route.name}`, exact: true }),
+    ).toBeVisible();
+  }
+  // Connection describes routes only; approval controls and client names belong to Access.
+  await expect(connection.locator('.route-access')).toHaveCount(0);
+  await expect(connection).not.toContainText(/jarvis|forge/);
+  await expect(routeFact(connection, /^Billing$/)).toHaveText([
+    'Subscription',
+    'Subscription',
+    'Not specified',
+  ]);
+  await providerTab(chatgpt, 'settings').click();
+  await expect(
+    chatgpt.getByRole('button', { name: 'Delete provider ChatGPT', exact: true }),
+  ).toBeVisible();
+
+  await providerTab(chatgpt, 'access').click();
+  const access = chatgpt.locator('.route-access');
+  await expect(access).toHaveCount(1);
+  await expect(access.getByRole('heading', { name: /^Clients with access\s*1$/ })).toBeVisible();
+  const current = access.locator('.route-access-clients');
+  await expect(current.locator('.route-access-client')).toHaveCount(1);
   await expect(current).toContainText('jarvis');
-  await expect(current).toContainText('Needs approval');
-  const grantForm = chatgptManage.locator('.route-access-grant');
+  await expect(current.locator('.route-access-pending')).toHaveText('Needs approval');
+  const grantForm = access.locator('.route-access-grant');
   await grantForm.getByLabel('jarvis (needs approval)', { exact: true }).check();
   await grantForm.getByRole('button', { name: 'Approve selected', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Approved jarvis for ChatGPT');
+  await expect(providerTab(chatgpt, 'access')).toHaveAttribute('aria-selected', 'true');
+  await expect(current.locator('.route-access-client')).toHaveCount(1);
+  await expect(current).toContainText('jarvis');
+  await expect(current.locator('.route-access-pending')).toHaveCount(0);
   expect(approvals).toEqual([
-    {
-      id: 'jarvis',
-      provider_changes: [{ id: 'chatgpt', approved: true }],
-      revision: 7,
-    },
+    { id: 'jarvis', provider_changes: [{ id: 'chatgpt', approved: true }], revision: 7 },
   ]);
-  await expect(chatgpt.locator('.provider-approval-summary')).toHaveText('Approved: jarvis');
-  // Approval covers every current ChatGPT route and never the OpenAI provider.
-  for (const line of [lines.nth(0), lines.nth(1), lines.nth(2)]) {
-    await expect(line).not.toContainText('jarvis');
-  }
-  await expect(openai.locator('.provider-approval-summary')).toHaveText('Approved: forge');
-  // The single OpenAI route has no shared OAuth account controls.
-  await openManage(page, 'openai');
-  await expect(openaiManage.locator('details')).toHaveCount(0);
-  await expect(openaiManage.locator('.account-controls')).toHaveCount(0);
+  // Approval covers every current ChatGPT route and never the separate OpenAI provider.
+  expect(state.callers[0].grants).toEqual(chatgptRoutes.map((route) => route.name));
+  const openai = await openProvider(page, 'openai');
+  await expect(chatgpt).toHaveCount(0);
+  await expect(openai).toHaveAccessibleName('OpenAI');
+  await expect(openai.locator('.provider-detail-meta')).toContainText('API key openai-key');
+  await expect(openai.locator('.route-access-client')).toHaveCount(1);
+  await expect(openai.locator('.route-access-client')).toContainText('forge');
+  await providerTab(openai, 'connection').click();
+  await page.getByRole('button', { name: 'Refresh state', exact: true }).click();
+  await expect(page.locator('.providers-intro').getByRole('heading')).toBeFocused();
+  await expect(openaiItem).toHaveAttribute('aria-current', 'true');
+  await expect(providerTab(openai, 'connection')).toHaveAttribute('aria-selected', 'true');
+  const openaiConnection = openai.getByRole('tabpanel');
+  await expect(openaiConnection.locator('.account-controls')).toHaveCount(0);
   await expect(
-    openaiManage.getByRole('button', { name: 'Reconnect ChatGPT', exact: true }),
+    openaiConnection.getByRole('button', { name: 'Reconnect ChatGPT', exact: true }),
   ).toHaveCount(0);
-  await expect(openaiManage.getByRole('button', { name: 'Configure API key' })).toHaveCount(1);
   await expect(
-    openaiManage.getByRole('button', { name: 'Delete provider OpenAI', exact: true }),
+    openaiConnection.getByRole('button', { name: 'Configure API key', exact: true }),
   ).toBeVisible();
-  await expect(chatgptManage).toHaveAttribute('open', '');
-  await expect(chatgptManage.locator('.provider-route-management')).toHaveCount(3);
+  await expect(routeFact(openaiConnection, /^Billing$/)).toHaveText('Pay as you go');
+  await providerTab(openai, 'settings').click();
+  await expect(
+    openai.getByRole('button', { name: 'Delete provider OpenAI', exact: true }),
+  ).toBeVisible();
+  await openProvider(page, 'chatgpt', 'connection');
+  await expect(panels).toHaveCount(3);
+  await expect(connection).not.toContainText(/jarvis|forge/);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,

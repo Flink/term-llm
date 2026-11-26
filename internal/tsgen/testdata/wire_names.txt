@@ -17,6 +17,7 @@ LinkedDevicesState
 LinkedDevicesStatus
 ServeContextUsage
 ServeEvent
+ServeMentionModelItem
 ServeMentionSearchItem
 ServeMentionSearchRequest
 ServeMentionSearchResponse

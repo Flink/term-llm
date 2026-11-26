@@ -7,7 +7,7 @@
   flex-direction: column;
   padding: 0;
   overflow: hidden;
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
 }
 
 .agents-modal .modal-title-row {
@@ -57,7 +57,7 @@
   min-height: 2.35rem;
   padding: 0.55rem 0.75rem 0.55rem 2.25rem;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: var(--radius-lg);
   appearance: none;
   background: var(--surface-2);
   color: var(--text);
@@ -77,7 +77,7 @@
   gap: 0.2rem;
   padding: 0.2rem;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: var(--radius-lg);
   background: var(--surface-2);
 }
 
@@ -88,7 +88,7 @@
   min-height: 1.85rem;
   padding: 0.25rem 0.65rem;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-muted);
   font: inherit;
@@ -149,7 +149,7 @@
   gap: 0.15rem 0.75rem;
   padding: 0.55rem 0.7rem;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .agent-row:hover {

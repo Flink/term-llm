@@ -1230,7 +1230,7 @@ providers:
 ```
 
 `url` and `token` come from the worker launcher under
-**Providers → Claude Code → Manage → Add device**. Use the route root, not
+**Providers → Claude Code → Access → Add device**. Use the route root, not
 the bare proxy origin. `token` is scoped to that client and must be granted the
 route. It can be a literal or a credential reference such as `file://`, `op://`,
 `$()`, or `${VAR}`. Keep it private. This block redirects only `claude-bin`. It

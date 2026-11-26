@@ -99,7 +99,7 @@
   margin-left: 0.4rem;
   padding: 0.25rem 0.45rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -200,7 +200,7 @@
   margin-block: 0.6rem;
   padding: 0.8rem;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--surface-2);
   color: var(--text);
   overflow-wrap: anywhere;
@@ -248,7 +248,7 @@
 
 .audio-media-card audio:focus-visible,
 .audio-media-download:focus-visible {
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -259,7 +259,7 @@
   max-width: 100%;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   background: transparent;
   cursor: zoom-in;
@@ -279,7 +279,7 @@
   gap: 0.35rem;
   padding: 0.3rem 0.5rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-muted);
   font-size: 0.8rem;
   text-decoration: none;
@@ -323,7 +323,7 @@ a.message-file:focus-visible {
   width: fit-content;
   padding: 0.25rem 0.35rem;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
   font: inherit;
@@ -548,7 +548,7 @@ mark.diff-word {
   width: 100%;
   padding: 0.65rem 0.7rem;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -757,7 +757,7 @@ mark.diff-word {
   .modal {
     max-height: calc(var(--app-height) - 1rem - var(--safe-top) - var(--safe-bottom));
     overflow: auto;
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
   }
 
   .wide-modal {

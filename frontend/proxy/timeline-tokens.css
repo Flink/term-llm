@@ -31,7 +31,7 @@
   height: 0.45rem;
   margin-bottom: 0.5rem;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
 }
 
 .timeline-token-strip > span,
@@ -58,7 +58,7 @@
   flex: none;
   width: 0.5rem;
   height: 0.5rem;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
 }
 
 .timeline-token-mix dd {

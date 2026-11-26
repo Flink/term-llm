@@ -1,4 +1,5 @@
-// Package composer provides interactive emoji completion for the terminal chat editor.
+// Package composer provides the terminal chat editor's interactive emoji and
+// mention popups.
 package composer
 
 import (

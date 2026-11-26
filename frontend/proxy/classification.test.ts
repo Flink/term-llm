@@ -8,6 +8,7 @@ import {
 } from '../src/api/proxy-client';
 import type { UIContext } from './dom';
 import { allowLabel } from './route-rules';
+import { openProvider } from './provider-test-helpers';
 import { routesView } from './routes';
 
 const auth = { header: 'Authorization', prefix: 'Bearer ' };
@@ -115,17 +116,6 @@ function openPicker(root: HTMLElement) {
 function choose(root: HTMLElement, label: string) {
   const picker = openPicker(root);
   fireEvent.click(getByRole(picker, 'button', { name: label }));
-}
-
-function openManage(root: HTMLElement, routeName: string) {
-  const line = root.querySelector<HTMLElement>(`[data-focus="route:${routeName}"]`);
-  if (!line) throw new Error(`Missing route line: ${routeName}`);
-  const details = line
-    .closest('article.route-card')
-    ?.querySelector<HTMLDetailsElement>('details.provider-manage');
-  if (!details) throw new Error(`Missing provider Manage: ${routeName}`);
-  details.open = true;
-  return details;
 }
 
 function fixtureState(overrides: Partial<ProxyState> = {}): ProxyState {
@@ -237,11 +227,17 @@ it('requires an operator-provided root for a blank classification upstream', asy
 
 it('renders a Classification provider section without client inference config', () => {
   const { root } = setup(fixtureState());
-  const section = getByRole(root, 'region', { name: 'Classification' });
-  expect(within(section).getByRole('heading', { name: 'typesafe' })).toBeVisible();
-  expect(within(section).queryByRole('heading', { name: 'Client config (term-llm)' })).toBeNull();
-  openManage(root, 'typesafe');
-  expect(within(section).queryByRole('button', { name: /client config/i })).toBeNull();
+  const list = getByRole(root, 'navigation', { name: 'Providers' });
+  expect(within(list).getByRole('heading', { name: 'Classification' })).toBeVisible();
+  const section = within(list).getByRole('list', { name: 'Classification' });
+  expect(within(section).getByRole('button', { name: /^TypeSafe \(typesafe\)/ })).toBeVisible();
+  const detail = openProvider(root, 'typesafe', 'connection');
+  expect(within(detail).getByRole('heading', { name: 'typesafe' })).toBeVisible();
+  expect(within(detail).queryByRole('tab', { name: 'Client config' })).toBeNull();
+  expect(
+    within(detail).queryByRole('heading', { name: 'Client config (term-llm)', hidden: true }),
+  ).toBeNull();
+  expect(within(detail).queryByRole('button', { name: /client config/i, hidden: true })).toBeNull();
 
   const settings = root.querySelector<HTMLElement>('.route-row-settings')!;
   expect(settings).toHaveTextContent('POST exactly /v1/systemone');
@@ -255,7 +251,7 @@ it('renders a Classification provider section without client inference config', 
 
 it('keeps exact allow entries in the editor and saves them unchanged', async () => {
   const { root, config } = setup(fixtureState());
-  openManage(root, 'typesafe');
+  openProvider(root, 'typesafe', 'connection');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit typesafe' }));
   const allow = getByLabelText(root, 'Allowed requests');
   expect(allow).toHaveValue('POST =/v1/systemone\nGET =/v1/models');

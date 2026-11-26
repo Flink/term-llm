@@ -162,6 +162,7 @@ func (m *Model) applyChatGPTModelsLoaded(msg chatGPTModelsLoadedMsg) (tea.Model,
 		return m, nil
 	}
 	m.modelMetadata = msg.models
+	m.invalidateModelMentionCatalog()
 	m.fastMetadataLoaded = true
 	m.fastMetadataStale = !msg.fresh
 	m.refreshEffectiveFastMode()

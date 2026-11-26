@@ -21,6 +21,24 @@ const deltas = stream => events(stream)
   .filter(entry => entry.type === 'response.output_text.delta')
   .map(entry => entry.data.delta).join('');
 
+test('mention search offers the scripted model without a project index', async () => {
+  const api = createDemoAPI();
+  const search = async (text, cursor_utf16 = text.length) => {
+    const response = await api.fetch(request('/v1/mentions/search', { text, cursor_utf16 }));
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const scoped = await search('🎉 @m:script-tail next', '🎉 @m:script'.length);
+  assert.equal(scoped.model_only, true);
+  assert.deepEqual(scoped.model_token, {
+    start_utf16: 3, end_utf16: '🎉 @m:script-tail'.length, query: 'script', quoted: false,
+  });
+  assert.deepEqual(scoped.model_items.map(row => [row.insert_text, row.continues]), [['demo:scripted-demo', false]]);
+  assert.equal((await search('@de')).model_only, false);
+  assert.deepEqual((await search('@model:missing')).model_items, []);
+  assert.deepEqual(await search('@agent:demo'), { active: false, items: [] });
+});
+
 test('native commands explain setup when tools are off, and say when an older app lacks one', async () => {
   const api = createDemoAPI({ delay: 0 });
   const unavailable = await reply(api, 'create playlist');

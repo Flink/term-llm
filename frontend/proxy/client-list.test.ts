@@ -13,7 +13,7 @@ import {
   type ProxyAdminRoute,
   type ProxyState,
 } from '../src/api/proxy-client';
-import { duplicateSuffixes, shortDate, sortCallers } from './client-list';
+import { duplicateSuffixes, lastSeen, shortDate, sortCallers } from './client-list';
 import type { UIContext } from './dom';
 import { callersView } from './security';
 
@@ -90,6 +90,27 @@ describe('shortDate', () => {
     [new Date(2025, 10, 2, 12).getTime(), /2025/],
   ])('formats %s', (value, expected) => {
     expect(shortDate(value, 'Never', now)).toMatch(expected);
+  });
+});
+
+describe('lastSeen', () => {
+  const now = new Date(2026, 10, 18, 16, 0);
+  const ago = (minutes: number) => now.getTime() - minutes * 60_000;
+  it.each([
+    [undefined, 'never'],
+    ['nonsense', 'unknown'],
+    [ago(0.5), 'just now'],
+    [ago(-5), 'just now'],
+    [ago(1), '1 min ago'],
+    [ago(59), '59 min ago'],
+    [ago(60), '1 hr ago'],
+    [ago(23 * 60 + 59), '23 hr ago'],
+    [ago(24 * 60), 'yesterday'],
+    [ago(2 * 24 * 60), '2 days ago'],
+    [ago(6 * 24 * 60), '6 days ago'],
+    [new Date(2026, 10, 2, 12).getTime(), 'Nov 2'],
+  ])('describes %s as %s', (value, expected) => {
+    expect(lastSeen(value, now)).toBe(expected);
   });
 });
 

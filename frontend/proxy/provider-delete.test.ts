@@ -15,6 +15,7 @@ import {
   type ProxyState,
 } from '../src/api/proxy-client';
 import type { UIContext } from './dom';
+import type { ProviderTabID } from './provider-test-helpers';
 import { routesView } from './routes';
 
 const veniceRoute: ProxyAdminRoute = {
@@ -210,11 +211,17 @@ function setup(overrides: Partial<ProxyState> = {}) {
   return { root, api, deleteProvider, clearNative, setupNative, announce, refresh };
 }
 
-function openProvider(root: HTMLElement, label: string): HTMLDetailsElement {
-  const card = getByRole(root, 'article', { name: label });
-  const manage = card.querySelector<HTMLDetailsElement>('details.provider-manage')!;
-  manage.open = true;
-  return manage;
+function openProvider(
+  root: HTMLElement,
+  label: string,
+  tab: ProviderTabID = 'settings',
+): HTMLElement {
+  const list = root.querySelector<HTMLElement>('.provider-list')!;
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  fireEvent.click(getByRole(list, 'button', { name: new RegExp(`^${escaped}( \\(|,)`) }));
+  const detail = getByRole(root, 'region', { name: label });
+  fireEvent.click(detail.querySelector<HTMLElement>(`[role="tab"][data-tab="${tab}"]`)!);
+  return detail;
 }
 
 afterEach(() => {
@@ -225,6 +232,10 @@ afterEach(() => {
 it('deletes a single-route API-key provider after confirmation and respects cancellation', async () => {
   const { root, deleteProvider, clearNative, refresh, announce } = setup();
   const manage = openProvider(root, 'Venice');
+  // A one-line summary beside the button; the confirm() carries the details.
+  expect(manage.querySelector('.provider-danger-zone p')).toHaveTextContent(
+    'Removes 1 route and access for 1 client. Can’t be undone.',
+  );
   const remove = getByRole(manage, 'button', { name: 'Delete provider Venice' });
   const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
 
@@ -296,15 +307,26 @@ it.each([
 );
 
 it('refuses provider deletion while a one-time launcher is displayed', async () => {
-  const { root, clearNative, announce } = setup();
-  const manage = openProvider(root, 'Claude Code');
+  const { root, clearNative, announce, deleteProvider } = setup();
+  const manage = openProvider(root, 'Claude Code', 'access');
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
   fireEvent.click(getByRole(manage, 'button', { name: 'Add device' }));
   await waitFor(() => expect(getByLabelText(manage, 'Launcher command')).toBeVisible());
 
-  fireEvent.click(getByRole(manage, 'button', { name: 'Delete provider Claude Code' }));
+  // The launcher stays on screen: Settings cannot be opened over it.
+  fireEvent.click(getByRole(manage, 'tab', { name: 'Settings' }));
+  expect(getByRole(manage, 'tab', { selected: true })).toHaveTextContent('Access');
+  expect(getByLabelText(manage, 'Launcher command')).toBeVisible();
+  expect(announce).toHaveBeenLastCalledWith(
+    'Finish saving or dismissing the one-time connection details first.',
+  );
+  announce.mockClear();
+  fireEvent.click(
+    getByRole(manage, 'button', { name: 'Delete provider Claude Code', hidden: true }),
+  );
   expect(confirm).not.toHaveBeenCalled();
+  expect(deleteProvider).not.toHaveBeenCalled();
   expect(clearNative).not.toHaveBeenCalled();
   expect(announce).toHaveBeenLastCalledWith(
     'Finish saving or dismissing the one-time connection details first.',
@@ -314,26 +336,30 @@ it('refuses provider deletion while a one-time launcher is displayed', async () 
 it('hides Delete provider in read-only file mode', () => {
   const { root } = setup({ mode: 'file' });
   for (const label of ['Venice', 'Claude Code', 'ChatGPT']) {
-    const manage = openProvider(root, label);
-    expect(queryByRole(manage, 'button', { name: `Delete provider ${label}` })).toBeNull();
+    const manage = openProvider(root, label, 'access');
+    expect(queryByRole(manage, 'tab', { name: 'Settings' })).toBeNull();
+    expect(
+      queryByRole(manage, 'button', { name: `Delete provider ${label}`, hidden: true }),
+    ).toBeNull();
   }
 });
 
-it('never renders nested disclosures inside Manage for any provider type', async () => {
+it('never renders nested disclosures in a provider’s detail for any provider type', async () => {
   const { root } = setup();
   for (const label of ['Venice', 'Claude Code', 'ChatGPT']) {
     const manage = openProvider(root, label);
     expect(manage.querySelectorAll('details')).toHaveLength(0);
   }
 
-  // Opening an inline route editor inside Manage still introduces zero nested disclosures.
-  const veniceManage = openProvider(root, 'Venice');
+  // Opening an inline route editor still introduces zero nested disclosures.
+  const veniceManage = openProvider(root, 'Venice', 'connection');
   fireEvent.click(getByRole(veniceManage, 'button', { name: 'Edit venice' }));
   expect(veniceManage.querySelectorAll('details')).toHaveLength(0);
   expect(getByRole(veniceManage, 'button', { name: 'Delete route venice' })).toBeVisible();
+  fireEvent.click(getByRole(veniceManage, 'button', { name: 'Cancel' }));
 
-  // Issuing a worker launcher inside Manage introduces zero nested disclosures.
-  const claudeManage = openProvider(root, 'Claude Code');
+  // Issuing a worker launcher introduces zero nested disclosures.
+  const claudeManage = openProvider(root, 'Claude Code', 'access');
   fireEvent.click(getByRole(claudeManage, 'button', { name: 'Add device' }));
   await waitFor(() => expect(getByLabelText(claudeManage, 'Launcher command')).toBeVisible());
   expect(claudeManage.querySelectorAll('details')).toHaveLength(0);

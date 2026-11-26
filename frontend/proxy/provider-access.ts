@@ -8,7 +8,7 @@ import {
 import { selectCopyField } from './clipboard';
 import { routeAllowsClientApproval, routeNativeProvider, routeSharedNativeAccount } from './native';
 import { actions, button, check, dateTime, el, field, input, submit, type UIContext } from './dom';
-import { clientLabel, duplicateSuffixes, sortCallers } from './client-list';
+import { clientLabel, duplicateSuffixes, lastSeen, sortCallers } from './client-list';
 import { termLLMConfigSection, tokenCopyRow } from './client-config-snippet';
 import { authLabel, joinLocalPrefix, routeRules } from './route-rules';
 import { providerApproval, type ProviderGroup } from './provider-groups';
@@ -76,7 +76,7 @@ export function providerAccess(
 
   const panel = el('div');
   panel.className = 'route-access-panel';
-  const view = el('div', el('h3', 'Client approval'), panel);
+  const view = el('div', panel);
   view.className = 'route-access provider-section';
 
   function clients(): ProxyCaller[] {
@@ -109,8 +109,8 @@ export function providerAccess(
     }
   }
 
-  function removeAccess(caller: ProxyCaller): HTMLButtonElement {
-    const remove = button('Remove access', () => {
+  function removeAccess(caller: ProxyCaller, name: string): HTMLButtonElement {
+    const remove = button('Remove', () => {
       if (tokenGuard('Save or dismiss the open one-time client token before removing access.'))
         return;
       const sharedNote = group.routes.some(
@@ -120,7 +120,7 @@ export function providerAccess(
         : '';
       if (
         !window.confirm(
-          `Remove ${caller.name}’s access to ${group.label}? Access to other providers and its token stay unchanged. New requests to ${group.label} will be blocked; dispatched requests may continue.${sharedNote}`,
+          `Remove ${name}’s access to ${group.label}? Access to other providers and its token stay unchanged. New requests to ${group.label} will be blocked; dispatched requests may continue.${sharedNote}`,
         )
       )
         return;
@@ -133,17 +133,19 @@ export function providerAccess(
           ),
         );
         await context.refresh(focusKey);
-        context.announce(`Removed ${caller.name}’s access to ${group.label}.`);
+        context.announce(`Removed ${name}’s access to ${group.label}.`);
       }, remove);
     });
-    remove.className = 'danger';
-    remove.setAttribute('aria-label', `Remove ${caller.name}’s access to ${group.label}`);
+    remove.className = 'danger route-access-remove';
+    remove.setAttribute('aria-label', `Remove ${name}’s access to ${group.label}`);
     return remove;
   }
 
   function currentAccess(): HTMLElement {
-    const granted = clients();
-    const section = el('div');
+    const granted = sortCallers(clients());
+    // Includes clients still needing approval; each is marked below.
+    const heading = el('h3', 'Clients with access');
+    const section = el('div', heading);
     section.className = 'route-access-current';
     if (!granted.length) {
       const empty = el('p', 'No clients approved yet.');
@@ -151,21 +153,26 @@ export function providerAccess(
       section.append(empty);
       return section;
     }
+    const count = el('span', String(granted.length));
+    count.className = 'route-access-count';
+    heading.append(' ', count);
+    const suffixes = duplicateSuffixes(current.callers);
     const list = el('ul');
     list.className = 'route-access-clients';
     for (const caller of granted) {
-      const label = providerApproval(group, caller) === 'partial' ? 'Needs approval' : 'Approved';
-      const buttons = actions(removeAccess(caller));
-      const item = el(
-        'li',
-        el(
-          'span',
-          el('strong', caller.name),
-          ' ',
-          el('small', caller.last_used ? `${label} · used ${dateTime(caller.last_used)}` : label),
-        ),
-        buttons,
-      );
+      const label = clientLabel(caller, suffixes);
+      const name = el('span', el('strong', label));
+      name.className = 'route-access-name';
+      if (providerApproval(group, caller) === 'partial') {
+        const pending = el('span', 'Needs approval');
+        pending.className = 'route-access-pending';
+        pending.title = 'Approved before this provider gained a route; approve again to cover it.';
+        name.append(pending);
+      }
+      // Client-wide activity: the token's last use on any provider.
+      const seen = el('small', `Last seen ${lastSeen(caller.last_used)}`);
+      seen.title = caller.last_used ? dateTime(caller.last_used) : 'Never used';
+      const item = el('li', name, seen, actions(removeAccess(caller, label)));
       item.className = 'route-access-client';
       list.append(item);
     }
@@ -225,7 +232,7 @@ export function providerAccess(
     });
     const chips = el('div', ...choices.map((choice) => choice.chip));
     chips.className = 'grant-chips';
-    const fields = el('fieldset', el('legend', 'Add clients'), chips);
+    const fields = el('fieldset', el('legend', 'Approve clients'), chips);
     fields.className = 'client-grant-fields';
     const form = el('form', fields);
     form.className = 'route-access-grant';
@@ -267,7 +274,7 @@ export function providerAccess(
         tokenShown = false;
         renderBody();
         try {
-          await context.refresh(`caller:${caller.id}`);
+          await context.refresh(focusKey);
           context.announce(`Client ${caller.name} created. The one-time token has been dismissed.`);
         } catch (error) {
           if (error instanceof ProxyAPIError && error.status === 401) throw error;
@@ -385,7 +392,23 @@ export function providerAccess(
 
   function renderBody() {
     if (tokenShown) return;
-    const parts: HTMLElement[] = [currentAccess()];
+    const parts: HTMLElement[] = [];
+    if (canApprove()) {
+      // Adding is the action; it stays above a list that can grow long.
+      const add = el('div');
+      add.className = 'route-access-add';
+      const existing = grantExisting();
+      if (existing) add.append(existing);
+      if (!native) add.append(createClient(!current.callers.some((caller) => !caller.revoked)));
+      if (add.childElementCount) parts.push(add);
+    }
+    parts.push(currentAccess());
+    const scope = el(
+      'p',
+      'Approval covers every current route of this provider. Tokens and access to other providers are unchanged.',
+    );
+    scope.className = 'provider-note';
+    parts.push(scope);
     if (current.mode === 'file') {
       const note = el(
         'p',
@@ -394,11 +417,7 @@ export function providerAccess(
       note.className = 'provider-note';
       parts.push(note);
     }
-    if (canApprove()) {
-      const existing = grantExisting();
-      if (existing) parts.push(existing);
-      if (!native) parts.push(createClient(!current.callers.some((caller) => !caller.revoked)));
-    } else {
+    if (!canApprove()) {
       const note = el(
         'p',
         'Native routes must use an enabled, signed-in shared subscription before clients can be approved.',
@@ -419,7 +438,7 @@ export function providerAccess(
       if (current.mode === 'ui' && canApprove()) {
         const note = el(
           'p',
-          `${native.label} uses a device launcher instead of a generic API URL. Use Add device below to connect a new device.`,
+          `${native.label} uses a device launcher instead of a generic API URL. Use Add device under Shared subscription to connect a new device.`,
         );
         note.className = 'provider-note';
         parts.push(note);

@@ -26,6 +26,7 @@ import { timelineQueryKeys } from './timeline-prefs';
 import { debugView } from './debug';
 import { usageView } from './usage';
 import { toastRegion } from './toast';
+import { signInShell } from './signin';
 
 type Tab =
   'Home' | 'Routes' | 'Secrets' | 'Clients' | 'Requests' | 'Usage' | 'Debug' | 'Passkeys' | 'Admin';
@@ -185,7 +186,7 @@ export function mountProxy(
       if (!preserveView && !tokenPending && (!tokenProtected || canDiscardToken)) {
         tokenProtected = false;
         tokenPending = false;
-        render();
+        render(key);
         focus(key);
       }
       return snapshot;
@@ -266,13 +267,17 @@ export function mountProxy(
       (row?.hasAttribute('tabindex') ? row : content.querySelector('h2'))
     )?.focus();
   }
+  function showSignIn(view: HTMLElement) {
+    root.dataset.view = 'signin';
+    content.replaceChildren(signInShell(view, status));
+  }
   function login() {
     if (disposed) return;
     notifications.clear();
     closeView();
     tools.replaceChildren();
     if (authStatus?.auth === 'passkey') {
-      content.replaceChildren(
+      showSignIn(
         passkeyLogin(
           authStatus,
           api,
@@ -292,7 +297,7 @@ export function mountProxy(
       return;
     }
     if (authStatus?.auth !== 'token') {
-      content.replaceChildren(
+      showSignIn(
         card(
           'Sign in unavailable',
           button('Retry', () => {
@@ -324,13 +329,16 @@ export function mountProxy(
       },
       'Sign in',
     );
-    content.replaceChildren(card('Sign in', form));
+    showSignIn(card('Sign in', form));
     token.focus();
   }
-  function render() {
+  /** `focusKey` is the refresh's focus target; Providers selects what it names. */
+  function render(focusKey?: string) {
     if (!state || disposed) return;
     notifications.clear();
     closeView();
+    delete root.dataset.view;
+    if (status.parentNode !== root) root.insertBefore(status, content);
     const snapshot = state;
     const nav = el('nav');
     nav.setAttribute('aria-label', 'Proxy administration');
@@ -396,7 +404,7 @@ export function mountProxy(
         homeView(snapshot, api, context, () => {
           currentURL = window.location.href;
         }),
-      Routes: () => routesView(snapshot, api, context),
+      Routes: () => routesView(snapshot, api, context, focusKey),
       Secrets: () => secretsView(snapshot, api, context),
       Clients: () => callersView(snapshot, api, context),
       Requests: () => {
@@ -425,7 +433,22 @@ export function mountProxy(
       login();
       throw error;
     }
-    if (!disposed) await context.refresh();
+    if (disposed) return;
+    try {
+      await context.refresh();
+    } catch (error) {
+      // Being signed out on arrival is expected; show sign-in without an error.
+      if (!(error instanceof ProxyAPIError && error.status === 401)) throw error;
+      // The 401 cleared the pre-auth CSRF token; fetch a fresh one before sign-in.
+      try {
+        authStatus = await api.authStatus();
+      } catch (statusError) {
+        authStatus = undefined;
+        login();
+        throw statusError;
+      }
+      login();
+    }
   }
   void context.run(start);
   return () => {

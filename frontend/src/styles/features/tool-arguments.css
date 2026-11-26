@@ -51,7 +51,7 @@
 .tool-argument-structured {
   display: inline;
   padding: 0.08rem 0.28rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
 }
 

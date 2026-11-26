@@ -224,16 +224,24 @@ func TestProductionBundleSizeBudgets(t *testing.T) {
 		// 158.93 kB build, measuring 540.24/159.77 kB. Allow that and no more.
 		// Restored-page reveal, JS-only extension hints and cache invalidation
 		// bring the entry to 541.11/160.06 kB. Keep narrow headroom.
-		// Emoji suggestions reuse the composer completion menu: 542.56/160.91 kB.
+		// Composer model mentions (@model:) and their per-provider catalog
+		// loading add +4.08/+1.45 kB over a 539.97/159.76 kB build, measuring
+		// 544.05/161.22 kB. Raise both caps by that growth; keep narrow headroom.
+		// Ordering catalog writes and reloading on provider changes bring the
+		// entry to 544.49/161.54 kB raw/Go level-6 gzip.
+		// Emoji suggestions reuse the composer completion menu: +2.55/+1.14 kB
+		// over a 541.93/160.57 kB build, measuring 544.49/161.71 kB.
 		// Unicode and gemoji data remain in a separately bounded lazy chunk.
-		"dist/app.js":            {raw: 542_700, gzip: 161_050},
+		"dist/app.js":            {raw: 544_550, gzip: 161_800},
 		"dist/chunks/catalog.js": {raw: 344_200, gzip: 53_000},
 		"dist/chunks/Panels.js":  {raw: 32_000, gzip: 11_000},
 		// Panel splitting adds a shared-import edge to Lightbox: measured 8.03/3.21 kB.
 		// Pausing transcript media while a video is open brings it to 8.16/3.27 kB.
 		// Sprite icons for its arrow, zoom and download marks: 8.35/3.29 kB.
+		// Corner radius tokens (var(--radius-md) instead of 8px) take the CSS
+		// to 4.02/1.35 kB.
 		"dist/chunks/Lightbox.js":  {raw: 8_450, gzip: 3_350},
-		"dist/assets/Lightbox.css": {raw: 4_000, gzip: 1_400},
+		"dist/assets/Lightbox.css": {raw: 4_100, gzip: 1_400},
 		// The /agents catalog measured 2.69/1.22 kB JS and 2.98/1.04 kB CSS.
 		"dist/chunks/AgentsModal.js":  {raw: 3_200, gzip: 1_450},
 		"dist/assets/AgentsModal.css": {raw: 3_500, gzip: 1_250},
@@ -264,7 +272,9 @@ func TestProductionBundleSizeBudgets(t *testing.T) {
 		// New chat draft dot and toast action button measure 179.95/35.02 kB.
 		// Retain the draft feature's bounded raw and gzip headroom.
 		// The Hub node-switch view transition rules measure 181.45/35.32 kB.
-		"dist/app.css": {raw: 181_500, gzip: 35_350},
+		// Corner radius tokens replace ~390 literal sizes; the longer var()
+		// references measure 183.40/35.21 kB, so only raw grows.
+		"dist/app.css": {raw: 184_000, gzip: 35_350},
 		// Measured after the completed standalone port: 67.7/21.5 KiB JS and
 		// 16.7/4.1 KiB CSS. These limits retain modest growth headroom without
 		// allowing chat-only rendering dependencies into the Hub graph. The

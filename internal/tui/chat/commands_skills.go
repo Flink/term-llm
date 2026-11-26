@@ -281,6 +281,7 @@ func (m *Model) switchModelWithOptions(providerModel string, opts switchModelOpt
 	m.providerName = provider.Name()
 	m.providerKey = providerName
 	m.modelName = modelName
+	m.invalidateModelMentionCatalog()
 	_ = m.admitModelSelection(providerName, modelName, true)
 
 	// Cached model capabilities are provider-scoped. Never carry one provider's

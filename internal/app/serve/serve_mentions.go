@@ -9,9 +9,9 @@ import (
 	"os"
 	"strings"
 	"time"
-	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/term-llm/term-llm/internal/app/serve/wire"
 	"github.com/term-llm/term-llm/internal/llm"
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/mentions"
@@ -65,11 +65,23 @@ type serveMentionSearchItem struct {
 	Segments   []serveMentionSegment `json:"segments"`
 }
 
+type serveMentionModelItem struct {
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	Badge       string `json:"badge"`
+	InsertText  string `json:"insert_text"`
+	Continues   bool   `json:"continues"`
+}
+
 type serveMentionSearchResponse struct {
 	Active         bool                     `json:"active"`
 	Token          *serveMentionToken       `json:"token,omitempty"`
 	Items          []serveMentionSearchItem `json:"items"`
 	IndexTruncated bool                     `json:"index_truncated,omitempty"`
+	ModelToken     *serveMentionToken       `json:"model_token,omitempty"`
+	ModelItems     []serveMentionModelItem  `json:"model_items,omitempty"`
+	ModelOnly      bool                     `json:"model_only,omitempty"`
+	ModelsPending  bool                     `json:"models_pending,omitempty"`
 }
 
 func (s *serveServer) handleMentionSearch(w http.ResponseWriter, r *http.Request) {
@@ -95,32 +107,55 @@ func (s *serveServer) handleMentionSearch(w http.ResponseWriter, r *http.Request
 		writeOpenAIError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "composer text is too large")
 		return
 	}
-	cursor, err := utf16OffsetToByteOffset(req.Text, req.CursorUTF16)
+	cursor, err := wire.UTF16OffsetToByteOffset(req.Text, req.CursorUTF16)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
+	response := serveMentionSearchResponse{Items: []serveMentionSearchItem{}}
 	token, ok := mentions.ActiveTokenAt(req.Text, cursor)
-	if !ok {
-		writeJSON(w, http.StatusOK, serveMentionSearchResponse{Items: []serveMentionSearchItem{}})
-		return
+	if ok {
+		s.populateModelMentions(&response, req.Text, cursor, token)
+		if !response.ModelOnly {
+			status, message := s.populateFileMentions(&response, r, req, token)
+			// A project or index error must not hide usable model rows, or
+			// prevent a loose model lookup from revalidating pending catalogs.
+			if status != http.StatusOK && len(response.ModelItems) == 0 && !response.ModelsPending {
+				kind := "invalid_request_error"
+				if status == http.StatusInternalServerError {
+					kind = "server_error"
+				}
+				writeOpenAIError(w, status, kind, message)
+				return
+			}
+		}
 	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *serveServer) populateFileMentions(response *serveMentionSearchResponse, r *http.Request, req serveMentionSearchRequest, token mentions.ActiveToken) (int, string) {
 	root, err := s.resolveMentionSearchRootForProject(r.Context(), resolveRequestSessionID(r), req.ProjectID, req.WorktreeDir, req.NoProject, isFirstPartyUIResponseRequest(r))
 	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
-		return
+		return http.StatusBadRequest, err.Error()
 	}
 	snapshot, err := s.mentionSnapshot(r.Context(), root)
 	if err != nil {
 		log.Printf("[serve] build project mention index for %s: %v", root, err)
-		writeOpenAIError(w, http.StatusInternalServerError, "server_error", "failed to build project mention index")
-		return
+		return http.StatusInternalServerError, "failed to build project mention index"
 	}
 	limit := req.Limit
 	if limit <= 0 || limit > serveMentionSearchLimit {
 		limit = serveMentionSearchLimit
 	}
 	matches := snapshot.Search(r.Context(), token.Query, limit)
+	response.Items = mentionFileItems(snapshot, matches)
+	response.Active = true
+	response.Token = mentionWireToken(req.Text, token)
+	response.IndexTruncated = snapshot.Truncated
+	return http.StatusOK, ""
+}
+
+func mentionFileItems(snapshot *mentions.Snapshot, matches []mentions.Match) []serveMentionSearchItem {
 	items := make([]serveMentionSearchItem, 0, len(matches))
 	for _, match := range matches {
 		if match.Candidate < 0 || match.Candidate >= len(snapshot.Candidates) {
@@ -138,67 +173,13 @@ func (s *serveServer) handleMentionSearch(w http.ResponseWriter, r *http.Request
 			Segments:   mentionMatchSegments(candidate.Path, match.Positions),
 		})
 	}
-	start, _ := byteOffsetToUTF16Offset(req.Text, token.Start)
-	end, _ := byteOffsetToUTF16Offset(req.Text, token.End)
-	writeJSON(w, http.StatusOK, serveMentionSearchResponse{
-		Active: true,
-		Token: &serveMentionToken{
-			StartUTF16: start,
-			EndUTF16:   end,
-			Query:      token.Query,
-			Quoted:     token.Quoted,
-		},
-		Items:          items,
-		IndexTruncated: snapshot.Truncated,
-	})
+	return items
 }
 
-func utf16OffsetToByteOffset(value string, offset int) (int, error) {
-	if offset < 0 {
-		return 0, errors.New("cursor_utf16 is out of range")
-	}
-	units := 0
-	for byteOffset, r := range value {
-		if units == offset {
-			return byteOffset, nil
-		}
-		width := 1
-		if utf16.RuneLen(r) == 2 {
-			width = 2
-		}
-		if offset > units && offset < units+width {
-			return 0, errors.New("cursor_utf16 splits a surrogate pair")
-		}
-		units += width
-	}
-	if units == offset {
-		return len(value), nil
-	}
-	return 0, errors.New("cursor_utf16 is out of range")
-}
-
-func byteOffsetToUTF16Offset(value string, offset int) (int, error) {
-	if offset < 0 || offset > len(value) || !utf8.ValidString(value) {
-		return 0, errors.New("byte offset is out of range")
-	}
-	units := 0
-	for byteOffset, r := range value {
-		if byteOffset == offset {
-			return units, nil
-		}
-		if byteOffset > offset {
-			return 0, errors.New("byte offset splits a UTF-8 sequence")
-		}
-		if utf16.RuneLen(r) == 2 {
-			units += 2
-		} else {
-			units++
-		}
-	}
-	if offset == len(value) {
-		return units, nil
-	}
-	return 0, errors.New("byte offset is out of range")
+func mentionWireToken(text string, token mentions.ActiveToken) *serveMentionToken {
+	start, _ := wire.ByteOffsetToUTF16Offset(text, token.Start)
+	end, _ := wire.ByteOffsetToUTF16Offset(text, token.End)
+	return &serveMentionToken{StartUTF16: start, EndUTF16: end, Query: token.Query, Quoted: token.Quoted}
 }
 
 func mentionMatchSegments(path string, positions []int) []serveMentionSegment {

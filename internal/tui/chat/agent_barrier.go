@@ -355,6 +355,7 @@ func (m *Model) applyAgentBarrierPrepared(prepared *agentBarrierPrepared) error 
 		m.providerName = prepared.provider.Name()
 	}
 	m.providerKey, m.modelName = prepared.providerKey, prepared.model
+	m.invalidateModelMentionCatalog()
 	m.sess = prepared.session
 	m.applyLoadedScrollback(prepared.messages, prepared.compactionIdx)
 	m.setTranscriptRevision(m.sess.ID, prepared.rev)

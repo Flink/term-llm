@@ -17,6 +17,26 @@ import {
   submit,
   type UIContext,
 } from './dom';
+import { originHost } from './signin';
+
+function keyIcon(): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const icon = document.createElementNS(ns, 'svg');
+  icon.setAttribute('viewBox', '0 0 24 24');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.setAttribute('fill', 'none');
+  icon.setAttribute('stroke', 'currentColor');
+  icon.setAttribute('stroke-width', '2');
+  icon.setAttribute('stroke-linecap', 'round');
+  icon.setAttribute('stroke-linejoin', 'round');
+  const shape = document.createElementNS(ns, 'path');
+  shape.setAttribute(
+    'd',
+    'M2.6 17.4A2 2 0 0 0 2 18.8V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.2a2 2 0 0 0 1.4-.6l.8-.8a6.5 6.5 0 1 0-4-4zM16.5 7.5h.01',
+  );
+  icon.append(shape);
+  return icon;
+}
 
 // Browser exceptions may contain arbitrary credential data. Never display their message.
 async function browserOperation<T>(operation: () => Promise<T>): Promise<T> {
@@ -56,9 +76,9 @@ export function passkeyLogin(
   platform: PasskeyPlatform = browserPasskeyPlatform(),
   resumeRecovery = true,
 ): HTMLElement {
-  const view = card(status.setup_required ? 'Set up passkey' : 'Sign in with a passkey');
+  const view = card(status.setup_required ? 'Set up passkey' : 'Sign in');
   view.classList.add('passkey-auth');
-  view.append(el('p', `Passkeys for ${status.origin}`));
+  view.append(el('p', `Proxy administration for ${originHost(status.origin)}`));
   if (status.setup_required) {
     view.append(
       el('p', 'Welcome! Create a passkey to protect your proxy settings and upstream credentials.'),
@@ -74,13 +94,14 @@ export function passkeyLogin(
     return view;
   }
   if (!status.setup_required) {
-    const login = button('Sign in with passkey', () => {
+    const login = button('', () => {
       void context.run(async () => {
         await assertPasskey(api, platform, 'login');
         await signedIn();
       }, view);
     });
-    login.className = 'primary';
+    login.className = 'primary passkey-signin';
+    login.append(keyIcon(), 'Sign in with passkey');
     view.append(login);
   }
   function secretForm(kind: 'bootstrap' | 'recovery') {
@@ -163,7 +184,11 @@ export function passkeyLogin(
       );
     };
     if (status.recovery_verified && resumeRecovery) showRecovery();
-    else view.append(button('Recover access', showRecovery));
+    else {
+      const recover = button('Recover access', showRecovery);
+      recover.className = 'passkey-recover';
+      view.append(recover);
+    }
   }
   return view;
 }

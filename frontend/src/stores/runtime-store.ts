@@ -23,6 +23,7 @@ export class RuntimeStore {
   private modelRequest: Promise<void> = Promise.resolve();
   private modelRequestProvider = '';
   private modelRequestPending = false;
+  private modelRequestFingerprint = '';
   /** When each displayed catalog was fetched from the server (cached or live). */
   private readonly catalogFetchedAt = new Map<string, number>();
   private providersVerified = false;
@@ -227,11 +228,17 @@ export class RuntimeStore {
 
   /** Concurrent loads of the same provider share one request. */
   loadModels(provider = this.selectedProvider.value): Promise<void> {
-    if (this.modelRequestPending && this.modelRequestProvider === provider)
+    const fingerprint = this.catalogFingerprint(provider);
+    if (
+      this.modelRequestPending &&
+      this.modelRequestProvider === provider &&
+      this.modelRequestFingerprint === fingerprint
+    )
       return this.modelRequest;
     this.modelRequestProvider = provider;
+    this.modelRequestFingerprint = fingerprint;
     this.modelRequestPending = true;
-    const request = this.fetchModels(provider).finally(() => {
+    const request = this.fetchModels(provider, fingerprint).finally(() => {
       if (this.modelRequest === request) this.modelRequestPending = false;
     });
     this.modelRequest = request;
@@ -253,7 +260,7 @@ export class RuntimeStore {
     );
   }
 
-  private async fetchModels(provider: string): Promise<void> {
+  private async fetchModels(provider: string, fingerprint: string): Promise<void> {
     const epoch = ++this.modelEpoch;
     this.modelAbort?.abort();
     const controller = new AbortController();
@@ -271,36 +278,19 @@ export class RuntimeStore {
     }
     this.services.recordDiscovery({}, performance.now() - started);
     if (controller.signal.aborted || epoch !== this.modelEpoch) return;
-    const models = listFrom(data, 'data', 'models', 'items')
-      .map((entry) => ({
-        ...entry,
-        id: String(entry.id || entry.name || ''),
-        name: String(entry.display_name || entry.name || entry.id || ''),
-        provider: String(entry.provider || provider || ''),
-        efforts: Array.isArray(entry.reasoning_efforts)
-          ? entry.reasoning_efforts.map(String)
-          : Array.isArray(entry.efforts)
-            ? entry.efforts.map(String)
-            : undefined,
-        default_effort: String(entry.default_reasoning_effort || entry.default_effort || ''),
-      }))
-      .filter((entry) => entry.id) as RuntimeOption[];
     batch(() => {
-      this.modelCatalogs.value = { ...this.modelCatalogs.peek(), [provider]: models };
-      // Settings previews intentionally load a non-selected provider into this
-      // list. Runtime labels must use the provider-scoped modelFor lookup.
-      this.models.value = models;
       this.modelsLoadingProvider.value = null;
+      if (this.catalogFingerprint(provider) !== fingerprint) return;
+      const models = parseModelList(data, provider);
+      this.catalogFetchedAt.set(provider, Date.now());
+      this.modelCatalogs.value = { ...this.modelCatalogs.peek(), [provider]: models };
+      if (this.providersVerified)
+        this.services.workspaceCache.saveModels(provider, fingerprint, models);
+      // Settings previews can display a non-selected provider's catalog.
+      this.models.value = models;
     });
-    this.catalogFetchedAt.set(provider, Date.now());
-    // Persist against the verified provider entry only; a catalog fetched
-    // while providers are still last-known would carry an unverified fingerprint.
-    if (this.providersVerified)
-      this.services.workspaceCache.saveModels(
-        provider,
-        providerFingerprint(this.providers.peek().find((entry) => entry.id === provider)),
-        models,
-      );
+    const models = this.modelCatalogs.peek()[provider];
+    if (!models || this.catalogFingerprint(provider) !== fingerprint) return;
     if (provider !== this.selectedProvider.peek()) return;
     if (
       this.selectedModel.value &&
@@ -320,6 +310,10 @@ export class RuntimeStore {
         this.setPreference('effort', migratedEffort, false);
       }
     }
+  }
+
+  private catalogFingerprint(provider: string): string {
+    return providerFingerprint(this.providers.peek().find((entry) => entry.id === provider));
   }
 
   setFast(value: boolean): void {
@@ -392,4 +386,22 @@ export class RuntimeStore {
     this.modelAbort = null;
     this.modelEpoch += 1;
   }
+}
+
+function parseModelList(data: Record<string, unknown>, provider: string): RuntimeOption[] {
+  return listFrom(data, 'data', 'models', 'items')
+    .map((entry) => ({
+      ...entry,
+      id: String(entry.id || entry.name || ''),
+      name: String(entry.display_name || entry.name || entry.id || ''),
+      provider: String(entry.provider || provider || ''),
+      alias: entry.alias === true,
+      efforts: Array.isArray(entry.reasoning_efforts)
+        ? entry.reasoning_efforts.map(String)
+        : Array.isArray(entry.efforts)
+          ? entry.efforts.map(String)
+          : undefined,
+      default_effort: String(entry.default_reasoning_effort || entry.default_effort || ''),
+    }))
+    .filter((entry) => entry.id) as RuntimeOption[];
 }

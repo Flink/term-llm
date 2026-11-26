@@ -15,5 +15,11 @@ export default {
     'property-no-vendor-prefix': null,
     'selector-class-pattern': null,
     'value-no-vendor-prefix': null,
+    // Corners come from the shared scale in src/styles/base/radius.css; only
+    // 0, inherit and 50% (circles) may be literal.
+    'declaration-property-value-disallowed-list': [
+      { '/^border(-[a-z]+)*-radius$/': ['/\\d(px|rem|em)\\b/'] },
+      { message: (property) => `Use a --radius-* token for ${property}, not a literal size.` },
+    ],
   },
 };

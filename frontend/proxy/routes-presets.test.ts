@@ -16,6 +16,7 @@ import {
   type ProxyState,
 } from '../src/api/proxy-client';
 import type { UIContext } from './dom';
+import { openProvider, providerItem } from './provider-test-helpers';
 import { routesView } from './routes';
 
 const presets: ProxyPreset[] = [
@@ -129,22 +130,10 @@ function chooseAdvancedSetup(root: HTMLElement, label: string) {
   advanced.open = true;
   fireEvent.click(getByRole(advanced, 'button', { name: /use a saved account/i }));
 }
-function openManage(root: HTMLElement, routeName: string) {
-  const line = root.querySelector<HTMLElement>(`[data-focus="route:${routeName}"]`);
-  if (!line) throw new Error(`Missing route line: ${routeName}`);
-  const details = line
-    .closest('article.route-card')
-    ?.querySelector<HTMLDetailsElement>('details.provider-manage');
-  if (!details) throw new Error(`Missing provider Manage: ${routeName}`);
-  details.open = true;
-  return details;
-}
 function settingsFor(root: HTMLElement, routeName: string): HTMLElement {
-  const line = root.querySelector<HTMLElement>(`[data-focus="route:${routeName}"]`);
-  if (!line) throw new Error(`Missing route line: ${routeName}`);
-  const settings = line
-    .closest('article.route-card')
-    ?.querySelector<HTMLElement>('.route-row-settings');
+  const settings = openProvider(root, routeName, 'connection').querySelector<HTMLElement>(
+    `.provider-route-management[data-route="${routeName}"] .route-row-settings`,
+  );
   if (!settings) throw new Error(`Missing route settings: ${routeName}`);
   return settings;
 }
@@ -310,17 +299,15 @@ it.each<ProxyAdminRoute['set_headers']>([
       },
     ],
   });
-  const row = root.querySelector<HTMLElement>('.route-card')!;
+  const row = root.querySelector<HTMLElement>('.provider-detail')!;
   expect(getByRole(row, 'img', { name: 'Status: green' })).toBeVisible();
-  // Client access is a grant, not a provider-health warning on the route line.
+  // Client access is a grant, not a provider-health warning on the provider.
   expect(root).not.toHaveTextContent('Needs client access');
-  const manage = row.querySelector<HTMLDetailsElement>('details.provider-manage')!;
-  expect(manage.open).toBe(false);
-  openManage(root, 'local');
-  expect(manage.open).toBe(true);
-  expect(manage.querySelectorAll('details')).toHaveLength(0);
+  expect(row.querySelectorAll('details')).toHaveLength(0);
+  openProvider(root, 'local', 'connection');
   expect(row.querySelector('.provider-route-header')).toHaveTextContent('/local/');
-  expect(getByRole(row, 'heading', { name: 'Client approval' })).toBeVisible();
+  openProvider(root, 'local', 'access');
+  expect(getByRole(row, 'heading', { name: 'Clients with access' })).toBeVisible();
   expect(row.querySelector('.route-access-empty')).toHaveTextContent('No clients approved yet.');
 });
 
@@ -387,19 +374,14 @@ it('reports account readiness separately from provider approval', () => {
     ],
   });
   expect(getByRole(root, 'img', { name: 'Status: green' })).toBeVisible();
-  // The provider card summarizes approval once, not on each route line.
-  const summary = root.querySelector<HTMLElement>('.provider-approval-summary')!;
-  expect(summary).toHaveTextContent('Approved: Client');
-  const line = root.querySelector<HTMLElement>('[data-focus="route:chat"]')!;
-  expect(line).not.toHaveTextContent('Client');
-  // The account is managed on the route that uses it, not in a page-level list.
-  const card = root.querySelector<HTMLElement>('.route-card')!;
-  const manage = card.querySelector<HTMLDetailsElement>('details.provider-manage')!;
-  expect(manage.open).toBe(false);
-  openManage(root, 'chat');
-  expect(manage.open).toBe(true);
-  expect(manage.querySelectorAll('details')).toHaveLength(0);
+  // The list summarizes access once per provider; route facts never list clients.
+  expect(providerItem(root, 'chat')).toHaveAccessibleName('chat, 1 client with access');
+  const card = openProvider(root, 'chat', 'access');
+  expect(card.querySelectorAll('details')).toHaveLength(0);
   expect(card.querySelector('.route-access-client')).toHaveTextContent('Client');
+  // The account is managed beside the route that uses it, not in a page-level list.
+  openProvider(root, 'chat', 'connection');
+  expect(getByRole(card, 'tabpanel')).not.toHaveTextContent(/\bClient\b/);
   expect(card.querySelector('.account-controls-status')).toHaveTextContent('home-chat');
   expect(card.querySelector('.account-controls-status')).toHaveTextContent('ready');
   expect(root.querySelector('.route-management')).toBeNull();
@@ -560,7 +542,7 @@ it('infers Grok for a missing account on a legacy grok-bin route without a prese
       },
     ],
   });
-  openManage(root, 'cli');
+  openProvider(root, 'cli');
   fireEvent.click(getByRole(root, 'button', { name: 'Connect account missing' }));
   expect(getByLabelText(root, 'Account kind')).toHaveValue('grok');
   expect(getByLabelText(root, 'Account kind')).toBeDisabled();
@@ -588,7 +570,7 @@ it('preserves an existing route’s account, transport and admission policy when
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
   // The saved account no longer exists: it must stay selectable and unchanged.
   const { root, save } = setup({ routes: [existing] });
-  openManage(root, 'plan');
+  openProvider(root, 'plan');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit plan' }));
   expect(getByLabelText(root, 'Trusted account')).toHaveValue('retired');
   expect(root.querySelector('.route-form')?.textContent).not.toContain('Upstream headers');
@@ -618,7 +600,7 @@ it('saves a transport change on an existing route without a grant-loss prompt', 
   };
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
   const { root, save } = setup({ routes: [existing] });
-  openManage(root, 'api');
+  openProvider(root, 'api');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit api' }));
   expect(queryByLabelText(root, 'Trusted account')).toBeNull();
   fireEvent.click(getByLabelText(root, 'Forward WebSocket upgrades'));
@@ -674,7 +656,7 @@ it.each<ProxyAdminRoute['set_headers']>([
     secrets: [{ name: 'chat-key', routes: null, source: 'stored' }],
   });
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-  openManage(root, 'chat');
+  openProvider(root, 'chat');
   fireEvent.click(getByRole(root, 'button', { name: 'Edit chat' }));
   const form = root.querySelector<HTMLFormElement>('.route-form')!;
   expect(form.querySelectorAll('details')).toHaveLength(0);

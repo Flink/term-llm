@@ -373,6 +373,12 @@ type Model struct {
 	mentionPopup           mentionPopupModel
 	agentMentionCapability AgentMentionCapability
 
+	// Model mentions resolve against this locally discovered catalog. It is
+	// built on demand once per session so keystrokes never probe providers.
+	modelMentionProviders []mentions.ModelProvider
+	modelMentionLoaded    bool
+	modelMentionResolver  func() []mentions.ModelProvider
+
 	searchEnabled           bool // Web search toggle
 	fastMode                bool // Effective ChatGPT/OpenAI fast service-tier state shown in the footer
 	fastProviderDefault     bool // Provider config requests fast by default; inherited unless overridden in-session

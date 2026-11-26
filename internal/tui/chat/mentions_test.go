@@ -19,6 +19,7 @@ import (
 	"github.com/term-llm/term-llm/internal/mentions"
 	"github.com/term-llm/term-llm/internal/session"
 	"github.com/term-llm/term-llm/internal/tools"
+	"github.com/term-llm/term-llm/internal/tui/chat/composer"
 	"github.com/term-llm/term-llm/internal/ui"
 )
 
@@ -228,7 +229,7 @@ func TestMentionPopupRetainedRowsKeepTheirOriginalHighlightQuery(t *testing.T) {
 	if query != "margin" {
 		t.Fatalf("retained row highlight query = %q", query)
 	}
-	if len(mentionHighlightPositions("internal/reflow/margin", query, false)) == 0 {
+	if len(composer.ContiguousPositions("internal/reflow/margin", query)) == 0 {
 		t.Fatal("retained row lost its original contiguous highlight")
 	}
 }
@@ -1201,45 +1202,5 @@ func TestBareMentionEnterUsesHighlightedResult(t *testing.T) {
 				t.Fatalf("submitted messages = %#v, want %q", m.messages, tt.want)
 			}
 		})
-	}
-}
-
-func TestMentionHighlightPositionsOnlyUsesContiguousUnselectedMatches(t *testing.T) {
-	tests := []struct {
-		name     string
-		value    string
-		query    string
-		selected bool
-		want     string
-	}{
-		{name: "substring", value: "internal/reflow/margin/margin.go", query: "margin", want: "margin"},
-		{name: "case insensitive", value: "Internal/Render/Markdown.go", query: "markdown", want: "Markdown"},
-		{name: "fuzzy subsequence", value: "internal/render/markdown/testdata/heading_width80.golden", query: "margin"},
-		{name: "selected", value: "internal/reflow/margin", query: "margin", selected: true},
-		{name: "empty query", value: "internal/reflow/margin", query: ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			positions := mentionHighlightPositions(tt.value, tt.query, tt.selected)
-			if tt.want == "" {
-				if len(positions) != 0 {
-					t.Fatalf("positions = %v, want none", positions)
-				}
-				return
-			}
-			start := strings.Index(tt.value, tt.want)
-			if len(positions) != len(tt.want) || positions[0] != start || positions[len(positions)-1] != start+len(tt.want)-1 {
-				t.Fatalf("positions = %v, want contiguous span [%d,%d]", positions, start, start+len(tt.want)-1)
-			}
-		})
-	}
-}
-
-func TestTruncateMentionPathKeepsMatchedBasename(t *testing.T) {
-	path := "very/deep/project/path/internal/session/types.go"
-	position := strings.LastIndex(path, "types.go")
-	display, positions := truncateMentionPath(path, []int{position}, 20)
-	if !strings.Contains(display, "types.go") || len(positions) != 1 || positions[0] < 0 || positions[0] >= len(display) {
-		t.Fatalf("truncation display=%q positions=%v", display, positions)
 	}
 }

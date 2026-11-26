@@ -1,0 +1,16 @@
+/* Corner radius scale shared by the web UI, Hub and credential proxy.
+
+   Use a token for every rounded corner. Only 0, inherit and 50% (circles) stay
+   literal. Pick the nearest step: xs for hairline bars and swatches, sm for
+   inline chips and kbd, md for controls and rows, lg for cards and panels, xl
+   for dialogs and popovers, 2xl for sheets and the mobile composer, full for
+   pills. */
+:root {
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 24px;
+  --radius-full: 999px;
+}

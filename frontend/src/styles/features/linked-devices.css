@@ -19,7 +19,7 @@
   gap: 1rem;
   padding: 0.75rem 0.85rem;
   border: 1px solid var(--border);
-  border-radius: 0.6rem;
+  border-radius: var(--radius-md);
   background: var(--surface-2);
 }
 
@@ -86,7 +86,7 @@
   padding: 0;
   list-style: none;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .linked-devices-device {
@@ -167,7 +167,7 @@
   gap: 0.4rem;
   padding: 2.25rem 1rem;
   border: 1px dashed var(--border-strong);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   text-align: center;
 }
 
@@ -188,7 +188,7 @@
 
 .linked-devices-steps li {
   padding: 0.2rem 0.6rem;
-  border-radius: 99px;
+  border-radius: var(--radius-full);
   background: var(--surface-3);
   color: var(--text-muted);
 }
@@ -204,7 +204,7 @@
   align-items: center;
   gap: 1.25rem;
   padding: 1rem;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--surface-2);
 }
 
@@ -213,7 +213,7 @@
   width: 12rem;
   aspect-ratio: 1;
   padding: 0.6rem;
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: white;
 }
 
@@ -233,7 +233,7 @@
   justify-items: center;
   gap: 0.55rem;
   padding: 1.75rem 1rem 1.25rem;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--surface-2);
   text-align: center;
 }
@@ -282,7 +282,7 @@
   width: min(2.75rem, 11vw);
   height: 3.25rem;
   padding: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   font: 600 1.4rem/1 var(--font-mono);
   font-variant-ligatures: none;

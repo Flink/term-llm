@@ -117,15 +117,7 @@ func (s *serveServer) Stop(ctx context.Context) error {
 	})
 	run(func() error { return s.server.Shutdown(ctx) })
 
-	s.modelsMu.Lock()
-	for _, p := range s.modelsProviders {
-		if cleaner, ok := p.(interface{ CleanupMCP() }); ok {
-			cleaner.CleanupMCP()
-		}
-	}
-	s.modelsProviders = nil
-	s.modelsCache = nil
-	s.modelsMu.Unlock()
+	run(func() error { return s.mentionModels.CloseAndDrain(ctx, s.cleanModelProviders) })
 
 	done := make(chan struct{})
 	go func() {

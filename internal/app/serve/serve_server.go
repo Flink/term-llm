@@ -109,6 +109,7 @@ type serveServer struct {
 	mentionsCacheMu          sync.Mutex
 	mentionsByRoot           map[string]*serveMentionCacheEntry
 	mentionBuildFn           func(context.Context, string, mentions.BuildOptions) (*mentions.Snapshot, error)
+	mentionModels            mentions.ModelCatalogCache
 	skillRunsMu              sync.Mutex
 	skillRuns                map[string]*serveSkillRun
 	skillRunsWG              sync.WaitGroup

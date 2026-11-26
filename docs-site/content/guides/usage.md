@@ -156,15 +156,17 @@ In `term-llm chat`, `/file <path>` attaches a local text file to the next messag
 
 Pasting an image from the clipboard attaches it as an image when the terminal/clipboard integration exposes image data. Pasted images use the same 20 MB decoded limit as web/API uploads.
 
-#### Project and agent `@` mentions
+#### Project, agent, and model `@` mentions
 
-In the TUI composer, type `@` to search permitted agents and files or directories in the active project or worktree. Web chat currently searches project files and directories only. Press Enter or Tab to insert a result as editable text. File results follow worktree switches. Agent results come from user-installed/configured agents and built-ins; project agent directories are never auto-discovered.
+In the TUI composer, type `@` to search permitted agents and files or directories in the active project or worktree. Web chat searches project files and directories but does not offer agent mentions. Press Enter or Tab to insert a result as editable text. File results follow worktree switches. Agent results come from user-installed/configured agents and built-ins; project agent directories are never auto-discovered.
 
 File syntax remains `@path/to/file`, `@"path with spaces"`, or `@file.go#L10-20` for a line range. Bare `@name` is always file/text syntax. Selecting or typing an agent uses the explicit `@agent:codebase` form (or `@agent:"name with spaces"` when needed). `@agent:` searches agents only, while path-like queries such as `@internal/` search files only.
 
 Mentioned text files are read when the message is submitted and appear in the conversation's `[with: ...]` annotation. Directories attach a non-recursive name listing. An explicit file mention authorizes that bounded read, which remains confined to the active project or worktree; missing, escaped, binary, oversized, or otherwise unreadable paths do not block sending.
 
 An explicit `@agent:name` asks the active model to call its already-authorized `spawn_agent` tool once for that agent; selecting a result does not launch anything directly. The agent must still be registered, allowed by the current session/tool filter and whitelist, below the depth limit, and resolvable by the live runner. Invalid or stale explicit agent mentions block that submission and leave the draft and attachments intact. This delegation syntax is separate from `/handover @name`, which switches conversation context, and from `term-llm chat @name`, which chooses the startup agent.
+
+In either composer, type `@model:` or `@m:` to search available models; a bare provider prefix such as `@claude-bin:` also suggests models alongside ordinary results. The TUI uses configured and cached model catalogs. Selecting a model with reasoning effort choices opens a second menu. The final selection inserts editable text such as `claude-bin:opus-medium`; it does not send a message, delegate, or change the active model.
 
 Set `TERM_LLM_AT_MENTIONS=0` to disable `@` autocomplete and submit-time textual file/agent mention semantics in the TUI. The serve/web composer and one-shot `ask` surface do not currently provide agent-delegation mentions; use `spawn_agent` through their normal tool flow instead.
 

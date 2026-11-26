@@ -7,6 +7,32 @@ const json = (body, status = 200) => Response.json(body, { status });
 const text = value => typeof value === 'string' ? value : Array.isArray(value)
   ? value.map(part => text(part.content ?? part.text ?? '')).join('\n') : '';
 
+// Only the fictional demo model is offered; there is no project index.
+function demoMentionSearch({ text, cursor_utf16: cursor } = {}) {
+  const empty = { active: false, items: [] };
+  if (typeof text !== 'string' || !Number.isInteger(cursor) || cursor < 0 || cursor > text.length)
+    return empty;
+  const token = text.slice(0, cursor).match(/(?:^|[\s。、？！])(@([^\s"]*))$/u);
+  if (!token) return empty;
+  const query = token[2].toLowerCase();
+  const scoped = query.match(/^(?:model|m):/);
+  const modelQuery = scoped ? query.slice(scoped[0].length) : query;
+  const name = `demo:${MODEL}`;
+  if (!scoped && !(query.length >= 2 && ('demo'.startsWith(query) || query.startsWith('demo:'))))
+    return empty;
+  return {
+    active: true, items: [], model_only: Boolean(scoped),
+    model_token: {
+      start_utf16: cursor - token[1].length,
+      end_utf16: cursor + (text.slice(cursor).match(/^[^\s"]*/u)?.[0].length || 0),
+      query: modelQuery, quoted: false,
+    },
+    model_items: name.includes(modelQuery)
+      ? [{ label: name, description: 'Scripted replies · no AI', badge: '', insert_text: name, continues: false }]
+      : [],
+  };
+}
+
 // Inline native (WebMCP) tools use the stock client-tool protocol. The page
 // offers `webmcp__NAME` functions; a response requests one and stays open until
 // the page POSTs that call's result.
@@ -353,6 +379,7 @@ export function createDemoAPI({ delay = 15, toolTimeout = 20_000 } = {}) {
     if (path === '/v1/capabilities') return json({ projects: { enabled: false }, worktrees: { enabled: false }, shell: { enabled: false }, live: { enabled: false } });
     if (path === '/v1/providers') return json({ data: [{ name: 'demo', display_name: 'UI demo', configured: true, available: true, is_default: true, default_model: MODEL, models: [MODEL] }] });
     if (path === '/v1/models') return json({ data: [{ id: MODEL, name: 'Scripted replies · no AI', display_name: 'Scripted replies · no AI', owned_by: 'demo', provider: 'demo' }] });
+    if (path === '/v1/mentions/search' && method === 'POST') return json(demoMentionSearch(body));
     if (path === '/v1/responses' && method === 'POST') return streamReply(request, body);
     const callMatch = path.match(/^\/v1\/responses\/([^/]+)\/client_tool_calls\/([^/]+)\/result$/);
     if (callMatch) {

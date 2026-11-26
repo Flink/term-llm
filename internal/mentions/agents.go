@@ -1,6 +1,7 @@
 package mentions
 
 import (
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -160,6 +161,74 @@ func InsertAgentText(name string) string {
 		return `@agent:"` + escaped + `"`
 	}
 	return "@agent:" + name
+}
+
+// DisplayAgentMention returns the compact popup form of a delegation token.
+func DisplayAgentMention(name string) string {
+	return "@" + strings.TrimPrefix(InsertAgentText(name), "@"+agentMentionPrefix)
+}
+
+// RankAgentMentionNames ranks agent names for an @agent: query. Exact matches
+// come first, then prefixes, substrings, and subsequences; ties prefer shorter
+// names and then lexical order. An empty query ranks nothing.
+func RankAgentMentionNames(names []string, query string, limit int) []string {
+	if query == "" {
+		return nil
+	}
+	lowerQuery := strings.ToLower(query)
+	type rankedName struct {
+		name string
+		rank int
+	}
+	matches := make([]rankedName, 0, len(names))
+	for _, name := range names {
+		lowerName := strings.ToLower(name)
+		rank := 4
+		switch {
+		case lowerName == lowerQuery:
+			rank = 0
+		case strings.HasPrefix(lowerName, lowerQuery):
+			rank = 1
+		case strings.Contains(lowerName, lowerQuery):
+			rank = 2
+		default:
+			if !agentSubsequenceMatch(name, lowerQuery) {
+				continue
+			}
+			rank = 3
+		}
+		matches = append(matches, rankedName{name: name, rank: rank})
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].rank != matches[j].rank {
+			return matches[i].rank < matches[j].rank
+		}
+		leftLen := utf8.RuneCountInString(matches[i].name)
+		rightLen := utf8.RuneCountInString(matches[j].name)
+		if leftLen != rightLen {
+			return leftLen < rightLen
+		}
+		return matches[i].name < matches[j].name
+	})
+	ranked := make([]string, 0, len(matches))
+	for _, match := range matches {
+		ranked = append(ranked, match.name)
+	}
+	if limit > 0 && len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	return ranked
+}
+
+func agentSubsequenceMatch(name, lowerQuery string) bool {
+	queryRunes := []rune(lowerQuery)
+	queryIndex := 0
+	for _, r := range name {
+		if queryIndex < len(queryRunes) && unicode.ToLower(r) == queryRunes[queryIndex] {
+			queryIndex++
+		}
+	}
+	return queryIndex == len(queryRunes)
 }
 
 func isReservedAgentFilePayload(payload string) bool {

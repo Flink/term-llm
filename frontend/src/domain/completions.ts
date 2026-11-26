@@ -21,8 +21,12 @@ export interface Completion {
   value: string;
   label: string;
   description: string;
-  kind: 'slash' | 'agent' | 'mention' | 'emoji';
+  kind: 'slash' | 'agent' | 'mention' | 'model' | 'emoji';
   streamingSafe?: boolean;
+  /** Keeps the token open after insertion (no trailing space) for a next step. */
+  continues?: boolean;
+  /** Short label shown at the end of the row, such as "latest". */
+  badge?: string;
   replacement?: { start: number; end: number };
   segments?: Array<{ text: string; matched?: boolean }>;
 }
@@ -261,6 +265,21 @@ export function mentionCompletions(
   });
 }
 
+export function modelMentionCompletions(payload: MentionSearchResponse | null): Completion[] {
+  const token = payload?.model_token;
+  if (!token) return [];
+  const replacement = { start: token.start_utf16, end: token.end_utf16 };
+  return (payload.model_items || []).map((item) => ({
+    value: item.insert_text,
+    label: item.label,
+    description: item.description,
+    badge: item.badge,
+    kind: 'model',
+    continues: item.continues,
+    replacement,
+  }));
+}
+
 export function applyCompletion(value: string, completion: string | Completion): string {
   const inserted = typeof completion === 'string' ? completion : completion.value;
   if (typeof completion !== 'string' && completion.replacement) {
@@ -275,7 +294,7 @@ export function applyCompletion(value: string, completion: string | Completion):
 function replacementText(value: string, item: Completion, start: number, end: number): string {
   if (item.kind === 'emoji') return item.value;
   const prefix = item.thinking && !/\s$/.test(value.slice(0, start)) ? ' ' : '';
-  const separator = /^\s/u.test(value.slice(end)) ? '' : ' ';
+  const separator = item.continues || /^\s/u.test(value.slice(end)) ? '' : ' ';
   return prefix + item.value + separator;
 }
 
