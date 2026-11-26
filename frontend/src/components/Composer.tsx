@@ -1382,11 +1382,7 @@ function ConversationComposer() {
               if (emoji.items.length) setHighlight(null);
             }}
             onSelect={(event) => syncSelection(event.currentTarget)}
-            onCompositionStart={() => emoji.setComposing(true)}
-            onCompositionEnd={(event) => {
-              emoji.setComposing(false);
-              syncSelection(event.currentTarget);
-            }}
+            onCompositionEnd={(event) => syncSelection(event.currentTarget)}
             onClick={(event) => syncSelection(event.currentTarget)}
             onInput={(event) => {
               syncSelection(event.currentTarget);

@@ -861,6 +861,28 @@ test('Enter inserts an emoji into the draft without sending a response', async (
   );
 });
 
+test('suggests emoji while a keyboard composes the shortcode and inserts on tap', async ({
+  page,
+}) => {
+  await open(page);
+  const input = page.getByRole('textbox', { name: 'Message', exact: true });
+  await input.fill('Ready :');
+  // Android keyboards such as Gboard compose each typed word.
+  const cdp = await page.context().newCDPSession(page);
+  for (const text of ['r', 'ro', 'roc', 'rock'])
+    await cdp.send('Input.imeSetComposition', {
+      text,
+      selectionStart: text.length,
+      selectionEnd: text.length,
+    });
+  await page.getByRole('option', { name: /:rocket:/ }).click();
+  await expect(input).toHaveValue('Ready 🚀');
+  await expect(input).toBeFocused();
+  // The cancelled composition must not reappear when the keyboard types on.
+  await cdp.send('Input.insertText', { text: '!' });
+  await expect(input).toHaveValue('Ready 🚀!');
+});
+
 test('sends through public composer UI and reduces a streamed response', async ({ page }) => {
   const requests = await open(page);
   await page.getByRole('textbox', { name: 'Message' }).fill('Hello');

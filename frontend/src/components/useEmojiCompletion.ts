@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import type { Completion } from '../domain/completions';
-import { loadEmojiCatalog, type EmojiCatalog } from '../domain/emoji-catalog';
-import { activeEmojiAtCaret, indexEmoji, searchEmoji } from '../domain/emoji-completion';
+import { activeEmojiAtCaret, loadEmojiSearch } from '../domain/emoji-completion';
+import type { EmojiSearch } from '../domain/emoji-search';
 
 export function useEmojiCompletion(value: string, owner: string) {
   const [selection, setSelection] = useState<{
@@ -9,28 +9,32 @@ export function useEmojiCompletion(value: string, owner: string) {
     caret: number;
     owner: string;
   } | null>(null);
-  const [composing, setComposing] = useState(false);
-  const [catalog, setCatalog] = useState<EmojiCatalog | null>(null);
+  const [search, setSearch] = useState<EmojiSearch | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
   const caret = selection?.owner === owner && selection.value === value ? selection.caret : null;
-  const token = caret !== null && !composing ? activeEmojiAtCaret(value, caret) : null;
-  const eligible = token !== null;
+  // Start fetching the catalog at the colon; suggest from the second character.
+  // Composition is not excluded: Android keyboards compose every typed word,
+  // and keyboard acceptance is already ignored until composition ends.
+  const lead = caret !== null ? activeEmojiAtCaret(value, caret, 0) : null;
+  const token = lead && lead.query.length >= 2 ? lead : null;
+  const leadKey = lead ? `${owner}\u0000${lead.start}` : null;
 
   useEffect(() => {
-    if (!eligible || catalog) return;
+    if (!leadKey || search) return;
     let cancelled = false;
-    // A missing chunk (e.g. after a server upgrade) must not break the composer.
-    void loadEmojiCatalog().then(
-      (rows) => !cancelled && setCatalog(rows),
-      () => !cancelled && setCatalog([]),
+    // A missing chunk (e.g. after a server upgrade) must not break the composer:
+    // release this shortcode's Enter guard and let the next shortcode retry.
+    void loadEmojiSearch().then(
+      (loaded) => !cancelled && setSearch(() => loaded),
+      () => !cancelled && setFailed(leadKey),
     );
     return () => {
       cancelled = true;
     };
-  }, [eligible, catalog]);
+  }, [leadKey, search]);
 
-  const index = useMemo(() => (catalog ? indexEmoji(catalog) : null), [catalog]);
   const query = token?.query;
-  const matches = useMemo(() => (index && query ? searchEmoji(index, query) : []), [index, query]);
+  const matches = useMemo(() => (search && query ? search(query) : []), [search, query]);
   const items: Completion[] = matches.map(({ glyph, shortcode }) => ({
     kind: 'emoji',
     value: glyph,
@@ -58,9 +62,8 @@ export function useEmojiCompletion(value: string, owner: string) {
   return {
     items,
     caret,
-    pending: eligible && !catalog,
+    pending: token !== null && !search && failed !== leadKey,
     sync,
     close: () => setSelection(null),
-    setComposing,
   };
 }

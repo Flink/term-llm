@@ -229,12 +229,14 @@ func TestProductionBundleSizeBudgets(t *testing.T) {
 		// 544.05/161.22 kB. Raise both caps by that growth; keep narrow headroom.
 		// Ordering catalog writes and reloading on provider changes bring the
 		// entry to 544.49/161.54 kB raw/Go level-6 gzip.
-		// Emoji suggestions reuse the composer completion menu: +2.55/+1.14 kB
-		// over a 541.93/160.57 kB build, measuring 544.49/161.71 kB.
-		// Unicode and gemoji data remain in a separately bounded lazy chunk.
-		"dist/app.js":            {raw: 544_550, gzip: 161_800},
-		"dist/chunks/catalog.js": {raw: 344_200, gzip: 53_000},
-		"dist/chunks/Panels.js":  {raw: 32_000, gzip: 11_000},
+		// Emoji suggestions keep only shortcode detection, the loader and composer
+		// wiring eager: +2.03/+0.93 kB over a 541.93/160.57 kB build, measuring
+		// 543.97/161.50 kB, inside the caps above.
+		"dist/app.js": {raw: 544_550, gzip: 161_650},
+		// Unicode/gemoji data and its search load at a composer shortcode's colon:
+		// measured 344.65/53.17 kB.
+		"dist/chunks/emoji-search.js": {raw: 345_000, gzip: 53_400},
+		"dist/chunks/Panels.js":       {raw: 32_000, gzip: 11_000},
 		// Panel splitting adds a shared-import edge to Lightbox: measured 8.03/3.21 kB.
 		// Pausing transcript media while a video is open brings it to 8.16/3.27 kB.
 		// Sprite icons for its arrow, zoom and download marks: 8.35/3.29 kB.

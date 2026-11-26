@@ -1,14 +1,15 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/preact';
 import userEvent from '@testing-library/user-event';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { StoreContext } from '../app/context';
 import { AppStore } from '../stores/app-store';
 import { testConfig, testSession } from '../stores/store-test-fixtures';
+import { createEmojiSearch, type EmojiCatalog, type EmojiSearch } from '../domain/emoji-search';
 import { Composer } from './Composer';
 
 // Deliberately not in rank or alphabetical order, with keyword-only matches first.
-const { catalog, loadEmojiCatalog } = vi.hoisted(() => {
-  const catalog = [
+const { catalog, loadEmojiSearch } = vi.hoisted(() => {
+  const catalog: [string, string, string, string?][] = [
     ['🌞', 'Sun', 'starshine'],
     ['🌠', 'Shooting star', 'night'],
     ['🏅', 'Star badge', 'award'],
@@ -24,11 +25,20 @@ const { catalog, loadEmojiCatalog } = vi.hoisted(() => {
     ['⭐️', 'White star', 'favorite'],
     ['🌃', 'Night sky', 'stars'],
   ];
-  return { catalog, loadEmojiCatalog: vi.fn(async () => catalog) };
+  return {
+    catalog,
+    loadEmojiSearch: vi.fn(async (): Promise<EmojiSearch> => createEmojiSearch(catalog)),
+  };
 });
-vi.mock('../domain/emoji-catalog', () => ({ loadEmojiCatalog }));
+vi.mock('../domain/emoji-completion', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../domain/emoji-completion')>()),
+  loadEmojiSearch,
+}));
+
+const search = (rows: EmojiCatalog = catalog) => createEmojiSearch(rows);
 
 let store: AppStore;
+beforeEach(() => loadEmojiSearch.mockClear());
 afterEach(() => store?.dispose());
 
 function setup() {
@@ -234,8 +244,8 @@ it('resets the highlight when the caret switches from slash to emoji in one draf
 it.each(['Escape', 'no matches'])(
   'prevents a cold Enter from sending, then restores normal Enter after %s',
   async (outcome) => {
-    let finish!: (entries: typeof catalog) => void;
-    loadEmojiCatalog.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+    let finish!: (loaded: EmojiSearch) => void;
+    loadEmojiSearch.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
     const { input, send, user } = setup();
     await user.type(input, ':star');
     noMenu();
@@ -245,7 +255,9 @@ it.each(['Escape', 'no matches'])(
 
     if (outcome === 'Escape') await user.keyboard('{Escape}');
     await act(async () =>
-      finish(outcome === 'Escape' ? catalog : catalog.filter(([, name]) => name === 'Rocket')),
+      finish(
+        search(outcome === 'Escape' ? catalog : catalog.filter(([, name]) => name === 'Rocket')),
+      ),
     );
     noMenu();
     await user.keyboard('{Enter}');
@@ -254,15 +266,55 @@ it.each(['Escape', 'no matches'])(
 );
 
 it('does not reopen stale suggestions when the lazy catalog resolves after Escape', async () => {
-  let finish!: (entries: typeof catalog) => void;
-  loadEmojiCatalog.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+  let finish!: (loaded: EmojiSearch) => void;
+  loadEmojiSearch.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
   const { input, user } = setup();
   await user.type(input, ':star');
   await user.keyboard('{Escape}');
   expect(finish).toEqual(expect.any(Function));
-  await act(async () => finish(catalog));
+  await act(async () => finish(search()));
   noMenu();
   expect(input).toHaveValue(':star');
   await user.keyboard('_s');
   expect(await menu()).toBeInTheDocument();
+});
+
+it('starts loading the catalog at the colon, before suggestions open', async () => {
+  const { input, user } = setup();
+  await user.type(input, 'Ready');
+  expect(loadEmojiSearch).not.toHaveBeenCalled();
+  await user.keyboard(' :');
+  expect(loadEmojiSearch).toHaveBeenCalledOnce();
+  noMenu();
+  await user.keyboard('ro');
+  expect(within(await menu()).getByRole('option', { name: /:rocket:/ })).toBeVisible();
+});
+
+it('shows suggestions while a keyboard composes the shortcode and accepts a tap', async () => {
+  const { input, send, user } = setup();
+  act(() => input.focus());
+  fireEvent.compositionStart(input);
+  fireEvent.input(input, { target: { value: ':rock', selectionStart: 5, selectionEnd: 5 } });
+  const rocket = within(await menu()).getByRole('option', { name: /:rocket:/ });
+  // Keys belong to the keyboard until composition ends.
+  fireEvent.keyDown(input, { key: 'Enter', isComposing: true, keyCode: 229 });
+  expect(input).toHaveValue(':rock');
+  await user.click(rocket);
+  expect(input).toHaveValue('🚀');
+  expect(input).toHaveFocus();
+  expect(send).not.toHaveBeenCalled();
+});
+
+it('releases Enter when the catalog fails to load and retries for the next shortcode', async () => {
+  loadEmojiSearch.mockRejectedValueOnce(new Error('chunk unavailable'));
+  const { input, send, user } = setup();
+  await user.type(input, ':star');
+  noMenu();
+  await user.keyboard('{Enter}');
+  expect(send).toHaveBeenCalledOnce();
+
+  await user.clear(input);
+  await user.type(input, ':star');
+  expect(loadEmojiSearch).toHaveBeenCalledTimes(2);
+  expect(within(await menu()).getByRole('option', { name: /:star:$/ })).toBeVisible();
 });

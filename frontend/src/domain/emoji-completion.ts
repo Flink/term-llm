@@ -1,53 +1,38 @@
-import type { EmojiCatalog } from './emoji-catalog';
+import type { EmojiSearch } from './emoji-search';
 
-export function activeEmojiAtCaret(value: string, caret: number) {
+// Match emoji endings, not the Emoji property alone: plain digits, # and * also have it.
+const emojiBoundary =
+  /(?:\s|\p{Extended_Pictographic}\uFE0F?|\p{Emoji_Modifier}|\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\u{1F3F4}[\u{E0020}-\u{E007E}]+\u{E007F})$/u;
+
+/**
+ * Finds a `:shortcode` ending at the caret. Suggestions need two characters;
+ * a shorter minimum lets callers start loading the catalog at the colon.
+ */
+export function activeEmojiAtCaret(value: string, caret: number, minLength = 2) {
   const prefix = value.slice(0, caret);
-  const match = /:([a-z0-9_+-]{2,})$/i.exec(prefix);
-  if (!match) return null;
-  // Match emoji endings, not the Emoji property alone: plain digits, # and * also have it.
-  const boundary =
-    /(?:\s|\p{Extended_Pictographic}\uFE0F?|\p{Emoji_Modifier}|\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\u{1F3F4}[\u{E0020}-\u{E007E}]+\u{E007F})$/u;
-  if (match.index > 0 && !boundary.test(prefix.slice(0, match.index))) return null;
+  const match = /:([a-z0-9_+-]*)$/i.exec(prefix);
+  if (!match || match[1].length < minLength) return null;
+  if (match.index > 0 && !emojiBoundary.test(prefix.slice(0, match.index))) return null;
   const query = match[1].toLowerCase();
   // A shortcode can continue to the right of the caret and end in a colon.
   const suffix = /^[a-z0-9_+-]*:?/i.exec(value.slice(caret))![0];
   return { query, start: match.index, end: caret + suffix.length };
 }
 
-export function indexEmoji(catalog: EmojiCatalog) {
-  return catalog.map(([glyph, name, keywords, aliases]) => {
-    const normalized =
-      name
-        .toLowerCase()
-        .match(/[a-z0-9]+/g)
-        ?.join('_') ?? '';
-    const codes = aliases ? aliases.split(' ') : [];
-    return { glyph, normalized, keywords, codes, shortcode: codes[0] ?? normalized };
-  });
-}
+let loading: Promise<EmojiSearch> | undefined;
 
-export type EmojiIndex = ReturnType<typeof indexEmoji>;
-
-type Entry = EmojiIndex[number];
-
-function matchRank(entry: Entry, query: string) {
-  const { normalized, codes, keywords } = entry;
-  if (normalized === query || codes.includes(query)) return 0;
-  if (normalized.startsWith(query) || codes.some((code) => code.startsWith(query))) return 1;
-  if (normalized.includes(`_${query}`)) return 2;
-  if (keywords.startsWith(query) || keywords.includes(` ${query}`)) return 3;
-  return -1;
-}
-
-export function searchEmoji(index: EmojiIndex, query: string) {
-  const limit = 8;
-  const ranks: EmojiIndex[] = [[], [], [], []];
-  for (const entry of index) {
-    const rank = matchRank(entry, query);
-    if (rank === -1 || ranks[rank].length === limit) continue;
-    ranks[rank].push(
-      rank === 0 && entry.codes.includes(query) ? { ...entry, shortcode: query } : entry,
-    );
+/**
+ * Loads the deferred catalog and its index once per page. Concurrent callers
+ * share the in-flight import; a rejected chunk fetch clears the cache so a
+ * later shortcode can retry instead of disabling suggestions until reload.
+ */
+export function loadEmojiSearch(): Promise<EmojiSearch> {
+  if (!loading) {
+    const promise = import('./emoji-search').then(({ searchEmoji }) => searchEmoji);
+    loading = promise;
+    void promise.catch(() => {
+      if (loading === promise) loading = undefined;
+    });
   }
-  return ranks.flat().slice(0, limit);
+  return loading;
 }

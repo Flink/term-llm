@@ -51,7 +51,7 @@ func TestDeferredFeaturesRemainLazy(t *testing.T) {
 		markers []string
 	}{
 		{
-			module:  "../internal/emoji/catalog.json",
+			module:  "src/domain/emoji-search.ts",
 			markers: []string{"grinning face", "rolling on the floor laughing"},
 		},
 		{
