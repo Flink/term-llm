@@ -42,3 +42,12 @@ func TestInputLimitForProviderModelStaysAbsentForClaudeBin(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionDisplayInputLimitDoesNotGuessAgyBinWindow(t *testing.T) {
+	if got := SessionDisplayInputLimit("agy-bin", "claude-sonnet-4-6", 0); got != 0 {
+		t.Fatalf("SessionDisplayInputLimit(agy-bin, claude-sonnet-4-6, 0) = %d, want 0", got)
+	}
+	if got := SessionDisplayInputLimit("agy-bin", "gemini-4-neon", 1_048_576); got != 1_048_576 {
+		t.Fatalf("SessionDisplayInputLimit(agy-bin, gemini-4-neon, 1048576) = %d, want 1048576", got)
+	}
+}

@@ -1523,24 +1523,7 @@ func (m *Model) statusLineWorktreePart() string {
 }
 
 func (m *Model) statusLineUsageParts() (string, string) {
-	usageBase := ""
-	if m.engine != nil && m.engine.InputLimit() > 0 {
-		contextTokens := 0
-		if !m.streaming {
-			contextTokens = m.engine.LastTotalTokens()
-		}
-		if contextTokens <= 0 {
-			contextTokens = m.estimateContextTokensCached()
-		}
-		limit := m.engine.InputLimit()
-		if limit > 0 {
-			used := llm.FormatTokenCount(contextTokens)
-			if used == "" {
-				used = "0"
-			}
-			usageBase = fmt.Sprintf("~%s/%s", used, llm.FormatTokenCount(limit))
-		}
-	}
+	usageBase := ui.ContextMeterForEngine(m.engine, m.managesOwnContext(), m.streaming, m.estimateContextTokensCached)
 
 	cachedInputTokens := 0
 	if m.stats != nil && m.stats.CachedInputTokens > 0 {

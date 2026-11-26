@@ -8,7 +8,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/term-llm/term-llm/internal/llm"
 	"github.com/term-llm/term-llm/internal/llm/core"
 	"github.com/term-llm/term-llm/internal/llm/providers/opencompat"
 	"github.com/term-llm/term-llm/internal/session"
@@ -56,23 +55,7 @@ func (m *Model) cmdStats() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) renderStatsModal() string {
-	limit := 0
-	if m.engine != nil {
-		limit = m.engine.InputLimit()
-	}
-	if limit <= 0 {
-		limit = llm.InputLimitForProviderModel(m.providerKey, m.modelName)
-	}
-	used := 0
-	if m.engine != nil {
-		used = m.engine.LastTotalTokens()
-	}
-	if used <= 0 {
-		used = m.estimateContextTokensCached()
-	}
-	if used < 0 {
-		used = 0
-	}
+	currentTokens, limit := ui.ContextStatsForEngine(m.engine, m.providerKey, m.modelName, m.estimateContextTokensCached)
 
 	roleCounts := map[string]int{}
 	allMessages, activeMessages := m.messageSnapshotsForStats()
@@ -80,7 +63,6 @@ func (m *Model) renderStatsModal() string {
 		roleCounts[string(msg.Role)]++
 	}
 
-	currentTokens := used
 	if currentTokens <= 0 {
 		currentTokens = m.estimateMessagesTokens(activeMessages)
 	}
@@ -106,7 +88,7 @@ func (m *Model) renderStatsModal() string {
 		b.WriteString("\n\n")
 	}
 	b.WriteString("Current Context / Window Pressure\n")
-	b.WriteString(renderContextGrid(currentTokens, limit, softThreshold, hardThreshold))
+	b.WriteString(ui.RenderContextGrid(currentTokens, limit, softThreshold, hardThreshold))
 	b.WriteString("\n\n")
 	b.WriteString(fmt.Sprintf("%s:%s\n", nonEmpty(m.providerKey, m.providerName), nonEmpty(m.modelName, "unknown-model")))
 	if limit > 0 {
@@ -511,47 +493,6 @@ func (m *Model) estimateMessagesTokens(messages []session.Message) int {
 		total += roughTokenEstimate(msg.TextContent)
 	}
 	return total
-}
-
-func renderContextGrid(used, limit, softThreshold, hardThreshold int) string {
-	const cols = 48
-	const rows = 6
-	total := cols * rows
-	usedCells := 0
-	softBufferCells := 0
-	hardBufferCells := 0
-	if limit > 0 {
-		usedCells = int(float64(used) / float64(limit) * float64(total))
-		if used > 0 && usedCells == 0 {
-			usedCells = 1
-		}
-		if softThreshold > 0 {
-			softBufferCells = int(float64(max(0, limit-softThreshold)) / float64(limit) * float64(total))
-		}
-		if hardThreshold > 0 {
-			hardBufferCells = int(float64(max(0, limit-hardThreshold)) / float64(limit) * float64(total))
-		}
-	}
-	var b strings.Builder
-	for r := 0; r < rows; r++ {
-		for c := 0; c < cols; c++ {
-			i := r*cols + c
-			switch {
-			case i < usedCells:
-				b.WriteRune('■')
-			case hardBufferCells > 0 && i >= total-hardBufferCells:
-				b.WriteRune('!')
-			case softBufferCells > 0 && i >= total-softBufferCells:
-				b.WriteRune('×')
-			default:
-				b.WriteRune('□')
-			}
-		}
-		if r < rows-1 {
-			b.WriteByte('\n')
-		}
-	}
-	return b.String()
 }
 
 func percent(part, total int) float64 {

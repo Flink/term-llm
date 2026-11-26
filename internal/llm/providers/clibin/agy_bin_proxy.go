@@ -19,6 +19,8 @@ type agyToolIsolation interface {
 	EnsureStarted(string) error
 	BeginTurn(bool)
 	FilteredGenerations() int64
+	ModelContextWindow(string) int
+	LastGenerationModel() string
 	Environment() map[string]string
 	Stop(context.Context) error
 }
@@ -72,6 +74,20 @@ func (i *agyProxyToolIsolation) FilteredGenerations() int64 {
 		return 0
 	}
 	return i.server.FilteredGenerations()
+}
+
+func (i *agyProxyToolIsolation) ModelContextWindow(model string) int {
+	if i.server == nil {
+		return 0
+	}
+	return i.server.ModelContextWindow(model)
+}
+
+func (i *agyProxyToolIsolation) LastGenerationModel() string {
+	if i.server == nil {
+		return ""
+	}
+	return i.server.LastGenerationModel()
 }
 
 func (i *agyProxyToolIsolation) Environment() map[string]string {

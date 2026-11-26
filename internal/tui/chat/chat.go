@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -1335,78 +1334,6 @@ func (m *Model) seedStatsFromSession() {
 		m.stats = ui.NewSessionStats()
 	}
 	m.stats.SeedTotals(m.sess.InputTokens, m.sess.OutputTokens, m.sess.CachedInputTokens, m.sess.CacheWriteTokens, m.sess.ToolCalls, m.sess.LLMTurns+m.sess.CompactionCount)
-}
-
-func (m *Model) contextIdentities() (savedProvider, savedModel, provider, model string) {
-	savedProvider = cmp.Or(strings.TrimSpace(m.sess.ProviderKey), strings.TrimSpace(m.sess.Provider))
-	savedModel = strings.TrimSpace(m.sess.Model)
-	provider = cmp.Or(strings.TrimSpace(m.providerKey), savedProvider)
-	model = strings.TrimSpace(m.modelName) // A blank selector can mean the CLI default, not the saved model.
-	return
-}
-
-func (m *Model) configureContextManagementForSession() {
-	if m == nil || m.engine == nil || m.provider == nil || m.config == nil || m.sess == nil {
-		return
-	}
-
-	savedProvider, savedModel, provider, model := m.contextIdentities()
-	if model == "" && !m.provider.Capabilities().ManagesOwnContext {
-		return
-	}
-	m.engine.ConfigureContextManagement(m.provider, provider, model, m.config.AutoCompact)
-	if m.contextSessionID == m.sess.ID {
-		return
-	}
-	// A different session may use the exact same provider and model. Discard
-	// the outgoing reading, but never replace a live one on per-turn configure.
-	previous := m.contextSessionID
-	m.contextSessionID = m.sess.ID
-	if previous != "" {
-		m.engine.SetContextEstimateBaseline(0, 0)
-	} else if total, _, _ := m.engine.ContextEstimateSnapshot(); total > 0 {
-		// Initial attachment can receive an engine that is already live.
-		return
-	}
-	m.engine.SetContextEstimateBaseline(m.sess.LastTotalTokens, m.sess.LastMessageCount)
-	m.engine.RestoreContextWindow(savedProvider, savedModel, m.sess.LastContextWindow)
-}
-
-func (m *Model) persistContextEstimate(ctx context.Context) {
-	if m == nil || m.store == nil || m.sess == nil || m.engine == nil {
-		return
-	}
-	total, count, window := m.engine.ContextEstimateSnapshot()
-	if total == 0 && m.sess.LastTotalTokens == 0 && m.sess.LastMessageCount == 0 && m.sess.LastContextWindow == 0 {
-		return
-	}
-	// Totals follow the transcript, but the window belongs to the active model.
-	savedProvider, savedModel, provider, model := m.contextIdentities()
-	if savedProvider != provider || savedModel != model {
-		window = 0
-	}
-	_ = session.PersistContextEstimate(ctx, m.store, m.sess, total, count, window)
-}
-
-func (m *Model) resetContextEstimateBaseline(ctx context.Context) {
-	if m == nil {
-		return
-	}
-	if m.engine != nil {
-		m.engine.SetContextEstimateBaseline(0, 0)
-	}
-	if m.sess == nil {
-		return
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if m.store != nil && (m.sess.LastTotalTokens != 0 || m.sess.LastMessageCount != 0 || m.sess.LastContextWindow != 0) {
-		_ = session.ResetContextEstimate(ctx, m.store, m.sess)
-	}
-	m.sess.LastTotalTokens = 0
-	m.sess.LastMessageCount = 0
-	m.sess.LastContextWindow = 0
 }
 
 // WantsReload reports whether the user requested a binary reload via /reload.

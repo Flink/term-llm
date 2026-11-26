@@ -15,10 +15,12 @@ import (
 )
 
 type fakeAgyIsolation struct {
-	started bool
-	require bool
-	env     map[string]string
-	onStop  func()
+	started   bool
+	require   bool
+	env       map[string]string
+	windows   map[string]int
+	lastModel string
+	onStop    func()
 }
 
 func (f *fakeAgyIsolation) SetUpstream(string, string) {}
@@ -30,6 +32,10 @@ func (f *fakeAgyIsolation) FilteredGenerations() int64 {
 	}
 	return 0
 }
+func (f *fakeAgyIsolation) ModelContextWindow(model string) int {
+	return f.windows[strings.ToLower(model)]
+}
+func (f *fakeAgyIsolation) LastGenerationModel() string    { return f.lastModel }
 func (f *fakeAgyIsolation) Environment() map[string]string { return f.env }
 func (f *fakeAgyIsolation) Stop(context.Context) error {
 	if f.onStop != nil {
@@ -111,6 +117,15 @@ IFS= read -r input
 	assertBridgeRetired(t, endpoint)
 }
 
+func argFlagValue(args []string, flag string) string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 func TestAgyOversizedStdoutCancelsProcess(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, "cwd"), 0o755); err != nil {
@@ -127,7 +142,7 @@ func TestAgyOversizedStdoutCancelsProcess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	started := time.Now()
-	_, err := p.runCommand(ctx, nil, "prompt", t.TempDir(), "", false, eventSender{ctx: ctx, ch: make(chan core.Event, 1)}, false)
+	_, err := p.runCommand(ctx, nil, agyRunOptions{prompt: "prompt"}, eventSender{ctx: ctx, ch: make(chan core.Event, 1)})
 	if err == nil || !strings.Contains(err.Error(), "read agy output") {
 		t.Fatalf("runCommand error = %v, want stdout framing error", err)
 	}

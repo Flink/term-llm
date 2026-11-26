@@ -293,12 +293,13 @@ func InputLimitForModel(model string) int {
 }
 
 // SessionDisplayInputLimit prefers an observed window and never guesses a
-// Claude Code window from the corresponding Anthropic API model.
+// CLI window from the corresponding direct-API model table.
 func SessionDisplayInputLimit(provider, model string, observed int) int {
 	if observed > 0 {
 		return observed
 	}
-	if resolveProviderType(provider) == string(config.ProviderTypeClaudeBin) {
+	switch resolveProviderType(provider) {
+	case string(config.ProviderTypeClaudeBin), string(config.ProviderTypeAgyBin):
 		return 0
 	}
 	return InputLimitForProviderModel(provider, model)
@@ -436,9 +437,9 @@ func anthropicInputLimit(model string) int {
 }
 
 // selfManagedHelperInputLimits are bounded-replay budgets for providers that
-// report ManagesOwnContext. These CLI providers deliberately publish no
-// InputLimit: term-llm never compacts them and never renders a context meter
-// for them, so a real number there would change unrelated surfaces.
+// report ManagesOwnContext. They handle their own compaction, and context
+// meters can use windows observed during the session. These replay budgets
+// are not published model limits.
 //
 // A helper request (side question, and any other one-shot bounded replay) still
 // needs a budget, and the alternative is a tiny generic fallback that silently
@@ -459,11 +460,10 @@ const defaultSelfManagedHelperInputLimit = 96_000
 // HelperInputLimitForProviderModel returns the input token budget a bounded
 // helper request may use for a provider/model pair.
 //
-// It is deliberately separate from InputLimitForProviderModel: that value feeds
-// the context meter, /models, the web context-usage endpoints and compaction
-// configuration, all of which are intentionally absent for providers that manage
-// their own context. This one exists only to size a request term-llm builds
-// itself, so it falls back to a per-provider-type assumption instead of zero.
+// It is deliberately separate from InputLimitForProviderModel, which supplies
+// model limits rather than windows observed during a session. The helper limit
+// only sizes a request term-llm builds itself, so it can fall back to a
+// per-provider-type assumption when no model limit is available.
 func HelperInputLimitForProviderModel(providerName, model string) int {
 	if limit := InputLimitForProviderModel(providerName, model); limit > 0 {
 		return limit

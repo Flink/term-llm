@@ -77,6 +77,14 @@ type agyBinProviderState struct {
 type agyStreamState struct {
 	conversationID         string
 	expectedConversationID string
+	initModel              string
+	requestedModel         string
+	requestedEff           string
+	exposeBridge           bool
+	ephemeral              bool
+	isolation              agyToolIsolation
+	seenUsageSteps         map[int]bool
+	stepUsage              core.Usage
 	sawResult              bool
 	sawText                bool
 	fallbackText           string
@@ -87,13 +95,11 @@ type agyStreamState struct {
 type agyStreamEvent struct {
 	Event          string `json:"event"`
 	ConversationID string `json:"conversation_id"`
-	StepUpdate     struct {
-		ConversationID string `json:"conversation_id"`
-		State          string `json:"state"`
-		StepType       string `json:"step_type"`
-		TextDelta      string `json:"text_delta"`
-	} `json:"step_update"`
-	Result struct {
+	Init           struct {
+		Model string `json:"model"`
+	} `json:"init"`
+	StepUpdate agyStepUpdate `json:"step_update"`
+	Result     struct {
 		ConversationID string   `json:"conversation_id"`
 		Status         string   `json:"status"`
 		Response       string   `json:"response"`
@@ -359,7 +365,17 @@ func (p *AgyBinProvider) Stream(ctx context.Context, req core.Request) (core.Str
 		}
 
 		p.isolation.BeginTurn(exposeBridge)
-		state, err := p.runCommandWithParts(ctx, p.buildArgs(req, plan.ResumeID), plan.Prompt, plan.PromptParts, workspaceDir, plan.ResumeID, req.Debug || req.DebugRaw, send, exposeBridge)
+		requestedModel, requestedEff := p.resolveModelEffort(req)
+		state, err := p.runCommand(ctx, p.buildArgs(req, plan.ResumeID), agyRunOptions{
+			prompt:                 plan.Prompt,
+			parts:                  plan.PromptParts,
+			expectedConversationID: plan.ResumeID,
+			requestedModel:         requestedModel,
+			requestedEff:           requestedEff,
+			debug:                  req.Debug || req.DebugRaw,
+			exposeBridge:           exposeBridge,
+			ephemeral:              req.Ephemeral,
+		}, send)
 		if err != nil {
 			p.invalidateResumeAfterFailedTurn(req, plan, err)
 			return err
@@ -496,21 +512,34 @@ func handleAgyStreamLine(line string, send eventSender, state *agyStreamState) e
 		if err := state.observeConversationID("init", message.ConversationID); err != nil {
 			return err
 		}
+		if model := strings.TrimSpace(message.Init.Model); model != "" {
+			state.initModel = model
+		}
 	case "step_update":
 		if err := state.observeConversationID("step_update", message.StepUpdate.ConversationID); err != nil {
 			return err
 		}
 		if message.StepUpdate.StepType == "agent_response" && message.StepUpdate.TextDelta != "" {
 			state.sawText = true
-			return send.Send(core.Event{Type: core.EventTextDelta, Text: message.StepUpdate.TextDelta})
+			if err := send.Send(core.Event{Type: core.EventTextDelta, Text: message.StepUpdate.TextDelta}); err != nil {
+				return err
+			}
 		}
+		return state.observeStepUsage(message.StepUpdate, send)
 	case "result":
 		if err := state.observeConversationID("result", message.Result.ConversationID); err != nil {
 			return err
 		}
 		state.sawResult = true
 		state.fallbackText = message.Result.Response
-		state.usage = &core.Usage{InputTokens: message.Result.Usage.InputTokens, OutputTokens: message.Result.Usage.OutputTokens, CachedInputTokens: message.Result.Usage.CacheReadTokens, ReasoningTokens: message.Result.Usage.ThinkingTokens}
+		// On resumed turns, agy reports cumulative conversation totals in
+		// result.usage; use the sum of this turn's step_update usages instead
+		// when available (older agy releases without step usage fall back here).
+		usage := message.Result.Usage.toCore()
+		if state.expectedConversationID != "" && !state.stepUsage.IsZero() {
+			usage = state.stepUsage
+		}
+		state.usage = &usage
 		if message.Result.Status != "SUCCESS" {
 			detail := strings.TrimSpace(message.Result.Error)
 			if detail == "" {
