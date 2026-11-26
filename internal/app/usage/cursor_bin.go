@@ -95,20 +95,7 @@ func validateCursorBinUsageFlags(cmd interface{ Flags() *pflag.FlagSet }) error 
 }
 
 func runCursorBinUsage(parent context.Context, out io.Writer, jsonOutput bool) error {
-	if err := refuseLocalProxyAllowance("cursor-bin"); err != nil {
-		return err
-	}
-	if parent == nil {
-		parent = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
-	defer cancel()
-
-	token, err := cursorAgentAccessToken(ctx)
-	if err != nil {
-		return err
-	}
-	raw, report, err := fetchCursorBinUsage(ctx, token)
+	raw, report, err := loadCursorBinUsage(parent)
 	if err != nil {
 		return err
 	}
@@ -121,6 +108,23 @@ func runCursorBinUsage(parent context.Context, out io.Writer, jsonOutput bool) e
 		return err
 	}
 	return writeCursorBinUsageWithOptions(out, report, time.Now(), providerUsageFormatOptions(out))
+}
+
+func loadCursorBinUsage(parent context.Context) (json.RawMessage, cursorBinUsageReport, error) {
+	if err := refuseLocalProxyAllowance("cursor-bin"); err != nil {
+		return nil, cursorBinUsageReport{}, err
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
+	defer cancel()
+
+	token, err := cursorAgentAccessToken(ctx)
+	if err != nil {
+		return nil, cursorBinUsageReport{}, err
+	}
+	return fetchCursorBinUsage(ctx, token)
 }
 
 func cursorAgentAccessToken(ctx context.Context) (string, error) {
@@ -282,6 +286,11 @@ func fetchCursorBinUsage(ctx context.Context, token string) (json.RawMessage, cu
 }
 
 func writeCursorBinUsageWithOptions(out io.Writer, report cursorBinUsageReport, now time.Time, opts providerusage.FormatOptions) error {
+	_, err := fmt.Fprintln(out, providerusage.FormatWithOptions(cursorBinProviderReport(report), now, opts))
+	return err
+}
+
+func cursorBinProviderReport(report cursorBinUsageReport) *providerusage.Report {
 	reset := parseCursorUsageTime(report.BillingCycleEnd)
 	start := parseCursorUsageTime(report.BillingCycleStart)
 	duration := 0
@@ -294,8 +303,7 @@ func writeCursorBinUsageWithOptions(out io.Writer, report cursorBinUsageReport, 
 	if cursorUsageBucketPresent(report.SpendLimitUsage) {
 		providerReport.Limits = append(providerReport.Limits, cursorUsageLimit("spend_limit", "Spend limit", report.SpendLimitUsage, reset, duration))
 	}
-	_, err := fmt.Fprintln(out, providerusage.FormatWithOptions(providerReport, now, opts))
-	return err
+	return providerReport
 }
 
 func cursorUsageLimit(id, name string, bucket *cursorBinUsageBucket, reset time.Time, duration int) providerusage.Limit {

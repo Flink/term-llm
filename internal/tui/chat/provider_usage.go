@@ -10,7 +10,10 @@ import (
 	"github.com/term-llm/term-llm/internal/llm/providerusage"
 )
 
-var fetchProviderUsage = providerusage.FetchWithAPIKey
+// SetProviderUsageFetcher installs the live subscription-limit fetcher used by /usage.
+func (m *Model) SetProviderUsageFetcher(fetch func(ctx context.Context, provider string) (*providerusage.Report, error)) {
+	m.providerUsageFetcher = fetch
+}
 
 type providerUsageDoneMsg struct {
 	provider string
@@ -27,33 +30,18 @@ func (m *Model) cmdProviderUsage(args []string) (tea.Model, tea.Cmd) {
 	if provider == "" {
 		return m.showFooterError("Unable to determine the current provider.")
 	}
-
-	apiKey, err := m.resolvedProviderUsageAPIKey(provider)
-	if err != nil {
-		return m.showFooterError(fmt.Sprintf("Unable to resolve %s credentials: %v", provider, err))
+	fetch := m.providerUsageFetcher
+	if fetch == nil {
+		return m.showFooterError("Live provider usage is not available in this session.")
 	}
 	m.setTextareaValue("")
 	parentCtx := m.rootContext()
 	return m.showFooterMutedWithCmd("Fetching "+provider+" usage…", func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
 		defer cancel()
-		report, err := fetchProviderUsage(ctx, provider, apiKey)
+		report, err := fetch(ctx, provider)
 		return providerUsageDoneMsg{provider: provider, report: report, err: err}
 	})
-}
-
-func (m *Model) resolvedProviderUsageAPIKey(provider string) (string, error) {
-	if provider != "opencode-go" || m.config == nil {
-		return "", nil
-	}
-	providerCfg, err := m.config.GetResolvedProviderConfig(provider)
-	if err != nil || providerCfg == nil {
-		return "", err
-	}
-	if err := providerCfg.ResolveForInference(); err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(providerCfg.ResolvedAPIKey), nil
 }
 
 func (m *Model) handleProviderUsageDone(msg providerUsageDoneMsg) (tea.Model, tea.Cmd) {
