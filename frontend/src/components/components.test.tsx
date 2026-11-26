@@ -10285,6 +10285,12 @@ describe('Preact-owned chat surfaces', () => {
       );
     });
     store.recoverWorktree = vi.fn(async () => ({}));
+    // Run frames as soon as they are requested: focus must not depend on the
+    // merge clearing its busy state before the next frame (CI exposed this).
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      callback(performance.now());
+      return 0;
+    });
 
     render(
       <StoreContext.Provider value={store}>
