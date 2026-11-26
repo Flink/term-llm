@@ -283,11 +283,18 @@ export function Worktrees() {
     return () => cancelAnimationFrame(focusFrame);
   }, [selected]);
 
+  // The merge that produced an offer may still be busy when the offer first
+  // renders. Focus its confirm button once enabled, and only once per offer.
+  const recoveryReady = Boolean(recovery?.available) && !draft && !busy && !streaming;
+  const focusedRecovery = useRef<WorktreeRecoveryOffer | null>(null);
   useEffect(() => {
-    if (!recovery?.available || draft) return;
-    const focusFrame = requestAnimationFrame(() => recoveryConfirm.current?.focus());
+    if (!recoveryReady || focusedRecovery.current === recovery) return;
+    const focusFrame = requestAnimationFrame(() => {
+      focusedRecovery.current = recovery;
+      recoveryConfirm.current?.focus();
+    });
     return () => cancelAnimationFrame(focusFrame);
-  }, [draft, recovery]);
+  }, [recoveryReady, recovery]);
 
   const openDetail = (row: WorktreeRow) => {
     setSelected(row);

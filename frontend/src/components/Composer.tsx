@@ -25,6 +25,7 @@ import { Icon, type IconName } from './Icon';
 import { useMenuKeyboard } from './Menu';
 import { requestTranscriptScrollToTail } from './transcript-scroll';
 import { lazyComponent } from './lazyComponent';
+import { useEmojiCompletion } from './useEmojiCompletion';
 
 // Typical OS double-click interval.
 const STOP_CLICK_GUARD_MS = 500;
@@ -446,6 +447,20 @@ function ConversationComposer() {
     if (draftActive) void store.loadSkills().catch(() => undefined);
   }, [store, draftActive, projectId, worktreeDir]);
   const composerOwner = store.composerOwnerKey();
+  const emoji = useEmojiCompletion(store.prompt.value, composerOwner);
+  const interceptedEnter = useRef(false);
+  const syncSelection = (input: HTMLTextAreaElement) => {
+    setCursor(input.selectionStart);
+    if (emoji.sync(input)) {
+      setDismissed('');
+      // Keep the highlight while refining the same mention; reset it for a new token.
+      if (
+        !mention ||
+        activeMentionAtCursor(input.value, input.selectionStart)?.start !== mention.start
+      )
+        setHighlight(null);
+    }
+  };
   useEffect(() => {
     if (
       voice.snapshot.owner &&
@@ -610,23 +625,25 @@ function ConversationComposer() {
   const modelRows = modelMentionCompletions(currentMentions?.payload ?? null);
   const modelsPending = Boolean(currentMentions?.modelsPending);
   const files = mentionCompletions(visibleMentions?.payload ?? null, mention);
-  const combined = modelOnly
-    ? modelRows.length
-      ? modelRows
-      : [
-          {
-            value: '',
-            label: !currentMentions || modelsPending ? 'Loading models…' : 'No matching models',
-            description: '',
-            kind: 'model' as const,
-            unavailable: true,
-          },
-        ]
-    : mention
-      ? qualifiedProvider
-        ? [...local, ...modelRows, ...files]
-        : [...local, ...files, ...modelRows]
-      : local;
+  const combined = emoji.items.length
+    ? emoji.items
+    : modelOnly
+      ? modelRows.length
+        ? modelRows
+        : [
+            {
+              value: '',
+              label: !currentMentions || modelsPending ? 'Loading models…' : 'No matching models',
+              description: '',
+              kind: 'model' as const,
+              unavailable: true,
+            },
+          ]
+      : mention
+        ? qualifiedProvider
+          ? [...local, ...modelRows, ...files]
+          : [...local, ...files, ...modelRows]
+        : local;
   const completions = completionsDismissed
     ? []
     : [...new Map(combined.map((entry) => [completionId(entry), entry])).values()];
@@ -648,6 +665,16 @@ function ConversationComposer() {
           (entry) => entry.thinking && entry.value === cycleThinking(store.thinking.display.value),
         ),
       );
+  const selectedOption = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    const option = selectedOption.current;
+    const panel = option?.parentElement;
+    if (!option || !panel) return;
+    // Keep the highlight visible without scrolling the focused composer or page.
+    if (option.offsetTop < panel.scrollTop) panel.scrollTop = option.offsetTop;
+    else if (option.offsetTop + option.offsetHeight > panel.scrollTop + panel.clientHeight)
+      panel.scrollTop = option.offsetTop + option.offsetHeight - panel.clientHeight;
+  }, [activeIndex, completions.length, completionKey]);
   const project = store.projects.value.find((entry) => entry.id === store.activeProjectId.value);
   const bindingBlocked = store.draftActive.value && Boolean(project && project.available === false);
   // False is the server saying no approval-governed action exists; unknown
@@ -664,23 +691,30 @@ function ConversationComposer() {
   );
 
   const choose = (completion: Completion) => {
+    const input = textarea.current;
+    const value = store.prompt.peek();
     if (
-      completion.kind === 'model' &&
-      (completion.unavailable ||
-        store.prompt.peek() !== prompt ||
-        store.composerOwnerKey() !== composerOwner ||
-        textarea.current?.selectionStart !== cursor)
+      !input ||
+      (completion.kind === 'model' &&
+        (completion.unavailable ||
+          value !== prompt ||
+          store.composerOwnerKey() !== composerOwner ||
+          input.selectionStart !== cursor)) ||
+      (completion.kind === 'emoji' &&
+        (input.value !== value ||
+          input.selectionStart !== emoji.caret ||
+          input.selectionEnd !== emoji.caret))
     )
       return;
-    const nextCursor = completedCursor(store.prompt.value, completion);
-    store.prompt.value = applyCompletion(store.prompt.value, completion);
+    const nextCursor = completedCursor(value, completion);
+    // Update the field synchronously so a following keystroke lands after the insertion.
+    input.value = applyCompletion(value, completion);
+    store.prompt.value = input.value;
+    input.focus();
+    input.setSelectionRange(nextCursor, nextCursor);
+    syncSelection(input);
     setHighlight(null);
     setDismissed('');
-    setCursor(nextCursor);
-    requestAnimationFrame(() => {
-      textarea.current?.focus();
-      textarea.current?.setSelectionRange(nextCursor, nextCursor);
-    });
   };
   const liveSkill = (value: string) => {
     const match = value.match(/^\/([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)(?:\s+([\s\S]*))?$/);
@@ -1261,9 +1295,11 @@ function ConversationComposer() {
             >
               {completions.map((entry, index) => (
                 <button
+                  ref={activeIndex === index ? selectedOption : undefined}
                   id={`composer-completion-${index}`}
                   type="button"
                   role="option"
+                  tabIndex={-1}
                   aria-selected={activeIndex === index}
                   aria-disabled={entry.unavailable || undefined}
                   class={`slash-command-option${entry.badge ? ' with-badge' : ''}${activeIndex === index ? ' selected' : ''}`}
@@ -1340,29 +1376,40 @@ function ConversationComposer() {
                 .filter((item): item is File => Boolean(item));
               if (files.length) store.addAttachments(files);
             }}
-            onClick={(event) => {
-              setCursor(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
-              setDismissed('');
+            onFocus={(event) => syncSelection(event.currentTarget)}
+            onBlur={() => {
+              emoji.close();
+              if (emoji.items.length) setHighlight(null);
             }}
+            onSelect={(event) => syncSelection(event.currentTarget)}
+            onCompositionEnd={(event) => syncSelection(event.currentTarget)}
+            onClick={(event) => syncSelection(event.currentTarget)}
             onInput={(event) => {
+              syncSelection(event.currentTarget);
               store.prompt.value = event.currentTarget.value;
-              const nextCursor =
-                event.currentTarget.selectionStart ?? event.currentTarget.value.length;
-              setCursor(nextCursor);
               setDismissed('');
               resizePrompt(event.currentTarget);
               setHighlight(null);
             }}
-            onKeyUp={(event) => {
-              if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
-                setCursor(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
-                setDismissed('');
-              }
-            }}
+            onKeyUp={(event) => syncSelection(event.currentTarget)}
             onKeyDown={(event) => {
               // Safari can end composition before the confirming keydown, while
               // still reporting legacy IME keyCode 229. Guard every action first.
               if (event.isComposing || event.keyCode === 229) return;
+              const pendingEmoji = emoji.pending && !completionsDismissed;
+              if (event.key === 'Enter') {
+                // A held Enter must not send immediately after completing (or waiting for the catalog).
+                if (event.repeat && interceptedEnter.current) {
+                  event.preventDefault();
+                  return;
+                }
+                interceptedEnter.current = false;
+                if (pendingEmoji && !event.shiftKey) {
+                  event.preventDefault();
+                  interceptedEnter.current = true;
+                  return;
+                }
+              }
               if (completions.length && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
                 event.preventDefault();
                 const step = event.key === 'ArrowDown' ? 1 : -1;
@@ -1392,14 +1439,15 @@ function ConversationComposer() {
                     : store.prompt.value.trim()
                   ).toLowerCase() === selected.value.toLowerCase());
               const accept =
-                event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey && !exactSlash);
+                !event.shiftKey && (event.key === 'Tab' || (event.key === 'Enter' && !exactSlash));
               const highlightDisappeared = highlight && activeIndex < 0 && completions.length;
               if (accept && (selected || highlightDisappeared)) {
                 event.preventDefault();
+                interceptedEnter.current = event.key === 'Enter' && selected?.kind === 'emoji';
                 if (selected) choose(selected);
                 return;
               }
-              if (event.key === 'Escape' && completions.length) {
+              if (event.key === 'Escape' && (completions.length || pendingEmoji)) {
                 event.preventDefault();
                 setDismissed(completionKey);
                 setHighlight(null);

@@ -136,7 +136,7 @@ Type `!` as the first composer character to enter shell mode, for example `! git
 
 ### Emoji completion
 
-In terminal chat, type `:` at the start of the draft, after whitespace, or immediately after another emoji. Enter at least two characters of a shortcode, English name, or keyword. For example, complete `Ready :rocke` with 🚀, then type `:sweat_sm` and select `:sweat_smile:` to get `Ready 🚀😅`. Use `↑` and `↓` to choose, `Tab` or `Enter` to insert the emoji, and `Esc` to dismiss the list without changing your text. While the list is open, `Enter` **does not send or queue the message**. No closing colon is needed.
+In terminal chat and the web composer, type `:` at the start of the draft, after whitespace, or immediately after another emoji. Enter at least two characters of a shortcode, English name, or keyword. For example, complete `Ready :rocke` with 🚀, then type `:sweat_sm` and select `:sweat_smile:` to get `Ready 🚀😅`. Use `↑` and `↓` to choose, `Tab` or `Enter` to insert the emoji, and `Esc` to dismiss the list without changing your text. While the list is open, `Enter` **does not send or queue the message**. No closing colon is needed.
 
 ### Steering a running conversation
 

@@ -9,7 +9,7 @@ import (
 
 // Check the whole static graph: moving a workflow from app.js into an eagerly
 // imported shared chunk must not masquerade as an initial-payload reduction.
-func TestCommitAndReviewOperationsRemainLazy(t *testing.T) {
+func TestDeferredFeaturesRemainLazy(t *testing.T) {
 	body, err := StaticAsset("dist/asset-manifest.json")
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +50,10 @@ func TestCommitAndReviewOperationsRemainLazy(t *testing.T) {
 		module  string
 		markers []string
 	}{
+		{
+			module:  "src/domain/emoji-search.ts",
+			markers: []string{"grinning face", "rolling on the floor laughing"},
+		},
 		{
 			module:  "src/stores/commit-workflow.ts",
 			markers: []string{"Running Git hooks and signing. This operation cannot be cancelled."},
